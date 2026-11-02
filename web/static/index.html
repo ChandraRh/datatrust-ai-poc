@@ -5,11 +5,24 @@
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>DataTrust AI</title>
   <link rel="stylesheet" href="/static/style.css">
+  <link rel="preload" href="/static/vendor/fonts/inter-latin-wght-normal.woff2" as="font" type="font/woff2" crossorigin>
   <script src="/static/vendor/chart.umd.js"></script>   <!-- Chart.js 4.4.1 (MIT), bundled: works offline -->
+  <script>
+    // charts use the same font and quiet grid as the rest of the page
+    if (window.Chart) {
+      Chart.defaults.font.family = '"Inter", "Segoe UI", system-ui, sans-serif';
+      Chart.defaults.font.size = 12;
+      Chart.defaults.color = "#64748B";
+      Chart.defaults.borderColor = "#EDF1F5";
+      Chart.defaults.plugins.tooltip.backgroundColor = "#0F1D2E";
+      Chart.defaults.plugins.tooltip.padding = 10;
+      Chart.defaults.plugins.tooltip.cornerRadius = 8;
+    }
+  </script>
 </head>
 <body>
 <header class="topbar">
-  <div class="brand"><button id="navToggle" class="nav-toggle" aria-label="Show or hide menu" title="Show or hide menu"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 6h16M4 12h16M4 18h16"/></svg></button><b>DataTrust AI</b><span>The Autonomous Data Trust Mesh</span></div>
+  <div class="brand"><button id="navToggle" class="nav-toggle" aria-label="Show or hide menu" title="Show or hide menu"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 6h16M4 12h16M4 18h16"/></svg></button><span class="brand-mark" aria-hidden="true"><svg viewBox="0 0 24 24"><path d="M12 3l7 3v5c0 4.6-3 8.4-7 10-4-1.6-7-5.4-7-10V6z"/><path d="M8.8 12.2l2.2 2.2 4.4-4.6"/></svg></span><b>DataTrust <em>AI</em></b><span>The Autonomous Data Trust Mesh</span></div>
   <div class="topright">
     <span id="refreshInfo" class="muted-light">loading…</span>
     <span id="topScore" class="topscore">Trust score –</span>
@@ -34,12 +47,19 @@
   <div class="nav-group"><div class="nav-title">Operations</div>
     <button data-page="pipeline" title="Pipeline log"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 6h16M4 12h16M4 18h10"/></svg><span class="label">Pipeline log</span></button>
   </div>
+  <div class="nav-group"><div class="nav-title">Data quality</div>
+    <button data-page="estate-dq-rejected" title="Rejected records"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 4h16v4H4zM4 10h16v10H4z"/><path d="M9.5 13.5l5 5M14.5 13.5l-5 5"/></svg><span class="label">Rejected records</span></button>
+    <button data-page="estate-dq-rules" title="DQ Rule Studio"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M9 3h6M10 3v6l-5 9a2 2 0 0 0 1.7 3h10.6a2 2 0 0 0 1.7-3l-5-9V3"/><path d="M7.5 15h9"/></svg><span class="label">DQ Rule Studio</span></button>
+  </div>
   <div class="nav-group"><div class="nav-title">Data estate</div>
     <button data-page="estate-connections" title="Connections"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 7c0-1.7 3.6-3 8-3s8 1.3 8 3-3.6 3-8 3-8-1.3-8-3z"/><path d="M4 7v10c0 1.7 3.6 3 8 3s8-1.3 8-3V7"/><path d="M4 12c0 1.7 3.6 3 8 3s8-1.3 8-3"/></svg><span class="label">Connections</span></button>
     <button data-page="estate-catalog" title="Catalog"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M3 4h7v7H3zM14 4h7v7h-7zM3 15h7v5H3zM14 15h7v5h-7z"/></svg><span class="label">Catalog</span></button>
     <button data-page="estate-activity" title="Changes &amp; failures"><svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="8"/><path d="M12 8v4l3 2"/></svg><span class="label">Changes &amp; failures</span></button>
     <button data-page="estate-access" title="Access"><svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="9" cy="8" r="3"/><path d="M3 20c0-3.3 2.7-6 6-6s6 2.7 6 6"/><path d="M17 11l2 2 3-4"/></svg><span class="label">Access</span></button>
     <button data-page="estate-ask" title="Estate assistant"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M21 12a8 8 0 0 1-11.6 7.1L4 20l1.1-4.6A8 8 0 1 1 21 12z"/><path d="M9 11h6"/></svg><span class="label">Estate assistant</span></button>
+  </div>
+  <div class="nav-group"><div class="nav-title">Collaborate</div>
+    <button data-page="estate-people" title="Connect"><svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="9" cy="8" r="3"/><path d="M3 20c0-3.3 2.7-6 6-6 1.3 0 2.5.4 3.5 1.1"/><path d="M15 13h5a1 1 0 0 1 1 1v3a1 1 0 0 1-1 1h-1l-2 2v-2h-2a1 1 0 0 1-1-1v-3a1 1 0 0 1 1-1z"/></svg><span class="label">Connect</span></button>
   </div>
   <!-- add new menu items here: <button data-page="NAME"> + a matching <section id="page-NAME"> -->
 </nav>
@@ -108,7 +128,9 @@
 
   <!-- 4. LINEAGE -->
   <section id="page-lineage" class="page hidden">
-    <h1>4. Explain: source → target lineage</h1>
+    <div class="page-head"><h1>4. Explain: source → target lineage</h1>
+      <div class="seg" id="linToggle" role="group" aria-label="Lineage view">
+        <button data-view="graph" class="active">Graph</button><button data-view="list">List</button></div></div>
     <p class="sub" id="linSub"></p>
     <div id="linBody"></div>
   </section>
@@ -162,6 +184,27 @@
     <div id="body-estate-access"></div>
   </section>
 
+  <!-- DATA QUALITY: Rejected records (every held-back row, by date and cause; fix & re-insert with approval) -->
+  <section id="page-estate-dq-rejected" class="page hidden">
+    <h1>Rejected records</h1>
+    <p class="sub">Every row the quality rules held back: on which date, from which table and why. Fix it and re-insert it after an admin approves.</p>
+    <div id="body-estate-dq-rejected"></div>
+  </section>
+
+  <!-- DATA QUALITY: DQ Rule Studio (rules as data, tested before they are saved) -->
+  <section id="page-estate-dq-rules" class="page hidden">
+    <h1>DQ Rule Studio</h1>
+    <p class="sub">The checks every row must pass on its way into silver. Write one in plain words, test it on today's data, then switch it on, no code change or deployment needed.</p>
+    <div id="body-estate-dq-rules"></div>
+  </section>
+
+  <!-- COLLABORATE: Connect (people directory + Google Chat / Meet / Calendar / Gmail) -->
+  <section id="page-estate-people" class="page hidden">
+    <h1>Connect</h1>
+    <p class="sub">The people who own the data. Reach them in one click with Google Chat, Meet, Calendar or Gmail.</p>
+    <div id="body-estate-people"></div>
+  </section>
+
   <!-- DATA ESTATE: Estate assistant -->
   <section id="page-estate-ask" class="page hidden">
     <h1>Estate assistant</h1>
@@ -194,7 +237,10 @@
     }));
   })();
 </script>
+<script src="/static/lineage-graph.js"></script>   <!-- lineage graph view -->
 <script src="/static/app.js"></script>
 <script src="/static/estate.js"></script>   <!-- Data Estate module -->
+<script src="/static/dq.js"></script>   <!-- Data quality: Rejected records + DQ Rule Studio -->
+<script src="/static/connect.js"></script>   <!-- Connect: people + Contact owner -->
 </body>
 </html>

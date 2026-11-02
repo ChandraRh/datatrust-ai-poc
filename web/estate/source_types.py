@@ -28,12 +28,12 @@ SOURCE_TYPES = {
         ],
     },
     "sqlserver": {
-        "label": "SQL Server", "browse": False, "driver": "pip install pyodbc + Microsoft ODBC Driver 18 for SQL Server",
+        "label": "SQL Server", "browse": True, "driver": "pip install pyodbc + Microsoft ODBC Driver 18 for SQL Server",
         "fields": [
-            {"key": "host", "label": "Server", "placeholder": "e.g. sqlprod01 or myserver.database.windows.net", "required": True},
-            {"key": "port", "label": "Port", "default": "1433", "required": True},
-            {"key": "database", "label": "Database", "placeholder": "e.g. Finance", "required": True},
-            {"key": "username", "label": "SQL login user", "required": True},
+            {"key": "host", "label": "Server", "placeholder": "e.g. localhost, localhost\\SQLEXPRESS or myserver.database.windows.net", "required": True},
+            {"key": "port", "label": "Port", "default": "", "placeholder": "empty = local / named instance; 1433 for a remote server", "required": False},
+            {"key": "database", "label": "Database", "placeholder": "e.g. DataTrustPOC", "required": True},
+            {"key": "username", "label": "SQL login user (empty = Windows login)", "placeholder": "empty = your Windows login, like SSMS", "required": False},
             {"key": "odbc_driver", "label": "ODBC driver", "default": "ODBC Driver 18 for SQL Server", "required": True},
             {"key": "trust_cert", "label": "Trust server certificate (yes/no)", "default": "yes", "required": False},
         ],
@@ -49,13 +49,14 @@ SOURCE_TYPES = {
         ],
     },
 }
-DEFAULT_PORT = {"postgresql": 5432, "snowflake": 443, "sqlserver": 1433, "saphana": 30015}
+DEFAULT_PORT = {"postgresql": 5432, "snowflake": 443, "sqlserver": 0, "saphana": 30015}   # sqlserver 0 = no port (local / named instance)
 
 
 def test_connection(cfg: dict) -> dict:
     """Connect once and read the version. cfg = connection row (+ settings). Raises with a readable message."""
     t = cfg["source_type"]
-    password = store.resolve_password(cfg["password_env"])
+    windows_login = t == "sqlserver" and not (cfg.get("username") or "").strip()
+    password = None if windows_login else store.resolve_password(cfg["password_env"])
     s = cfg.get("settings") or {}
     if t == "postgresql":
         from .postgres_connector import PostgresSource
@@ -75,19 +76,8 @@ def test_connection(cfg: dict) -> dict:
         return {"version": f"Snowflake {row[0]}", "login_user": row[1], "database": cfg.get("database") or "",
                 "role": row[2], "warehouse": row[3]}
     if t == "sqlserver":
-        try:
-            import pyodbc
-        except ImportError:
-            raise ValueError("SQL Server driver not installed: pip install pyodbc (and Microsoft ODBC Driver 18 for SQL Server)")
-        trust = "yes" if str(s.get("trust_cert", "yes")).lower().startswith("y") else "no"
-        con = pyodbc.connect(f"DRIVER={{{s.get('odbc_driver') or 'ODBC Driver 18 for SQL Server'}}};"
-                             f"SERVER={cfg['host']},{cfg['port']};DATABASE={cfg['database']};UID={cfg['username']};"
-                             f"PWD={{{password}}};Encrypt=yes;TrustServerCertificate={trust}", timeout=15)
-        try:
-            row = con.cursor().execute("SELECT @@VERSION, SUSER_SNAME(), DB_NAME()").fetchone()
-        finally:
-            con.close()
-        return {"version": row[0].split("\n")[0], "login_user": row[1], "database": row[2]}
+        from .sqlserver_connector import SqlServerSource
+        return SqlServerSource(cfg).test()
     if t == "saphana":
         try:
             from hdbcli import dbapi

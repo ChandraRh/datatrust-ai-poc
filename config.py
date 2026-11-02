@@ -19,7 +19,7 @@ PG_PASSWORD = os.getenv("PG_PASSWORD", "root")
 
 # Where the source CSV files are read from 
 # local : data/source_csv folder (no Azure needed)
-# adls  : Azure Data Lake Storage Gen2 container (files uploaded with upload_to_adls.py)
+# adls : Azure Data Lake Storage Gen2 container (files uploaded with upload_to_adls.py)
 SOURCE_MODE = os.getenv("SOURCE_MODE", "local")
 LOCAL_SOURCE_DIR = PROJECT_DIR / "data" / "source_csv"
 ADLS_DOWNLOAD_DIR = PROJECT_DIR / "data" / "adls_download"      # files pulled from ADLS land here

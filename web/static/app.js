@@ -19,7 +19,7 @@ const inrShort = (v) => {
   return inr(n);
 };
 const tone = (score) => (score >= 90 ? "ok" : score >= 75 ? "warn" : "bad");
-const color = { ok: "#0f7b6c", warn: "#b26b12", bad: "#c3312b" };
+const color = { ok: "#11805A", warn: "#EF802C", bad: "#C42B2B" };
 
 function showError(msg) {
   const box = $("errorBox");
@@ -71,11 +71,11 @@ const objTable = (rows, cols) => tableHtml(rows && rows.length ? { columns: cols
 function gauge(el, score, label) {
   const t = tone(score), r = 70, c = 2 * Math.PI * r, filled = (c * score) / 100;
   $(el).innerHTML = `<svg width="190" height="190" viewBox="0 0 190 190" role="img" aria-label="Trust score ${score}">
-    <circle cx="95" cy="95" r="${r}" fill="none" stroke="#e1e5ea" stroke-width="18"/>
-    <circle cx="95" cy="95" r="${r}" fill="none" stroke="${color[t]}" stroke-width="18" stroke-linecap="round"
+    <circle cx="95" cy="95" r="${r}" fill="none" stroke="#EAEFF4" stroke-width="16"/>
+    <circle cx="95" cy="95" r="${r}" fill="none" stroke="${color[t]}" stroke-width="16" stroke-linecap="round"
       stroke-dasharray="${filled} ${c}" transform="rotate(-90 95 95)"/>
-    <text x="95" y="102" text-anchor="middle" font-size="46" font-weight="800" fill="#18212d">${score}</text>
-    <text x="95" y="128" text-anchor="middle" font-size="13" fill="#66707c">/ 100</text></svg>`;
+    <text x="95" y="102" text-anchor="middle" font-size="44" font-weight="700" fill="#0F1D2E" letter-spacing="-1">${score}</text>
+    <text x="95" y="128" text-anchor="middle" font-size="12.5" fill="#64748B">/ 100</text></svg>`;
 }
 
 function drawChart(id, type, labels, values, label, opts = {}) {
@@ -83,10 +83,10 @@ function drawChart(id, type, labels, values, label, opts = {}) {
   if (state.charts[id]) state.charts[id].destroy();
   const ctx = typeof id === "string" ? $(id) : id;
   if (!ctx) return;
-  const pointColors = opts.pointColors || "#2f5d99";
+  const pointColors = opts.pointColors || "#0672A1";
   state.charts[id] = new Chart(ctx, {
     type,
-    data: { labels, datasets: [{ label, data: values, borderColor: "#2f5d99", backgroundColor: type === "bar" ? "#2f5d99" : "rgba(47,93,153,.08)",
+    data: { labels, datasets: [{ label, data: values, borderColor: "#0672A1", backgroundColor: type === "bar" ? "#107CB1" : "rgba(6,114,161,.08)", borderRadius: type === "bar" ? 4 : 0, borderWidth: 2,
       pointBackgroundColor: pointColors, pointBorderColor: pointColors, pointRadius: type === "line" ? 4 : 0, tension: 0.15, fill: type === "line" }] },
     options: { responsive: true, maintainAspectRatio: false, plugins: { legend: { display: false },
       tooltip: { callbacks: { label: (c) => (opts.money ? inr(c.parsed.y) : num(c.parsed.y)) } } },
@@ -105,7 +105,15 @@ function go(page, arg) {
   if (page === "ask") setTimeout(() => $("askInput").focus(), 50);
 }
 
+// pages that read the shared overview / incidents wait for the first load instead of failing when clicked early
+let corePromise = null;
+async function ensureCore() {
+  if (state.overview && state.incidents) return;
+  corePromise = corePromise || loadCore().finally(() => (corePromise = null));
+  await corePromise;
+}
 async function render(page, arg) {
+  if (!["ask", "lineage"].includes(page) && !page.startsWith("estate-")) await ensureCore();
   if (page === "observe") return renderObserve();
   if (page === "detect") return renderDetect();
   if (page === "investigate") return renderInvestigate(arg);
@@ -184,7 +192,15 @@ function incidentRow(i) {
   const appr = i.approval ? `<span class="chip warn">remediation approved by ${esc(i.approval.approved_by)}</span>` : "";
   return `<div class="incident"><span class="sev ${i.severity}">${i.severity}</span>
     <div class="body"><div class="t">${esc(i.title)} ${appr}</div><div class="small muted">${esc(i.summary)}</div></div>
-    <button class="btn light" onclick="go('investigate','${i.id}')">Investigate</button></div>`;
+    <div class="inc-acts"><button class="btn light" data-contact="${esc(i.title + " — " + i.summary)}">Contact owner</button>
+    ${recordsButton(i)}<button class="btn light" onclick="go('investigate','${i.id}')">Investigate</button></div></div>`;
+}
+// held-back rows behind an incident -> the Rejected records page, filtered to that date / table / rule
+function recordsButton(i) {
+  if (!window.DQ || !["REJECTED_ROWS", "SETTLEMENT_MISMATCH"].includes(i.type) || !i.business_date) return "";
+  const m = i.metrics || {};
+  const ent = i.type === "REJECTED_ROWS" ? m.entity : "payments", rule = i.type === "REJECTED_ROWS" ? m.rule_name : "";
+  return `<button class="btn light" onclick="DQ.open('${esc(i.business_date)}','${esc(ent || "")}','${esc(rule || "")}')">See records</button>`;
 }
 function renderDetect() {
   const t = state.overview.trust, open = state.incidents.open;
@@ -227,9 +243,30 @@ async function renderInvestigate(id) {
 }
 
 // ------------------------------------------------------------------ 4. lineage
+let linView = "graph";
+try { linView = localStorage.getItem("dt.linView") || "graph"; } catch (e) {}
+document.querySelectorAll("#linToggle button").forEach((b) => b.addEventListener("click", () => {
+  linView = b.dataset.view;
+  try { localStorage.setItem("dt.linView", linView); } catch (e) {}
+  document.querySelectorAll("#linToggle button").forEach((x) => x.classList.toggle("active", x === b));
+  $("linBody").innerHTML = "<p class='muted'>Loading…</p>";
+  renderLineage();
+}));
 async function renderLineage() {
   const lin = await api("/api/lineage");
   $("linSub").textContent = `Latest batch ${lin.batch_id} (${lin.business_date}). Gold views come from the PostgreSQL catalog (information_schema.view_table_usage).`;
+  document.querySelectorAll("#linToggle button").forEach((b) => b.classList.toggle("active", b.dataset.view === linView));
+  if (linView === "graph" && window.LineageGraph) {             // graph view (lineage-graph.js); List below is unchanged
+    const pipe = await api("/api/pipeline").catch(() => null);
+    const bad = lin.settlement.filter((r) => r.recon_status === "MISMATCH");
+    $("linBody").innerHTML = `
+      <div class="banner ${bad.length ? "bad" : "ok"}"><h2>External target: payment gateway settlement</h2>
+        ${bad.length ? bad.map((r) => `${r.business_date}: gateway settled ${num(r.settled_payments)} payments, silver has ${num(r.silver_payments)} → ${r.payment_difference} payments / ${inr(r.amount_difference)} short`).join("<br>") : "All dates match."}</div>
+      <div class="card lg-card"><div id="linGraph"></div></div>
+      <div class="card"><h3>Settlement reconciliation by date</h3>${objTable(lin.settlement)}</div>`;
+    window.LineageGraph.render($("linGraph"), lin, pipe);
+    return;
+  }
   const node = (name, count, sub, cls) => `<div class="node ${cls}"><div class="n">${esc(name)}</div><div class="c">${count}</div><div class="s">${sub}</div></div>`;
   const arrow = (txt) => `<div class="arrow">${txt || ""}</div>`;
   const rows = lin.entities.map((e) => {
@@ -280,7 +317,9 @@ async function renderImpact(id) {
         <div class="field"><input id="approver" placeholder="Approved by (your name)"></div>
         ${inc.approval ? `<p class="small">Already approved by <b>${esc(inc.approval.approved_by)}</b> at ${esc(inc.approval.approved_at)}. Waiting for the next pipeline run to verify.</p>` : ""}
         <button class="btn" id="approveBtn" style="width:100%">Approve remediation</button></div>
-    </div>`;
+    </div>
+    <div id="autofixBox"></div>`;
+  renderAutofix(id);
   $("approveBtn").onclick = async () => {
     const actions = [...document.querySelectorAll(".actions input:checked")].map((x) => x.value);
     const by = $("approver").value.trim() || "web user";
@@ -292,6 +331,57 @@ async function renderImpact(id) {
       await loadCore();
       go("verify");
     } catch (e) { showError(e.message); $("approveBtn").disabled = false; }
+  };
+}
+
+// ---- auto-fix with approval (5. Impact): evidence-based correction of rejected rows
+let autofixSeq = 0;
+async function renderAutofix(id) {
+  const my = ++autofixSeq;                       // the Impact page can be drawn twice quickly: only the newest wins
+  const p = await api("/api/autofix/" + encodeURIComponent(id)).catch(() => null);
+  const box = $("autofixBox");
+  if (!p || !box || my !== autofixSeq) return;
+  if (!p.available) {
+    box.innerHTML = p.reason && !/no automatic fix exists/i.test(p.reason) ? `<div class="card"><h3>Auto-fix</h3><p class="muted">${esc(p.reason)}</p></div>` : "";
+    return;
+  }
+  const e = p.effect || {};
+  const effect = e.settled_payments != null
+    ? `<div class="af-effect"><div><span class="l">Silver vs gateway now</span><b class="bad">${num(e.silver_now)} / ${num(e.settled_payments)}</b><span class="small">gap ${inr(e.amount_gap_now)}</span></div>
+        <div class="af-arrow">→</div><div><span class="l">After the fix</span><b class="ok">${num(e.silver_after)} / ${num(e.settled_payments)}</b><span class="small">gap ${inr(e.amount_gap_after)}</span></div></div>` : "";
+  box.innerHTML = `<div class="card autofix">
+      <div class="af-head"><h3>Auto-fix with approval</h3><span class="chip ok">evidence-based</span></div>
+      <p class="big">${esc(p.title)}</p>
+      <p class="muted">Every value below comes from your own data; nothing is guessed. Applying runs in one transaction, records each change in
+        <code>audit.dq_corrections</code> and the next pipeline runs keep the fix. Rows without clear evidence stay for the source team.</p>
+      ${effect}
+      <div class="tablewrap"><table><thead><tr><th>Record</th><th>Field</th><th>Now</th><th>Fixed value</th><th>Evidence</th></tr></thead><tbody>
+        ${p.rows.map((r) => `<tr><td>${esc(r.record_key)}</td><td>${esc(r.column)}</td><td class="bad">${r.current == null ? "(missing)" : esc(r.current)}</td>
+          <td class="ok"><b>${esc(r.proposed)}</b></td><td class="small">${esc(r.evidence)}</td></tr>`).join("")}</tbody></table></div>
+      ${p.skipped.length ? `<p class="small warn">${p.skipped.length} row(s) cannot be fixed automatically and stay rejected.</p>` : ""}
+      <details class="af-sql"><summary>What will run</summary><pre class="code">${esc(p.sql_preview)}</pre></details>
+      <div class="af-actions"><button class="btn" id="afApply">Approve &amp; apply fix (${p.rows.length} rows)</button>
+        <span class="small muted">Needs a portal admin login (Data estate). Resolves: ${p.resolves.map(esc).join(", ")}.</span></div>
+      <div id="afResult"></div></div>`;
+  const applyBtn = box.querySelector("#afApply");
+  if (!applyBtn) return;
+  applyBtn.onclick = async () => {
+    if (!confirm(`Apply the fix to ${p.rows.length} ${p.entity} row(s) of ${p.business_date}?\n\nThe corrected rows are loaded into silver now; every change is recorded.`)) return;
+    applyBtn.disabled = true;
+    applyBtn.textContent = "Applying…";
+    try {
+      const r = await fetch(`/api/estate/autofix/${encodeURIComponent(id)}/apply`, { method: "POST", credentials: "same-origin" });
+      const body = await r.json().catch(() => ({}));
+      if (r.status === 401 || r.status === 403) {
+        $("afResult").innerHTML = `<div class="error-box">Only a portal admin can apply fixes. Log in under <b>Data estate → Connections</b> as an admin, then come back and click again.</div>`;
+        applyBtn.disabled = false; applyBtn.textContent = `Approve & apply fix (${p.rows.length} rows)`; return;
+      }
+      if (!r.ok) throw new Error(body.detail || body.error || r.statusText);
+      toast(`Fix applied: ${body.fixed} row(s) corrected`);
+      state.version = null;                       // reload everything: the data just changed
+      await loadCore();
+      go("verify");
+    } catch (err) { $("afResult").innerHTML = `<div class="error-box">${esc(err.message)}</div>`; applyBtn.disabled = false; applyBtn.textContent = `Approve & apply fix (${p.rows.length} rows)`; }
   };
 }
 
@@ -381,4 +471,15 @@ async function askQuestion(q) {
 (async function start() {
   await checkVersion();                      // loads the data and draws page 1
   setInterval(checkVersion, 15000);          // auto refresh when the pipeline writes new data
+  openFromLink();
 })();
+// links from alerts / e-mails: #investigate=<incident id>, #impact=<id>, #verify, #estate-people ...
+function openFromLink() {
+  const m = decodeURIComponent(location.hash.slice(1)).match(/^([\w-]+)(?:=(.+))?$/);
+  if (!m || !document.getElementById("page-" + m[1])) return;
+  const btn = document.querySelector(`#tabs button[data-page="${m[1]}"]`);
+  if (m[1] === "estate-dq-rejected" && m[2] && window.DQ) DQ.open(m[2]);   // #estate-dq-rejected=2026-10-08
+  else if (m[2]) go(m[1], m[2]); else if (btn) btn.click();
+  history.replaceState(null, "", location.pathname);
+}
+window.addEventListener("hashchange", openFromLink);

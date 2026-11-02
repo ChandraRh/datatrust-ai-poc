@@ -10,6 +10,7 @@ Nothing is hard-coded: run the pipeline again and these numbers change.
 """
 import csv
 import sys
+import threading
 from datetime import date, datetime, timedelta
 from decimal import Decimal
 from pathlib import Path
@@ -70,9 +71,31 @@ def plain(value):
     return value
 
 
+_local = threading.local()
+
+
+def _reader():
+    """One read-only connection per worker thread, reused for every query (opening one per query was the slowest
+    part of a page refresh). Autocommit: every query sees the latest committed data. Reconnects when broken."""
+    conn = getattr(_local, "conn", None)
+    if conn is None or conn.closed or conn.broken:
+        conn = psycopg.connect(host=config.PG_HOST, port=config.PG_PORT, dbname=config.PG_DATABASE,
+                               user=config.PG_USER, password=config.PG_PASSWORD, row_factory=dict_row,
+                               connect_timeout=5, autocommit=True)
+        conn.execute("SET default_transaction_read_only = on")
+        conn.execute("SET statement_timeout = '10s'")
+        _local.conn = conn
+    return conn
+
+
 def rows(sql: str, params=None) -> list:
-    with connect() as conn:
-        return [{k: plain(v) for k, v in r.items()} for r in conn.execute(sql, params).fetchall()]
+    for attempt in (1, 2):
+        try:
+            return [{k: plain(v) for k, v in r.items()} for r in _reader().execute(sql, params).fetchall()]
+        except psycopg.OperationalError:                         # database restarted / connection dropped: retry once
+            _local.conn = None
+            if attempt == 2:
+                raise
 
 
 def one(sql: str, params=None) -> dict:
@@ -268,7 +291,8 @@ def incidents() -> list:
                             string_agg(DISTINCT rule_name, ', ') AS rules
                      FROM silver.rejected_records
                      WHERE entity = 'payments' AND business_date = %(d)s
-                       AND raw_record::jsonb->>'status' = 'CAPTURED'""", {"d": r["business_date"]})
+                       AND (upper(trim(raw_record::jsonb->>'status')) = 'CAPTURED'
+                            OR rule_name = 'STATUS_VALID')""", {"d": r["business_date"]})   # a status typo was settled too
         found.append({
             "id": f"RECON-{r['business_date']}", "severity": "HIGH", "type": "SETTLEMENT_MISMATCH",
             "title": f"Revenue gap on {r['business_date']}: settlement does not match silver",
@@ -320,6 +344,13 @@ def incidents() -> list:
                 "severity": "CRITICAL" if layer["status"] == "FAILED" else "HIGH", "type": "PIPELINE_FAILURE",
                 "title": f"{layer['layer']} layer {layer['status']} in batch {status['batch']['batch_id']}",
                 "summary": detail or "", "metrics": layer, "business_date": status["batch"].get("business_date")})
+
+    # 4. breaking schema changes on bronze / silver / gold (schema-change guard, needs change tracking)
+    try:
+        import schema_guard
+        found += schema_guard.incidents(approvals)
+    except Exception as e:                                          # the guard must never break the other checks
+        print(f"!! schema guard skipped: {type(e).__name__}: {e}")
 
     order = {"CRITICAL": 0, "HIGH": 1, "MEDIUM": 2, "LOW": 3}
     for i in found:
@@ -377,7 +408,10 @@ def investigate(incident_id: str) -> dict:
              "source": "silver.rejected_records.raw_record"},
         ]
         confidence = 97 if (count_match and amount_match) else 75 if count_match else 40
-        root = (f"The source payments file sent {rej['n']} captured payments for {d} without a currency. "
+        why = {"CURRENCY_REQUIRED": "without a currency", "STATUS_VALID": "with an unknown status (e.g. a typo)",
+               "AMOUNT_POSITIVE": "with a zero or negative amount", "PAYMENT_ID_REQUIRED": "without a payment id"}
+        what = " / ".join(why.get(x.strip(), f"that failed {x.strip()}") for x in str(rej["rules"] or "").split(",") if x.strip())
+        root = (f"The source payments file sent {rej['n']} captured payments for {d} {what or 'that failed a rule'}. "
                 f"Silver rejected them (rule {rej['rules']}), so revenue in gold is short by {inr(m['amount_difference'])}."
                 if count_match else "The gap is not fully explained by rejected rows: check the source extract.")
         chain = [f"Gateway settled {m['settled_payments']:,} payments", f"payments.csv: {(source_payments if source_payments is not None else bronze_payments):,} rows for {d}",
@@ -400,6 +434,10 @@ def investigate(incident_id: str) -> dict:
         root, confidence = f"Source data for {m['entity']} broke rule {m['rule_name']}.", 95
         chain = [f"{ENTITIES[m['entity']][0]} delivered the rows", f"Silver rule {m['rule_name']} rejected {m['n']}",
                  "Rows held back from silver and gold"]
+    elif inc["type"] == "SCHEMA_CHANGE":
+        import schema_guard
+        ev = schema_guard.investigate(inc)
+        checks, chain, root, confidence, sample = ev["checks"], ev["chain"], ev["root_cause"], ev["confidence"], ev["sample"]
     else:
         sample, confidence = [], 80
         checks = [{"ok": True, "text": inc["summary"], "source": "audit.step_log / audit.batch_control"}]
@@ -413,6 +451,9 @@ def impact(inc: dict) -> dict:
     """What the issue touches: gold views (from the catalog), dates and money. No invented numbers."""
     entity = {"SETTLEMENT_MISMATCH": "payments"}.get(inc["type"]) or (inc.get("metrics") or {}).get("entity")
     views = _gold_views_using(ENTITIES[entity][2]) if entity in ENTITIES else []
+    if inc["type"] == "SCHEMA_CHANGE":                              # blast radius from the guard
+        entity = inc["metrics"]["object"]
+        views = [v.split(".", 1)[1] for v in inc["metrics"]["gold_views"]]
     amount = None
     if inc["type"] == "SETTLEMENT_MISMATCH":
         amount = inc["metrics"]["amount_difference"]
@@ -425,6 +466,9 @@ def impact(inc: dict) -> dict:
         "DUPLICATES": ["Inform the source team about duplicate delivery", "No data fix needed: silver kept one copy"],
         "DATA_LOSS": ["Compare the source file with bronze", "Re-run bronze for the batch", "Check audit.step_log"],
         "PIPELINE_FAILURE": ["Read the error in audit.error_log", "Fix the cause", "Re-run the pipeline"],
+        "SCHEMA_CHANGE": ["Contact the owners of the objects that break (Contact owner)",
+                          "Revert the change, or update the pipeline and the views that use it",
+                          "Re-run the pipeline and check the gold views", "Acknowledge: the change was handled"],
     }.get(inc["type"], [])
     return {"entity": entity, "gold_views": views, "business_date": inc.get("business_date"),
             "amount_at_risk": amount, "actions": actions}

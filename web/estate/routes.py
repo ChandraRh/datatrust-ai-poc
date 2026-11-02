@@ -186,8 +186,9 @@ def failures(cid: int, database: str, user: dict = Depends(current_user)):
 
 # ---------------------------------------------------------------- access
 @router.get("/connections/{cid}/roles")
-def roles(cid: int, user: dict = Depends(current_user)):
-    return guard(service.source(cid).roles)
+def roles(cid: int, database: Optional[str] = None, user: dict = Depends(current_user)):
+    """PostgreSQL: server-wide roles. SQL Server: users and roles of the given database."""
+    return guard(service.source(cid).roles, database or None)
 
 
 @router.get("/connections/{cid}/db/{database}/roles/{role}/access")
@@ -196,8 +197,9 @@ def role_access(cid: int, database: str, role: str, user: dict = Depends(current
 
 
 @router.get("/privileges")
-def privileges(user: dict = Depends(current_user)):
-    return service.PRIVILEGES
+def privileges(connection_id: Optional[int] = None, user: dict = Depends(current_user)):
+    """Grantable privileges per object type, in the words of that source type (PostgreSQL when none given)."""
+    return guard(service.privileges, connection_id)
 
 
 class AccessRequest(BaseModel):
@@ -213,6 +215,18 @@ class AccessRequest(BaseModel):
 def create_access_request(body: AccessRequest, user: dict = Depends(current_user)):
     return guard(service.create_request, body.connection_id, body.database, body.request_type,
                  body.grantee.strip(), body.details, body.reason, user)
+
+
+class DraftText(BaseModel):
+    connection_id: int
+    database: str = ""
+    text: str
+
+
+@router.post("/access-requests/draft")
+def draft_access_request(body: DraftText, user: dict = Depends(current_user)):
+    """Plain words -> request + SQL preview (nothing is stored or run; submit it with POST /access-requests)."""
+    return guard(service.draft_request, body.connection_id, body.database, body.text, user)
 
 
 @router.get("/access-requests")
@@ -242,3 +256,94 @@ class Question(BaseModel):
 @router.post("/ask")
 def ask(body: Question, user: dict = Depends(current_user)):
     return guard(service.ask, body.connection_id, body.database, body.question)
+
+
+# ---------------------------------------------------------------- Connect: people directory
+class Person(BaseModel):
+    name: str
+    email: str
+    team: str = ""
+    title: str = ""
+    phone: str = ""
+    chat_link: str = ""
+    owns: list = []
+
+
+class MatchText(BaseModel):
+    text: str
+
+
+@router.get("/people")
+def people(user: dict = Depends(current_user)):
+    return store.list_people()
+
+
+@router.post("/people")
+def save_person(body: Person, user: dict = Depends(admin_user)):
+    return {"person_id": guard(store.save_person, dict(body), user["username"])}
+
+
+@router.delete("/people/{person_id}")
+def remove_person(person_id: int, user: dict = Depends(admin_user)):
+    guard(store.remove_person, person_id, user["username"])
+    return {"ok": True}
+
+
+@router.post("/people/match")
+def match_people(body: MatchText, user: dict = Depends(current_user)):
+    """Owners of whatever the text mentions (used by the 'Contact owner' buttons)."""
+    return store.match_people(body.text)
+
+
+# ---------------------------------------------------------------- auto-fix (changes silver data: admin only)
+@router.post("/autofix/{incident_id}/apply")
+def apply_autofix(incident_id: str, user: dict = Depends(admin_user)):
+    import autofix
+    result = guard(autofix.apply, incident_id, user["username"])
+    store.audit(user["username"], "AUTOFIX_APPLIED", incident_id, result["action"])
+    return result
+
+
+# ---------------------------------------------------------------- blast radius preview (PostgreSQL sources)
+@router.get("/connections/{cid}/db/{database}/blast")
+def blast(cid: int, database: str, schema: str, name: str, column: Optional[str] = None, user: dict = Depends(current_user)):
+    """What breaks if schema.name (or one of its columns) changes: views on it, and for the pipeline's own database
+    also the pipeline steps / silver tables / gold views. Plus the owners from Connect."""
+    import config
+    import schema_guard
+    src = service.source(cid)
+    if src.cfg["source_type"] != "postgresql":
+        raise HTTPException(400, "the blast-radius preview is available for PostgreSQL sources")
+    own = database == config.PG_DATABASE and str(src.cfg["port"]) == str(config.PG_PORT)
+    from contextlib import closing
+    with closing(src.connect(database)) as conn:
+        r = schema_guard.blast_radius(conn, schema, name, column or None, with_pipeline=own)
+    r["owners"] = [{"name": p["name"], "email": p["email"], "matched": p["matched"]}
+                   for p in store.match_people(" ".join([r["object"]] + [d["object"] for d in r["downstream"]]))]
+    return r
+
+
+# ---------------------------------------------------------------- Google Chat alerts (admin)
+@router.get("/alerts/status")
+def alerts_status(user: dict = Depends(admin_user)):
+    import alerts
+    return alerts.status()
+
+
+@router.post("/alerts/test")
+def alerts_test(user: dict = Depends(admin_user)):
+    import alerts
+    try:
+        alerts.send_test()
+    except Exception as e:
+        raise HTTPException(400, f"{type(e).__name__}: {e}")
+    store.audit(user["username"], "ALERT_TEST", "google chat", alerts.masked())
+    return {"ok": True}
+
+
+@router.post("/alerts/check")
+def alerts_check(user: dict = Depends(admin_user)):
+    import alerts
+    result = alerts.check_once()
+    alerts.state["last_result"] = result
+    return result

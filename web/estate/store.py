@@ -71,6 +71,19 @@ def init() -> None:
                 decided_by    TEXT,
                 decided_at    TIMESTAMP,
                 error         TEXT);
+            CREATE TABLE IF NOT EXISTS portal.people (       -- Connect: data owners / stewards people can contact
+                person_id   SERIAL PRIMARY KEY,
+                name        TEXT NOT NULL,
+                email       TEXT UNIQUE NOT NULL,
+                team        TEXT,
+                title       TEXT,
+                phone       TEXT,
+                chat_link   TEXT,                       -- optional Google Chat link to the person's direct chat
+                owns        TEXT[] DEFAULT '{}',        -- data they own: silver.payments, gold.*, payments ...
+                active      BOOLEAN DEFAULT TRUE,
+                created_by  TEXT,
+                created_at  TIMESTAMP DEFAULT now(),
+                updated_at  TIMESTAMP DEFAULT now());
             CREATE TABLE IF NOT EXISTS portal.audit_log (
                 audit_id   BIGSERIAL PRIMARY KEY,
                 at         TIMESTAMP DEFAULT now(),
@@ -171,6 +184,14 @@ def save_user(username: str, role: str, password: str, by: str, active: bool = T
     if not username.strip() or len(password) < 8:
         raise ValueError("username required and password of at least 8 characters")
     with db() as conn:
+        current = conn.execute("SELECT role, active FROM portal.users WHERE username = %s", (username.strip(),)).fetchone()
+        if current and current["role"] == "admin" and (role != "admin" or not active):
+            if username.strip() == by:
+                raise ValueError("you cannot remove your own admin role; ask another admin")
+            others = conn.execute("""SELECT COUNT(*) AS n FROM portal.users
+                                     WHERE role = 'admin' AND active AND username <> %s""", (username.strip(),)).fetchone()["n"]
+            if not others:
+                raise ValueError("the portal needs at least one active admin")
         conn.execute("""INSERT INTO portal.users (username, password_hash, role, active, created_by) VALUES (%s, %s, %s, %s, %s)
                         ON CONFLICT (username) DO UPDATE SET password_hash = EXCLUDED.password_hash,
                                role = EXCLUDED.role, active = EXCLUDED.active""",
@@ -198,8 +219,8 @@ def add_connection(name, host, port, database, username, password_env, by, sourc
     from .source_types import DEFAULT_PORT, SOURCE_TYPES
     if source_type not in SOURCE_TYPES:
         raise ValueError(f"unknown source type {source_type}")
-    if not name.strip() or not host.strip() or not username.strip():
-        raise ValueError("name, host/account and login user are required")
+    if not name.strip() or not host.strip() or (not (username or "").strip() and source_type != "sqlserver"):
+        raise ValueError("name, host/account and login user are required")      # SQL Server: empty user = Windows login
     if not password_env or not password_env.replace("_", "").isalnum():
         raise ValueError("password_env must be the NAME of a variable in .env, e.g. CONN_SALES_PASSWORD")
     with db() as conn:
@@ -207,7 +228,7 @@ def add_connection(name, host, port, database, username, password_env, by, sourc
                                      settings, created_by)
                               VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s) RETURNING connection_id""",
                            (name.strip(), source_type, host.strip(), int(port or DEFAULT_PORT[source_type]), (database or "").strip(),
-                            username.strip(), password_env, json.dumps(settings or {}), by)).fetchone()
+                            (username or "").strip(), password_env, json.dumps(settings or {}), by)).fetchone()
         conn.commit()
     audit(by, "CONNECTION_ADDED", name, f"{source_type} {username}@{host}:{port}/{database}")
     return row["connection_id"]
@@ -248,3 +269,88 @@ def audit_log(limit: int = 200):
     with db() as conn:
         return conn.execute("SELECT at, username, action, target, detail FROM portal.audit_log ORDER BY audit_id DESC LIMIT %s",
                             (limit,)).fetchall()
+
+
+# ============================================================================ Connect: people directory
+EMAIL_RE = r"^[A-Za-z0-9._%+'-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}$"
+ASSET_RE = r"^[A-Za-z0-9_][A-Za-z0-9_.\-]*(\.\*)?$"
+
+
+def list_people():
+    with db() as conn:
+        return conn.execute("""SELECT person_id, name, email, team, title, phone, chat_link, owns, created_by, updated_at
+                               FROM portal.people WHERE active ORDER BY lower(name)""").fetchall()
+
+
+def save_person(data: dict, by: str) -> int:
+    """Add or update a person (matched by e-mail). Values are checked so nothing unsafe reaches the page."""
+    import re
+    name = (data.get("name") or "").strip()
+    email = (data.get("email") or "").strip().lower()
+    if not name or len(name) > 120:
+        raise ValueError("name is required (max 120 characters)")
+    if not re.match(EMAIL_RE, email):
+        raise ValueError("a valid company e-mail address is required")
+    domains = [d.strip().lower().lstrip("@") for d in os.getenv("PORTAL_COMPANY_DOMAIN", "").split(",") if d.strip()]
+    if domains and email.split("@")[1] not in domains:
+        raise ValueError(f"only company e-mail addresses are allowed ({', '.join('@' + d for d in domains)})")
+    phone = (data.get("phone") or "").strip()
+    if phone and not re.match(r"^\+?[0-9 ()\-]{6,20}$", phone):
+        raise ValueError("phone: digits, spaces, + ( ) - only")
+    chat = (data.get("chat_link") or "").strip()
+    if chat and not re.match(r"^https://(chat\.google\.com|mail\.google\.com/chat)/", chat):
+        raise ValueError("Google Chat link must start with https://chat.google.com/ or https://mail.google.com/chat/")
+    owns = data.get("owns") or []
+    if isinstance(owns, str):
+        owns = owns.split(",")
+    owns = sorted({o.strip() for o in owns if o and o.strip()})[:50]
+    bad = [o for o in owns if not re.match(ASSET_RE, o)]
+    if bad:
+        raise ValueError(f"data owned: use names like silver.payments, gold.* or payments (not {bad[0]})")
+    team, title = (data.get("team") or "").strip()[:80], (data.get("title") or "").strip()[:80]
+    with db() as conn:
+        row = conn.execute("""INSERT INTO portal.people (name, email, team, title, phone, chat_link, owns, created_by)
+                              VALUES (%s, %s, %s, %s, %s, %s, %s, %s)
+                              ON CONFLICT (email) DO UPDATE SET name = EXCLUDED.name, team = EXCLUDED.team, title = EXCLUDED.title,
+                                     phone = EXCLUDED.phone, chat_link = EXCLUDED.chat_link, owns = EXCLUDED.owns,
+                                     active = TRUE, updated_at = now()
+                              RETURNING person_id""", (name, email, team, title, phone, chat, owns, by)).fetchone()
+        conn.commit()
+    audit(by, "PERSON_SAVED", email, f"{name}; owns {', '.join(owns) or '-'}")
+    return row["person_id"]
+
+
+def remove_person(person_id: int, by: str):
+    with db() as conn:
+        row = conn.execute("UPDATE portal.people SET active = FALSE, updated_at = now() WHERE person_id = %s RETURNING email",
+                           (person_id,)).fetchone()
+        conn.commit()
+    if not row:
+        raise ValueError("person not found")
+    audit(by, "PERSON_REMOVED", row["email"], "")
+
+
+def match_people(text: str):
+    """People who own something mentioned in the text (an incident, a table, a lineage box).
+    'silver.payments' matches the full name or just 'payments'; 'gold.*' matches anything in schema gold."""
+    import re
+    low = (text or "").lower()
+    norm = lambda w: w[:-1] if w.endswith("s") and len(w) > 3 else w            # payment / payments  # noqa: E731
+    words = {norm(w) for w in re.findall(r"[a-z0-9_]+", low)}
+    hits = []
+    for p in list_people():
+        matched = []
+        for a in p["owns"] or []:
+            a_low = a.lower()
+            if a_low.endswith(".*"):
+                schema = a_low[:-2]
+                ok = f"{schema}." in low or norm(schema) in words
+            elif "." in a_low:
+                ok = a_low in low or norm(a_low.split(".")[-1]) in words
+            else:
+                ok = norm(a_low) in words
+            if ok:
+                matched.append(a)
+        if matched:
+            hits.append({**p, "matched": matched})
+    return sorted(hits, key=lambda p: -len(p["matched"]))
