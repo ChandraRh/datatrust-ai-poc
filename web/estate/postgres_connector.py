@@ -268,7 +268,7 @@ class PostgresSource:
         return out
 
     # ------------------------------------------------------------------ users, roles, access
-    def roles(self):
+    def roles(self, database=None):            # PostgreSQL roles are server-wide; database is ignored
         return self.q("""SELECT r.rolname AS name, r.rolcanlogin AS can_login, r.rolsuper AS superuser,
                                 r.rolcreaterole AS can_create_roles, r.rolcreatedb AS can_create_db, r.rolvaliduntil AS valid_until,
                                 ARRAY(SELECT b.rolname FROM pg_auth_members m JOIN pg_roles b ON b.oid = m.roleid
@@ -313,18 +313,49 @@ class PostgresSource:
                 return c.execute("SELECT to_regclass(%s) IS NOT NULL AS ok",
                                  (sql.SQL("{}.{}").format(ident(s), ident(n)).as_string(c),)).fetchone()["ok"]
 
+            def check_name(name):
+                if not name or len(name) > 63 or not all(ch.isalnum() or ch in "_.-" for ch in name) or name.startswith("pg_"):
+                    raise ValueError("name: letters, digits, _ . - only (max 63, not starting with pg_)")
+
             if request_type == "CREATE_USER":
                 if grantee in roles:
                     raise ValueError(f"role {grantee} already exists")
-                if not grantee or len(grantee) > 63 or not all(ch.isalnum() or ch in "_.-" for ch in grantee):
-                    raise ValueError("user name: letters, digits, _ . - only (max 63)")
-                stmts.append(sql.SQL("CREATE ROLE {} LOGIN PASSWORD {}").format(
-                    ident(grantee), sql.Literal(password) if password else sql.SQL("'********'")))
-                stmts.append(sql.SQL("GRANT CONNECT ON DATABASE {} TO {}").format(ident(database), ident(grantee)))
+                check_name(grantee)
+                if (details or {}).get("login_type") == "none":          # a user that cannot log in (owner / service identity)
+                    stmts.append(sql.SQL("CREATE ROLE {} NOLOGIN").format(ident(grantee)))
+                else:
+                    stmts.append(sql.SQL("CREATE ROLE {} LOGIN PASSWORD {}").format(
+                        ident(grantee), sql.Literal(password) if password else sql.SQL("'********'")))
+                    stmts.append(sql.SQL("GRANT CONNECT ON DATABASE {} TO {}").format(ident(database), ident(grantee)))
                 for role in details.get("member_of", []):
                     if role not in roles:
                         raise ValueError(f"role {role} does not exist")
                     stmts.append(sql.SQL("GRANT {} TO {}").format(ident(role), ident(grantee)))
+            elif request_type == "CREATE_ROLE":                         # a group role: collect rights once, add people to it
+                if grantee in roles:
+                    raise ValueError(f"role {grantee} already exists")
+                check_name(grantee)
+                stmts.append(sql.SQL("CREATE ROLE {} NOLOGIN").format(ident(grantee)))
+                for member in details.get("members", []):
+                    if member not in roles:
+                        raise ValueError(f"user {member} does not exist")
+                    stmts.append(sql.SQL("GRANT {} TO {}").format(ident(grantee), ident(member)))
+            elif request_type == "REVOKE_ROLE":
+                role = details.get("role")
+                info = {r["name"]: r for r in self.roles()}
+                if grantee not in info or role not in info:
+                    raise ValueError(f"{grantee if grantee not in info else role} does not exist")
+                if role not in (info[grantee]["member_of"] or []):
+                    raise ValueError(f"{grantee} is not a member of {role}")
+                stmts.append(sql.SQL("REVOKE {} FROM {}").format(ident(role), ident(grantee)))
+            elif request_type == "DROP_PRINCIPAL":
+                info = {r["name"]: r for r in self.roles()}
+                p = info.get(grantee)
+                if not p:
+                    raise ValueError(f"{grantee} does not exist")
+                if p["superuser"] or grantee in ("postgres", self.cfg.get("username")) or grantee.startswith("pg_"):
+                    raise ValueError(f"{grantee} is a built-in, superuser or portal login and cannot be removed from the portal")
+                stmts.append(sql.SQL("DROP ROLE {}").format(ident(grantee)))   # PostgreSQL refuses if it still owns objects
             elif request_type == "GRANT_ROLE":
                 for name in (grantee, details.get("role")):
                     if name not in roles:
@@ -370,7 +401,7 @@ class PostgresSource:
     def apply(self, request_type, database, details, grantee):
         """Run an approved request in ONE transaction. Returns the generated password for CREATE_USER (shown once)."""
         password = None
-        if request_type == "CREATE_USER":
+        if request_type == "CREATE_USER" and (details or {}).get("login_type") != "none":
             alphabet = string.ascii_letters + string.digits
             password = "".join(secrets.choice(alphabet) for _ in range(16))
         stmts, _ = self.build_statements(request_type, database, details, grantee, password)

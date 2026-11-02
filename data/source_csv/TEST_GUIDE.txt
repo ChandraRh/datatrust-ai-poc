@@ -1,0 +1,26 @@
+DataTrust AI - new sample data, business dates 2026-10-26 to 2026-11-01
+=========================================================================
+Same 7 file names and columns as before. Daily files hold ONLY the 7 new dates; products and
+categories are full snapshots. planted_issues.csv lists every deliberate problem and its record key.
+
+Expected result (tested on the full pipeline):
+  date        what DataTrust should show
+  2026-10-26  all MATCH; 5 product price changes -> new SCD2 versions; customer changes -> new versions
+  2026-10-27  3 payments rejected (STATUS 'CAPTRED')    -> revenue gap 3 payments / Rs 3,186.00 (HIGH)
+              fix: Rejected records -> set status = CAPTURED -> approve  (no auto-fix: source typo)
+  2026-10-28  4 orders rejected (negative amount)        -> auto-fix on Impact (sign error)
+  2026-10-29  2 refunds rejected (amount 0.00)           -> Rejected records -> "Mark won't fix"
+  2026-10-30  9 payments rejected (currency empty)       -> revenue gap 9 payments / Rs 6,401.15 (HIGH)
+              fix: Impact -> Auto-fix (currency from each payment's order) -> gap closes
+  2026-10-31  6 payments sent twice                      -> duplicates removed (LOW), settlement still MATCH
+  2026-11-01  1 customer change with a broken e-mail     -> rejected, customer keeps the old version
+  30 new customers (C01201-C01230) arrive on 2026-10-27; ~40 customer profile changes a day.
+
+Steps
+  1. pgAdmin: back up datatrust_poc.
+  2. pgAdmin:  UPDATE audit.dq_corrections SET active = FALSE;
+  3. Upload the 7 csv files to the container (landing / datatrust/source_csv), replacing the old ones
+     (or copy them to data\source_csv when SOURCE_MODE=local).
+  4. python run_pipeline.py 2026-10-26 2026-11-01
+  5. Open the app: Brief me, Detect, Investigate, Lineage, Rejected records, Impact (auto-fix), Verify.
+  6. Optional Kafka: producer.py --date 2026-11-02 ... (add a 2026-11-02 settlement row if you want that date reconciled).

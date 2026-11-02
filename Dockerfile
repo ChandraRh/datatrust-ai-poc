@@ -12,6 +12,18 @@ WORKDIR /app
 COPY requirements-web.txt .
 RUN pip install --no-cache-dir -r requirements-web.txt
 
+# optional: Microsoft ODBC driver, only needed for SQL Server sources in the Data Estate portal
+#   docker build --build-arg WITH_MSSQL=true -t datatrust-web .
+ARG WITH_MSSQL=false
+RUN if [ "$WITH_MSSQL" = "true" ]; then \
+      apt-get update && apt-get install -y --no-install-recommends curl gnupg ca-certificates && \
+      curl -fsSL https://packages.microsoft.com/keys/microsoft.asc | gpg --dearmor -o /usr/share/keyrings/microsoft-prod.gpg && \
+      curl -fsSL https://packages.microsoft.com/config/debian/12/prod.list -o /etc/apt/sources.list.d/mssql-release.list && \
+      apt-get update && ACCEPT_EULA=Y apt-get install -y --no-install-recommends msodbcsql18 unixodbc && \
+      pip install --no-cache-dir "pyodbc>=5.1" && \
+      apt-get purge -y curl gnupg && apt-get autoremove -y && rm -rf /var/lib/apt/lists/*; \
+    fi
+
 # application code only: config.py + web/ (no data, no .env, no secrets)
 COPY config.py .
 COPY web/ web/

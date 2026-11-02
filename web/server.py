@@ -12,7 +12,7 @@ from pathlib import Path
 
 import uvicorn
 from fastapi import FastAPI, HTTPException
-from fastapi.responses import FileResponse, JSONResponse
+from fastapi.responses import FileResponse, HTMLResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 
@@ -44,10 +44,35 @@ try:                                                    # table for approvals ma
 except Exception as e:
     print(f"!! could not prepare audit.remediation_log: {e}")
 
+try:                                                    # DQ Rule Studio + Rejected records (own tables, own API)
+    import dq
+    import dq_routes
+    app.include_router(dq_routes.router)
+    dq.ensure_tables()
+except Exception as e:
+    print(f"!! DQ Rule Studio / Rejected records not ready: {e}")
+
+try:                                                    # Google Chat alerts (only when GOOGLE_CHAT_WEBHOOK_URL is set)
+    import alerts
+    if alerts.start_background():
+        print(f"Google Chat alerts: on ({alerts.masked()}, severity {alerts.min_severity()}+, every {alerts.interval()} s)"
+              if alerts.webhook() else "Google Chat alerts: waiting for GOOGLE_CHAT_WEBHOOK_URL in .env (no restart needed)")
+except Exception as e:
+    print(f"!! Google Chat alerts not started: {e}")
+
 
 @app.get("/")
 def index():
-    return FileResponse(HERE / "static" / "index.html")
+    """The page, with every /static/*.css|js link stamped with that file's last-change time (?v=...),
+    so after an update the browser always loads the new files instead of old cached copies."""
+    import re
+    html = (HERE / "static" / "index.html").read_text(encoding="utf-8")
+
+    def stamp(m):
+        f = HERE / "static" / m.group(2)
+        return f'{m.group(1)}/static/{m.group(2)}?v={int(f.stat().st_mtime)}"' if f.exists() else m.group(0)
+    html = re.sub(r'((?:src|href)=")/static/([^"?]+\.(?:css|js))"', stamp, html)
+    return HTMLResponse(html, headers={"Cache-Control": "no-cache"})
 
 
 @app.get("/health")
@@ -84,6 +109,19 @@ def investigate(incident_id: str):
 @app.get("/api/lineage")
 def lineage():
     return ds.lineage()
+
+
+@app.get("/api/autofix/{incident_id}")
+def autofix_proposal(incident_id: str):
+    """What the auto-fix would change for this incident, with the evidence per row (read-only)."""
+    import autofix
+    return autofix.proposal(incident_id)
+
+
+@app.get("/api/corrections")
+def corrections():
+    import autofix
+    return autofix.corrections()
 
 
 @app.get("/api/pipeline")

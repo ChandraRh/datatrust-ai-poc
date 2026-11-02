@@ -1,0 +1,31 @@
+business_date,table,record_key,issue
+2026-10-27,payments,PAY0021755,STATUS typo 'CAPTRED' (gateway settled it)
+2026-10-27,payments,PAY0021567,STATUS typo 'CAPTRED' (gateway settled it)
+2026-10-27,payments,PAY0021999,STATUS typo 'CAPTRED' (gateway settled it)
+2026-10-28,payment_orders,ORD0023331,negative AMOUNT (sign error)
+2026-10-28,payment_orders,ORD0023808,negative AMOUNT (sign error)
+2026-10-28,payment_orders,ORD0022895,negative AMOUNT (sign error)
+2026-10-28,payment_orders,ORD0023247,negative AMOUNT (sign error)
+2026-10-29,refunds,REF000289,AMOUNT 0.00
+2026-10-29,refunds,REF000306,AMOUNT 0.00
+2026-10-30,payments,PAY0027120,CURRENCY empty
+2026-10-30,payments,PAY0027172,CURRENCY empty
+2026-10-30,payments,PAY0026154,CURRENCY empty
+2026-10-30,payments,PAY0026670,CURRENCY empty
+2026-10-30,payments,PAY0026622,CURRENCY empty
+2026-10-30,payments,PAY0026106,CURRENCY empty
+2026-10-30,payments,PAY0026941,CURRENCY empty
+2026-10-30,payments,PAY0026266,CURRENCY empty
+2026-10-30,payments,PAY0027300,CURRENCY empty
+2026-10-31,payments,PAY0028629,sent twice (duplicate)
+2026-10-31,payments,PAY0027743,sent twice (duplicate)
+2026-10-31,payments,PAY0027595,sent twice (duplicate)
+2026-10-31,payments,PAY0028056,sent twice (duplicate)
+2026-10-31,payments,PAY0028146,sent twice (duplicate)
+2026-10-31,payments,PAY0028958,sent twice (duplicate)
+2026-11-01,customers,C01192,EMAIL without @
+2026-10-26,products,7,"price changed to 91 (SCD2 new version, not an error)"
+2026-10-26,products,38,"price changed to 31 (SCD2 new version, not an error)"
+2026-10-26,products,23,"price changed to 39 (SCD2 new version, not an error)"
+2026-10-26,products,3,"price changed to 79 (SCD2 new version, not an error)"
+2026-10-26,products,49,"price changed to 70 (SCD2 new version, not an error)"

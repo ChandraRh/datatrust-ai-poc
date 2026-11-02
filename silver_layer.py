@@ -22,7 +22,13 @@ from pyspark.sql import DataFrame, Window
 from pyspark.sql import functions as F
 
 import db_utils
+import dq_rules
 from spark_utils import get_spark
+
+# rules from audit.dq_rules (DQ Rule Studio), loaded once per run; empty -> the rules written in the code below
+CONFIGURED_RULES = {}
+WARN_COUNTS = {}                                    # (entity, rule) -> [rows, sample keys] for WARN rules of this run
+RAW_KEY = {"products": "id", "categories": "id"}    # business key name in bronze when it differs from silver
 
 
 # =============================================================================== small helpers
@@ -57,7 +63,21 @@ def keep_latest(df: DataFrame, key: str, order_by: str) -> DataFrame:
 
 def apply_rules(df: DataFrame, entity: str, key: str, rules: dict, raw_cols: list):
     """rules = {rule_name: condition that marks a BAD row}. First failing rule wins.
+    When the DQ Rule Studio has rules for this entity (audit.dq_rules), those are used instead of the code rules.
     Returns (good rows, rejected rows)."""
+    warn_rules = []
+    if entity in CONFIGURED_RULES:
+        rules = {}
+        for r in CONFIGURED_RULES[entity]:
+            if not r["active"]:
+                continue
+            if r["column_name"] not in df.columns:
+                print(f"  !! rule {r['rule_name']} skipped: column {r['column_name']} is not in {entity}")
+                continue
+            if r["action"] == "WARN":
+                warn_rules.append(r)
+            else:
+                rules[r["rule_name"]] = dq_rules.spark_failing(r)
     failed = F.lit(None)
     for rule_name, is_bad in reversed(list(rules.items())):
         failed = F.when(is_bad, F.lit(rule_name)).otherwise(failed)
@@ -72,6 +92,13 @@ def apply_rules(df: DataFrame, entity: str, key: str, rules: dict, raw_cols: lis
         F.to_json(F.struct(*[F.col(f"raw_{c}").alias(c) for c in raw_cols])).alias("raw_record"),
         F.col("batch_id"),
         F.localtimestamp().alias("rejected_at"))
+    for r in warn_rules:                                   # WARN: loaded anyway, counted for audit.error_log
+        bad = good.filter(dq_rules.spark_failing(r))
+        n = bad.count()
+        if n:
+            entry = WARN_COUNTS.setdefault((entity, r["rule_name"]), [0, []])
+            entry[0] += n
+            entry[1] += [row[0] for row in bad.select(F.col(key).cast("string")).limit(20).collect()]
     return good, rejected
 
 
@@ -79,6 +106,25 @@ def add_record_hash(df: DataFrame, columns: list) -> DataFrame:
     """SCD2: a hash of the tracked columns. Different hash = the record changed."""
     return df.withColumn("record_hash", F.sha2(F.concat_ws("|", *[F.coalesce(F.col(c).cast("string"), F.lit(""))
                                                                     for c in columns]), 256))
+
+
+def apply_corrections(conn, df: DataFrame, entity: str, key: str) -> DataFrame:
+    """Fixes approved in the DataTrust portal (audit.dq_corrections) are applied to the raw rows BEFORE the rules,
+    so a re-run gives the same result as the approved fix. No table or no corrections -> rows unchanged."""
+    if not conn.execute("SELECT to_regclass('audit.dq_corrections') IS NOT NULL").fetchone()[0]:
+        return df
+    fixes = conn.execute("""SELECT record_key, column_name, new_value FROM audit.dq_corrections
+                            WHERE entity = %s AND active ORDER BY correction_id""", (entity,)).fetchall()
+    by_column = {}
+    for record_key, column, value in fixes:
+        if column in df.columns and key in df.columns:
+            by_column.setdefault(column, []).append((record_key, value))
+    for column, pairs in by_column.items():
+        expr = F.col(column)
+        for record_key, value in pairs:                       # later corrections win
+            expr = F.when(F.trim(F.col(key)) == record_key, F.lit(value)).otherwise(expr)
+        df = df.withColumn(column, expr)
+    return df
 
 
 def with_raw_copy(df: DataFrame) -> DataFrame:
@@ -341,10 +387,18 @@ def run_silver(spark, batch_id: str, business_date: str = None) -> bool:
         with step("CONNECT") as info:
             conn = db_utils.get_connection()
             info["message"] = "connected"
+        CONFIGURED_RULES.clear()
+        WARN_COUNTS.clear()
+        try:                                                              # DQ Rule Studio rules (optional)
+            CONFIGURED_RULES.update(dq_rules.load(conn))
+        except Exception as e:
+            conn.rollback()
+            print(f"  !! audit.dq_rules not read, the rules in the code are used: {type(e).__name__}: {e}")
         duplicates = []                                                   # (entity, removed, read) for the log
         for name, bronze_table, transform, silver_table, key, scd in ENTITIES:
             with step(name) as info:
                 bronze = db_utils.read_df(spark, f"SELECT * FROM {bronze_table} WHERE batch_id = '{batch_id}'")
+                bronze = apply_corrections(conn, bronze, name, RAW_KEY.get(name, key))   # approved fixes from the portal
 
                 # rejected rows of this load are replaced (no duplicates on re-runs)
                 if business_date is None:                                     # full load: all dates
@@ -377,6 +431,7 @@ def run_silver(spark, batch_id: str, business_date: str = None) -> bool:
                     good.unpersist()
                 result = f"{n_good} merged" if scd == 1 else f"SCD2: {closed} closed, {inserted} new versions"
 
+                keep_rejected_history(conn, name, batch_id)                # permanent record for the portal
                 n_read = bronze.count()
                 rows_read += n_read
                 rows_written += n_good
@@ -431,11 +486,43 @@ def log_quality_warnings(conn, batch_id, business_date, duplicates) -> None:
             db_utils.log_warning(batch_id, day, "SILVER", db_utils.pipeline_id("SILVER", entity), "DQ_REJECTED_ROWS",
                                  f"{count} {entity} row(s) rejected by rule {rule}; keys: {keys[:1500]} "
                                  f"(details in silver.rejected_records)")
+        for (entity, rule), (count, keys) in WARN_COUNTS.items():
+            db_utils.log_warning(batch_id, business_date, "SILVER", db_utils.pipeline_id("SILVER", entity), "DQ_RULE_WARNING",
+                                 f"{count} {entity} row(s) loaded with warning {rule}; keys: {', '.join(keys)[:1500]}")
         for entity, removed, read in duplicates:
             db_utils.log_warning(batch_id, business_date, "SILVER", db_utils.pipeline_id("SILVER", entity),
                                  "DQ_DUPLICATES_REMOVED", f"{removed} duplicate {entity} row(s) removed ({read} read)")
     except Exception as e:
         db_utils.log_error(batch_id, business_date, "SILVER", "PL_SILVER_DQ_WARNINGS", e)
+
+
+def keep_rejected_history(conn, entity, batch_id) -> None:
+    """silver.rejected_records only holds the latest load; every rejection is also kept in audit.rejected_history,
+    so developers can still look up what was rejected on which date, and why, after later runs.
+    Runs in a savepoint: a problem here is printed and never stops the silver load."""
+    try:
+        with conn.transaction():
+            conn.execute("""
+                CREATE TABLE IF NOT EXISTS audit.rejected_history (
+                    history_id    BIGINT GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
+                    entity        TEXT NOT NULL,
+                    record_key    TEXT,
+                    business_date DATE,
+                    rule_name     TEXT,
+                    raw_record    TEXT,
+                    batch_id      TEXT,
+                    rejected_at   TIMESTAMP,
+                    record_hash   TEXT NOT NULL)""")
+            conn.execute("""CREATE UNIQUE INDEX IF NOT EXISTS ux_rejected_history
+                            ON audit.rejected_history (entity, batch_id, rule_name, record_hash)""")
+            conn.execute("""
+                INSERT INTO audit.rejected_history (entity, record_key, business_date, rule_name, raw_record, batch_id,
+                                                    rejected_at, record_hash)
+                SELECT entity, record_key, business_date, rule_name, raw_record, batch_id, rejected_at, md5(raw_record)
+                FROM   silver.rejected_records WHERE entity = %s AND batch_id = %s
+                ON CONFLICT DO NOTHING""", (entity, batch_id))
+    except Exception as e:
+        print(f"  !! rejected history not saved for {entity}: {type(e).__name__}: {e}")
 
 
 def safe_rollback(conn, batch_id, business_date, layer) -> None:

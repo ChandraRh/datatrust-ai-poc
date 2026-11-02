@@ -7,8 +7,24 @@ import re
 from . import store
 from .postgres_connector import PRIVILEGES, PostgresSource
 from .source_types import SOURCE_TYPES, test_connection
+from .sqlserver_connector import PRIVILEGES as SQLSERVER_PRIVILEGES, SqlServerSource
 
-CONNECTORS = {"postgresql": PostgresSource}          # add SnowflakeSource / SqlServerSource here later
+CONNECTORS = {"postgresql": PostgresSource, "sqlserver": SqlServerSource}     # add SnowflakeSource / HanaSource here later
+PRIVILEGES_BY_TYPE = {"postgresql": PRIVILEGES, "sqlserver": SQLSERVER_PRIVILEGES}
+PG_NAMES = {"databases": "pg_database", "schemas": "pg_namespace", "objects": "pg_class, pg_proc", "columns": "pg_attribute, pg_index",
+            "roles": "pg_roles", "grants": "pg_class.relacl, pg_namespace.nspacl", "changes": "dt_audit.ddl_log",
+            "failures": "audit.error_log", "health": "pg_stat_database"}
+
+
+def privileges(connection_id=None) -> dict:
+    """Grantable privileges for the source type of this connection (PostgreSQL list when none given)."""
+    if not connection_id:
+        return PRIVILEGES
+    return PRIVILEGES_BY_TYPE.get(store.get_connection(connection_id)["source_type"], PRIVILEGES)
+
+
+def _names(src) -> dict:
+    return getattr(src, "NAMES", PG_NAMES)
 
 
 def source(connection_id: int):
@@ -34,13 +50,13 @@ def overview(connection_id: int) -> dict:
         info = src.test()
     except Exception as e:
         return {"ok": False, "label": label, "error": f"{type(e).__name__}: {e}", "databases": []}
-    dbs = src.databases()
+    dbs = src.databases()                                     # live list: new databases appear on the next refresh
     for d in dbs:
         try:
             d["tracking"] = src.tracking_enabled(d["name"]) if d["can_connect"] else None
         except Exception:
             d["tracking"] = None
-    return {"ok": True, "label": label, **info, "databases": dbs}
+    return {"ok": True, "label": label, **info, "databases": dbs, "tracking_note": getattr(src, "TRACKING_NOTE", None)}
 
 
 def test_new(source_type, host, port, database, username, password_env, settings) -> dict:
@@ -70,6 +86,22 @@ def create_request(connection_id, database, request_type, grantee, details, reas
         conn.commit()
     store.audit(user["username"], "ACCESS_REQUESTED", f"{request_type} {grantee}", preview)
     return {"request_id": row["request_id"], "sql_preview": preview}
+
+
+def draft_request(connection_id, database, text, user) -> dict:
+    """Plain words -> a validated access request with its SQL preview. Stores nothing; the user submits it after reading."""
+    from . import drafting
+    cfg = store.get_connection(connection_id)
+    src = source(connection_id)
+    database = database or cfg["database"]
+    result = drafting.draft(src, cfg["source_type"], database, text, privileges(connection_id))
+    if result.get("ok") and user["role"] != "admin":
+        r = result["request"]
+        if not (r["request_type"] == "GRANT" and r["grantee"] == user["username"]):
+            return {"ok": False, "message": "As a viewer you can only request access for yourself. Ask an admin for anything else.",
+                    "examples": []}
+    store.audit(user["username"], "ACCESS_DRAFTED", f"{cfg['name']}/{database}", f"{text[:300]} -> {result.get('sql_preview') or result.get('message')}")
+    return result
 
 
 def list_requests(status=None, limit=200):
@@ -137,6 +169,7 @@ def _find_object(src, database, text):
 
 def ask(connection_id: int, database: str, question: str) -> dict:
     src = source(connection_id)
+    names = _names(src)
     q = question.lower().strip()
     database = database or store.get_connection(connection_id)["database"]
     obj_words = re.findall(r"\b[a-z_][a-z0-9_]*\.[a-z_][a-z0-9_]*\b", q)
@@ -154,9 +187,13 @@ def ask(connection_id: int, database: str, question: str) -> dict:
     if re.search(r"\bfail|error|broke|issue", q):
         f = src.failures(database)
         text = f"**{len(f['pipeline'])} failure(s)** recorded in {database}." if f["pipeline"] else f"No failures recorded in {database}."
-        h = f["health"]
-        text += f" Database counters since {h['stats_reset'] or 'start'}: {h['rollbacks']:,} rollbacks, {h['deadlocks']} deadlocks."
-        return _reply(text, _table(f["pipeline"]), ["audit.error_log", "pg_stat_database"])
+        h = f["health"] or {}
+        counters = [f"{h[k]:,} {label}" for k, label in (("rollbacks", "rollbacks"), ("deadlocks", "deadlocks")) if h.get(k) is not None]
+        if counters:
+            text += f" Counters since {h.get('stats_reset') or 'start'}: {', '.join(counters)}."
+        if f.get("jobs"):
+            text += f" {len(f['jobs'])} failed SQL Agent job step(s)."
+        return _reply(text, _table(f["pipeline"]) or _table(f.get("jobs") or []), [names["failures"], names["health"]])
     if re.search(r"who (changed|modified|altered|created|dropped|updated)|change|modif|altered|history|ddl", q):
         if not src.tracking_enabled(database):
             return _reply(f"Change tracking is not enabled in **{database}** yet. An admin can enable it on the "
@@ -166,30 +203,32 @@ def ask(connection_id: int, database: str, question: str) -> dict:
         what = obj_words[0] if obj_words else "all objects"
         return _reply(f"**{len(rows)} change(s)** to {what} in {database}" + (f" by {user.group(1)}" if user else "") + ".",
                       _table(rows, ["event_time", "username", "command_tag", "object_identity", "client_addr"]),
-                      ["dt_audit.ddl_log"])
+                      [names["changes"]])
     if re.search(r"who (has|can)|access to|permission on|grants? on", q) and obj_words:
         hit = _find_object(src, database, obj_words[0])
         if not hit:
             return _reply(f"{obj_words[0]} was not found in {database}.")
         d = src.object_detail(database, hit["schema"], hit["name"], hit["type"])
         return _reply(f"**Access to {d['name']}** ({d['type'].lower()}, owner {d['owner']}):",
-                      _table(d["grants"]), ["pg_class.relacl"])
+                      _table(d["grants"]), [names["grants"]])
     m = re.search(r"what (can|does) ([a-z_][a-z0-9_.-]*) (access|see|have)|access (of|for) (user )?([a-z_][a-z0-9_.-]*)", q)
     if m:
         role = m.group(2) or m.group(6)
-        if role not in {r["name"] for r in src.roles()}:
+        actual = {r["name"].lower(): r["name"] for r in src.roles(database)}
+        if role not in actual:
             return _reply(f"There is no user or role called {role}.")
+        role = actual[role]
         a = src.role_access(database, role)
         text = (f"**{role} in {database}:** connect {'yes' if a['database']['connect'] else 'no'}, "
                 f"{len(a['schemas'])} schema(s), {len(a['objects'])} table(s)/view(s) with direct or PUBLIC grants, owns {len(a['owns'])}.")
-        return _reply(text, _table(a["objects"]), ["pg_class.relacl", "pg_namespace.nspacl"])
+        return _reply(text, _table(a["objects"]), [names["grants"]])
     if re.search(r"\b(users?|roles?|members?|logins?)\b", q):
-        rows = src.roles()
+        rows = src.roles(database)
         return _reply(f"**{sum(1 for r in rows if r['can_login'])} login user(s)** and "
-                      f"{sum(1 for r in rows if not r['can_login'])} group role(s).", _table(rows), ["pg_roles"])
+                      f"{sum(1 for r in rows if not r['can_login'])} group role(s).", _table(rows), [names["roles"]])
     if re.search(r"databases?", q) and not obj_words:
         rows = src.databases()
-        return _reply(f"**{len(rows)} database(s)** on this server.", _table(rows), ["pg_database"])
+        return _reply(f"**{len(rows)} database(s)** on this server.", _table(rows), [names["databases"]])
     m = re.search(r"(tables?|views?|objects?|procedures?|functions?) in (schema )?([a-z_][a-z0-9_]*)", q)
     if m:
         rows = src.objects(database, m.group(3))
@@ -197,10 +236,10 @@ def ask(connection_id: int, database: str, question: str) -> dict:
         if kind in ("TABLE", "VIEW", "PROCEDURE", "FUNCTION"):
             rows = [r for r in rows if kind in r["type"]]
         return _reply(f"**{len(rows)} {m.group(1)}** in schema {m.group(3)} ({database}).",
-                      _table(rows, ["name", "type", "owner", "est_rows", "indexes"]), ["pg_class", "pg_proc"])
+                      _table(rows, ["name", "type", "owner", "est_rows", "indexes"]), [names["objects"]])
     if re.search(r"schemas?", q):
         rows = src.schemas(database)
-        return _reply(f"**{len(rows)} schema(s)** in {database}.", _table(rows), ["pg_namespace"])
+        return _reply(f"**{len(rows)} schema(s)** in {database}.", _table(rows), [names["schemas"]])
     if obj_words or re.search(r"describe|columns|structure|definition|index", q):
         hit = _find_object(src, database, obj_words[0] if obj_words else q.split()[-1])
         if not hit:
@@ -210,16 +249,12 @@ def ask(connection_id: int, database: str, question: str) -> dict:
                 f"{len(d['indexes'])} index(es)" + (f", {d['row_count']:,} rows" if d.get("row_count") is not None else "") +
                 (f". Used by: {', '.join(d['used_by'])}" if d["used_by"] else "") +
                 (f". Reads from: {', '.join(d['uses'])}" if d["uses"] else "") + ".")
-        return _reply(text, _table(d["columns"]), ["pg_attribute", "pg_index"])
+        return _reply(text, _table(d["columns"]), [names["columns"]])
     hits = src.search(database, q.split()[-1]) if q else []
     if hits:
-        return _reply(f"Objects matching **{q.split()[-1]}**:", _table(hits), ["pg_class", "information_schema.columns"])
+        return _reply(f"Objects matching **{q.split()[-1]}**:", _table(hits), [names["objects"]])
     return _reply("I did not understand that. Try: *tables in schema gold*, *describe silver.payments*, "
                   "*who changed silver.customers*, *what failed*, *who has access to gold.daily_revenue*, *list users*.")
 
 
-__all__ = ["source", "overview", "create_request", "list_requests", "decide", "ask", "PRIVILEGES"]
-
-
-
-
+__all__ = ["source", "overview", "create_request", "draft_request", "list_requests", "decide", "ask", "privileges", "PRIVILEGES"]
