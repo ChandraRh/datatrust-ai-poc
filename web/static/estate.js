@@ -8,7 +8,7 @@ async function eapi(path, options = {}) {
   const r = await fetch("/api/estate" + path, { credentials: "same-origin", ...options,
     headers: { "Content-Type": "application/json", ...(options.headers || {}) } });
   const body = await r.json().catch(() => ({}));
-  if (r.status === 401 && path !== "/login") { est.user = null; showUserBadge(); throw Object.assign(new Error("please log in"), { login: true }); }
+  if (r.status === 401) { est.user = null; showUserBadge(); throw Object.assign(new Error("please sign in"), { login: true }); }
   if (!r.ok) throw new Error(body.detail || body.error || r.statusText);
   return body;
 }
@@ -26,26 +26,45 @@ function showUserBadge() {
   }
   b.innerHTML = est.user ? `${esc(est.user.username)} <span class="chip ${est.user.role === "admin" ? "warn" : "grey"}">${est.user.role}</span> <a href="#" id="estLogout">log out</a>` : "";
   const lo = $e("estLogout");
-  if (lo) lo.onclick = async (e) => { e.preventDefault(); await post("/logout"); est.user = null; showUserBadge(); renderEstate(state.page); };
+  if (lo) lo.onclick = async (e) => {
+    e.preventDefault();
+    await fetch("/api/auth/logout", { method: "POST", credentials: "same-origin" });
+    est.user = null;
+    showUserBadge();
+    renderEstate(state.page);
+  };
 }
 
-function loginForm(el) {
-  document.querySelectorAll(".login-card").forEach((c) => c.remove());   // only one login form on the page at a time
-  el.innerHTML = `<div class="card login-card"><h3>Log in to the Data Estate portal</h3>
-    <p class="small muted">Browsing needs a portal login; access changes need an admin.</p>
-    <div class="field"><input id="estU" placeholder="user name" autocomplete="username"></div>
+function loginForm(el, page) {
+  el.innerHTML = `<div class="card login-card"><h3>Sign in to Data Estate</h3>
+    <p class="small muted">Sign in to browse connections, catalog, activity, and access settings.</p>
+    <div class="field"><input id="estU" type="text" placeholder="username or email address" autocomplete="username"></div>
     <div class="field"><input id="estP" type="password" placeholder="password" autocomplete="current-password"></div>
-    <button class="btn" id="estLogin" style="width:100%">Log in</button><p id="estLoginErr" class="small bad"></p></div>`;
-  const $f = (id) => el.querySelector("#" + id);                          // this form's own fields
-  const go_ = async () => {
+    <button class="btn" id="estLogin" style="width:100%">Sign in</button><p id="estLoginErr" class="small bad"></p></div>`;
+  const field = (id) => el.querySelector("#" + id);
+  const submit = async () => {
+    const button = field("estLogin");
+    button.disabled = true;
     try {
-      est.user = await post("/login", { username: $f("estU").value.trim(), password: $f("estP").value });
+      const response = await fetch("/api/auth/login", {
+        method: "POST",
+        credentials: "same-origin",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ email: field("estU").value.trim(), password: field("estP").value }),
+      });
+      const body = await response.json().catch(() => ({}));
+      if (!response.ok) throw new Error(body.detail || "Sign in failed.");
+      est.user = body.user;
       showUserBadge();
-      renderEstate(state.page);
-    } catch (e) { $f("estLoginErr").textContent = e.message; }
+      renderEstate(page);
+    } catch (error) {
+      field("estLoginErr").textContent = error.message;
+    } finally {
+      button.disabled = false;
+    }
   };
-  $f("estLogin").onclick = go_;
-  $f("estP").onkeydown = (e) => { if (e.key === "Enter") go_(); };
+  field("estLogin").onclick = submit;
+  field("estP").onkeydown = (event) => { if (event.key === "Enter") submit(); };
 }
 
 // ------------------------------------------------------------------ connection / database picker (top of every estate page)
@@ -83,7 +102,7 @@ async function renderEstate(page) {
     if (!est.user) {
       est.user = (await eapi("/session")).user;
       showUserBadge();
-      if (!est.user) return loginForm(el);
+      if (!est.user) return loginForm(el, page);
     }
     el.innerHTML = "<p class='muted'>Loading…</p>";
     if (page === "estate-people" || page.startsWith("estate-dq-")) {   // Connect / data quality: no source to pick
@@ -106,7 +125,7 @@ async function renderEstate(page) {
     bindContext(page);
     if (body.bind) body.bind();
   } catch (e) {
-    if (e.login) return loginForm(el);
+    if (e.login) return loginForm(el, page);
     el.innerHTML = `<div class="error-box">${esc(e.message)}</div>`;
   }
 }
@@ -391,9 +410,9 @@ async function pageAccess() {
       <div class="card"><h3>Request history</h3>${objTable(history.map((r) => ({ id: r.request_id, type: REQ_LABEL[r.request_type] || r.request_type, grantee: r.grantee, database: r.database, status: r.status, requested_by: r.requested_by, decided_by: r.decided_by, decided_at: r.decided_at, error: r.error })))
         || "<p class='muted'>No requests yet.</p>"}</div>
       ${admin ? `<div class="card"><h3>Portal users</h3><div id="puList"></div>
-        <div class="form-grid"><input id="puName" placeholder="user name"><input id="puPw" type="password" placeholder="password (min 8)">
+        <div class="form-grid"><input id="puName" type="email" placeholder="user email"><input id="puPw" type="password" placeholder="password (min 12)">
           <select id="puRole"><option>viewer</option><option>admin</option></select><button class="btn light" id="puSave">Add / update portal user</button></div>
-        <p class="small muted">Portal users log in to this web page. They are not database users.</p></div>` : ""}`,
+        <p class="small muted">Portal users sign in with email. Email sign-ups require verification; admin-provisioned accounts are marked verified.</p></div>` : ""}`,
     bind: bindAccess,
   };
 }

@@ -183,4 +183,4 @@ def investigate(inc: dict) -> dict:
             f"on the next pipeline run until the change is reverted or the pipeline is updated.")
     sample = [{"downstream": d["object"], "kind": d["kind"], "how": d["how"],
                "uses_changed_column": "yes" if d["uses_column"] else "no" if d["uses_column"] is False else "–"} for d in m["downstream"]]
-    return {"checks": checks, "chain": chain, "root_cause": root, "confidence": 100, "sample": sample}
+    return {"checks": checks, "chain": chain, "root_cause": root, "sample": sample}

@@ -1,0 +1,80 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="theme-color" content="#063852">
+  <title>Sign in | DataTrust</title>
+  <link rel="stylesheet" href="/static/login.css">
+  <script src="/static/login.js" defer></script>
+</head>
+<body>
+  <main class="auth-shell">
+    <section class="brand-panel" aria-label="About DataTrust">
+      <a class="brand" href="/login" aria-label="DataTrust home">
+        <span class="brand-symbol" aria-hidden="true"><i></i><i></i><i></i></span>
+        <span>Data<span>Trust</span></span>
+      </a>
+      <div class="brand-copy">
+        <span class="eyebrow">DATA YOU CAN TRUST</span>
+        <h1>Clarity for your data.<br>Confidence in every decision.</h1>
+        <p>Monitor data quality, investigate issues, and understand the health of your pipelines in one place.</p>
+      </div>
+      <div class="panel-footer"><span class="status-dot"></span> Your data workspace, securely connected</div>
+    </section>
+
+    <section class="form-panel">
+      <div class="mobile-brand"><span class="brand-symbol" aria-hidden="true"><i></i><i></i><i></i></span>Data<span>Trust</span></div>
+      <div class="form-wrap">
+        <header class="form-heading">
+          <div class="eyebrow">WELCOME TO DATATRUST</div>
+          <h2 id="formTitle">Sign in to your workspace</h2>
+          <p id="formSubtitle">Use your work email or username to continue.</p>
+        </header>
+
+        <div id="notice" class="notice" role="status" aria-live="polite" hidden></div>
+        <div id="error" class="error" role="alert" aria-live="assertive" hidden></div>
+
+        <form id="loginForm" class="auth-form">
+          <label for="loginEmail">Email address or username</label>
+          <input id="loginEmail" name="email" type="text" autocomplete="username" placeholder="you@company.com or admin" required>
+          <div class="password-label"><label for="loginPassword">Password</label><button type="button" class="text-button" data-view="forgot">Forgot password?</button></div>
+          <input id="loginPassword" name="password" type="password" autocomplete="current-password" placeholder="Enter your password" required>
+          <button class="primary-button" type="submit"><span>Sign in</span><b aria-hidden="true">→</b></button>
+        </form>
+
+        <form id="signupForm" class="auth-form" hidden>
+          <label for="signupEmail">Email address</label>
+          <input id="signupEmail" name="email" type="email" autocomplete="email" placeholder="you@company.com" required>
+          <label for="signupPassword">Create password</label>
+          <input id="signupPassword" name="password" type="password" autocomplete="new-password" minlength="12" placeholder="At least 12 characters" required>
+          <p class="hint">Use at least 12 characters. We’ll email you a verification link.</p>
+          <button class="primary-button" type="submit"><span>Create account</span><b aria-hidden="true">→</b></button>
+        </form>
+
+        <form id="forgotForm" class="auth-form" hidden>
+          <label for="forgotEmail">Email address</label>
+          <input id="forgotEmail" name="email" type="email" autocomplete="email" placeholder="you@company.com" required>
+          <button class="primary-button" type="submit"><span>Send reset link</span><b aria-hidden="true">→</b></button>
+        </form>
+
+        <form id="resetForm" class="auth-form" hidden>
+          <label for="resetPassword">New password</label>
+          <input id="resetPassword" name="password" type="password" autocomplete="new-password" minlength="12" placeholder="At least 12 characters" required>
+          <button class="primary-button" type="submit"><span>Set new password</span><b aria-hidden="true">→</b></button>
+        </form>
+
+        <div class="separator" id="separator"><span>or continue with</span></div>
+        <a class="google-button" id="googleButton" href="/api/auth/google">
+          <svg aria-hidden="true" viewBox="0 0 48 48"><path fill="#EA4335" d="M24 9.5c3.54 0 6.71 1.22 9.21 3.6l6.85-6.85C35.9 2.38 30.47 0 24 0 14.62 0 6.51 5.38 2.56 13.22l7.98 6.19C12.43 13.72 17.74 9.5 24 9.5z"/><path fill="#4285F4" d="M46.98 24.55c0-1.57-.15-3.09-.38-4.55H24v9.02h12.94c-.58 2.96-2.25 5.48-4.72 7.18l7.62 5.91c4.45-4.1 7.14-10.14 7.14-17.56z"/><path fill="#FBBC05" d="M10.53 28.59A14.4 14.4 0 0 1 9.75 24c0-1.59.27-3.13.76-4.59l-7.98-6.19A23.9 23.9 0 0 0 0 24c0 3.88.93 7.56 2.56 10.78l7.97-6.19z"/><path fill="#34A853" d="M24 48c6.48 0 11.93-2.13 15.9-5.89l-7.62-5.91c-2.12 1.42-4.84 2.26-8.28 2.26-6.26 0-11.57-4.22-13.47-9.91l-7.98 6.19C6.51 42.62 14.62 48 24 48z"/></svg>
+          <span>Continue with Google</span>
+        </a>
+
+        <p class="switch-copy" id="switchCopy">New to DataTrust? <button type="button" class="text-button" data-view="signup">Create an account</button></p>
+        <p class="switch-copy" id="backCopy" hidden><button type="button" class="text-button" data-view="login">← Back to sign in</button></p>
+        <p class="terms">By continuing, you agree to use this workspace in accordance with your organization’s policies.</p>
+      </div>
+    </section>
+  </main>
+</body>
+</html>

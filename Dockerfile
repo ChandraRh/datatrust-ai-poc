@@ -24,9 +24,15 @@ RUN if [ "$WITH_MSSQL" = "true" ]; then \
       apt-get purge -y curl gnupg && apt-get autoremove -y && rm -rf /var/lib/apt/lists/*; \
     fi
 
-# application code only: config.py + web/ (no data, no .env, no secrets)
+# application code only: config.py, dq_rules.py + web/ (no data, no .env, no secrets)
 COPY config.py .
+COPY batch_status.py .
+COPY dq_rules.py .
+COPY llm_gemini.py .
 COPY web/ web/
+
+# Catch missing files and imports during the image build, rather than at container startup.
+RUN python -c "import sys; sys.path.insert(0, '/app/web'); import alerts, agent, autofix, batch_status, briefing, data_service, dq, dq_routes, schema_guard; from estate import drafting, routes, service, source_types, store"
 
 # run as a non-root user
 RUN useradd --create-home --uid 10001 appuser

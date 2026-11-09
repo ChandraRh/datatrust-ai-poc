@@ -1,11 +1,15 @@
 # Deploying the DataTrust AI web app (for the DevOps team)
 
-The web app (dashboard, AI agent, Data Estate portal) is one container. It needs one PostgreSQL database.
-The data pipeline (Spark) and Kafka streaming are separate and are NOT part of this container.
+For Azure-specific resource setup and deployment steps, see the shareable [Azure deployment guide](./AZURE_DEPLOYMENT_GUIDE.md).
+
+The website and ADLS ETL worker are separate containers/services. The website reads PostgreSQL; the
+worker watches ADLS for complete batches, runs the PySpark ETL, and writes results and run logs to
+the same PostgreSQL database. Kafka streaming is a separate optional workload.
 
 ```
- Users ──HTTPS──► Load balancer / ingress (TLS) ──► datatrust-web container :8000 ──► PostgreSQL 17 (managed)
-                                                     health check: GET /health        bronze/silver/gold/audit/portal
+ Users ──HTTPS──► datatrust-web container :8000 ────────────────┐
+                                                                 ├──► PostgreSQL 17 (managed)
+ ADLS batch ──► datatrust-pipeline worker ───────────────────────┘
 ```
 
 ## 1. Database
@@ -14,15 +18,22 @@ The data pipeline (Spark) and Kafka streaming are separate and are NOT part of t
 * The app creates schema `portal` itself on first start.
 * Network: allow the container's outbound IP / VNet only; require SSL.
 
-## 2. Container
+## 2. Containers
 ```bash
 docker build -t datatrust-web .
-docker run -p 8000:8000 --env-file prod.env datatrust-web        # local smoke test
+docker build -f Dockerfile.pipeline -t datatrust-pipeline .
 ```
-Image: python:3.12-slim, only `config.py` + `web/`, non-root user, built-in HEALTHCHECK.
-No secrets or data are baked in (`.dockerignore` excludes .env, data, backups).
+The web image uses `requirements-web.txt`; the ETL image uses `requirements-pipeline.txt` and Java 17.
+Neither image contains `.env`, source data, or credentials.
 
-Try everything on one machine (app + a PostgreSQL container): `docker compose -f docker-compose.web.yml up -d --build`
+Run the local ADLS worker with `python adls_pipeline_worker.py` and the website with `python web/server.py`
+in separate terminals. Batch status is stored in PostgreSQL and shown in the website's Pipeline log, where
+an administrator can retry failed batches. See [AZURE_DEPLOYMENT_GUIDE.md](./AZURE_DEPLOYMENT_GUIDE.md)
+for ADLS batch layout, `_READY` markers, and Azure Container Apps deployment.
+
+Try the web app with PostgreSQL on one machine. Set a non-empty `PG_PASSWORD` in `.env` first:
+`docker compose -f docker-compose.web.yml up -d --build`. The database container is empty; load the
+project schema and data before using the dashboard.
 
 ## 3. Settings (environment variables; secrets from Key Vault / secret store)
 | Variable | Value in the cloud | Secret? |
@@ -39,7 +50,7 @@ Try everything on one machine (app + a PostgreSQL container): `docker compose -f
 | DATATRUST_PUBLIC_URL | the public https address of the app (links in alert cards) | |
 | ALERT_MIN_SEVERITY / ALERT_INTERVAL_SECONDS | default MEDIUM / 60 | |
 | CONN_<NAME>_PASSWORD | one per extra source added in the Data Estate portal | yes |
-| LLM_PROVIDER (+ ANTHROPIC_API_KEY or OLLAMA_URL) | none / anthropic / ollama | key: yes |
+| LLM_PROVIDER (+ ANTHROPIC_API_KEY, OLLAMA_URL, or GEMINI_API_KEY) | none / anthropic / ollama / gemini | key: yes |
 | DATATRUST_AS_OF | data (default) or today | |
 
 ## 4. Platform checklist

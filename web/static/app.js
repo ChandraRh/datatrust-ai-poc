@@ -1,6 +1,7 @@
 // DataTrust AI web page. All data comes from /api/* (PostgreSQL gold + audit), nothing is hard-coded.
-const state = { page: "observe", version: null, overview: null, incidents: null, charts: {}, history: [] };
+const state = { page: "observe", version: null, overview: null, incidents: null, charts: {}, history: [], incidentFilters: { query: "", severity: "" } };
 const $ = (id) => document.getElementById(id);
+let versionCheck = null;
 
 // ------------------------------------------------------------------ helpers
 async function api(path, options) {
@@ -24,7 +25,7 @@ const color = { ok: "#11805A", warn: "#EF802C", bad: "#C42B2B" };
 function showError(msg) {
   const box = $("errorBox");
   if (!msg) return box.classList.add("hidden");
-  box.textContent = "Could not load data: " + msg + "  (is PostgreSQL running and has the pipeline been run?)";
+  box.textContent = "Dashboard refresh failed: " + msg + ". Existing figures may be out of date; use Refresh to try again.";
   box.classList.remove("hidden");
 }
 function toast(msg) {
@@ -33,6 +34,34 @@ function toast(msg) {
   t.classList.remove("hidden");
   clearTimeout(t._h);
   t._h = setTimeout(() => t.classList.add("hidden"), 4000);
+}
+
+function csvCell(value) {
+  const text = String(value ?? "");
+  const safe = /^[\t\r\n ]*[=+\-@]/.test(text) ? "'" + text : text;
+  return `"${safe.replace(/"/g, '""')}"`;
+}
+
+function exportIncidents(incidents) {
+  if (!incidents.length) return;
+  const columns = ["incident_id", "severity", "type", "title", "summary", "business_date",
+    "approval_status", "approved_by", "metrics", "exported_at_utc"];
+  const exportedAt = new Date().toISOString();
+  const rows = incidents.map((incident) => [
+    incident.id, incident.severity, incident.type, incident.title, incident.summary, incident.business_date,
+    incident.approval?.status, incident.approval?.approved_by,
+    incident.metrics ? JSON.stringify(incident.metrics) : "", exportedAt,
+  ]);
+  const csv = [columns, ...rows].map((row) => row.map(csvCell).join(",")).join("\r\n");
+  const url = URL.createObjectURL(new Blob(["\uFEFF", csv], { type: "text/csv;charset=utf-8" }));
+  const link = document.createElement("a");
+  link.href = url;
+  link.download = `datatrust-open-incidents-${new Date().toISOString().slice(0, 10)}.csv`;
+  document.body.appendChild(link);
+  link.click();
+  link.remove();
+  setTimeout(() => URL.revokeObjectURL(url), 1000);
+  toast(`Exported ${incidents.length} matching incident${incidents.length === 1 ? "" : "s"} to CSV`);
 }
 
 // simple markdown: **bold**, _italic_, *italic*, "- " bullets, blank line = paragraph
@@ -129,25 +158,53 @@ async function loadCore() {
   const [ov, inc] = await Promise.all([api("/api/overview"), api("/api/incidents")]);
   state.overview = ov;
   state.incidents = inc;
+  const openIncidents = inc.open || [];
+  const urgentIncidents = openIncidents.filter((incident) => ["CRITICAL", "HIGH"].includes(incident.severity)).length;
+  const incidentBadge = $("detectNavCount");
+  incidentBadge.textContent = openIncidents.length > 99 ? "99+" : String(openIncidents.length);
+  incidentBadge.hidden = openIncidents.length === 0;
+  incidentBadge.classList.toggle("has-urgent", urgentIncidents > 0);
+  incidentBadge.classList.toggle("has-open", openIncidents.length > 0 && urgentIncidents === 0);
+  $("tabs").querySelector('[data-page="detect"]').setAttribute(
+    "aria-label",
+    `2. Detect, ${openIncidents.length} open incident${openIncidents.length === 1 ? "" : "s"}${urgentIncidents ? `, ${urgentIncidents} high or critical` : ""}`
+  );
   const t = ov.trust;
   $("topScore").textContent = `Trust score ${t.score} · ${t.label}`;
   showError(null);
 }
 
-async function checkVersion() {
-  try {
-    const v = await api("/api/version");
-    const first = state.version === null;
-    if (v.signature !== state.version) {
-      state.version = v.signature;
-      await loadCore();
-      if (!first) toast("New data detected: page refreshed");
-      if (state.page !== "ask") await render(state.page);
+async function checkVersion(force = false) {
+  if (versionCheck) return versionCheck;
+  const check = async () => {
+    const refresh = $("refreshBtn");
+    refresh.disabled = true;
+    $("refreshInfo").dataset.state = "checking";
+    $("refreshInfo").textContent = "Checking data…";
+    try {
+      const v = await api("/api/version");
+      const first = state.version === null;
+      const changed = v.signature !== state.version;
+      if (force || changed) {
+        await loadCore();
+        state.version = v.signature;
+        if (changed && !first && !force) toast("New data detected: page refreshed");
+        if (!state.page.startsWith("estate-") && (state.page !== "ask" || force)) await render(state.page);
+      } else if (state.page === "pipeline") {
+        await renderPipeline();
+      }
+      $("refreshInfo").dataset.state = "online";
+      $("refreshInfo").textContent = `Connected · last run ${(v.last_run || "–").slice(0, 16)} · checked ${new Date().toLocaleTimeString()}`;
+    } catch (e) {
+      $("refreshInfo").dataset.state = "error";
+      $("refreshInfo").textContent = "Refresh failed · retrying automatically";
+      showError(e.message);
+    } finally {
+      refresh.disabled = false;
     }
-    $("refreshInfo").textContent = "last pipeline run " + (v.last_run || "–").slice(0, 16) + " · checked " + new Date().toLocaleTimeString();
-  } catch (e) {
-    showError(e.message);
-  }
+  };
+  versionCheck = check();
+  try { await versionCheck; } finally { versionCheck = null; }
 }
 
 // ------------------------------------------------------------------ 1. observe
@@ -168,6 +225,19 @@ function renderObserve() {
   ];
   $("obsKpis").innerHTML = kpis.map(([l, v, c]) => `<div class="kpi ${c}"><div class="l">${l}</div><div class="v">${typeof v === "number" ? num(v) : esc(v)}</div></div>`).join("");
   const d = t.dimensions;
+  const freshnessLimit = t.rules.freshness_hours;
+  const freshnessNotice = $("freshnessNotice");
+  if (d.freshness_hours == null || d.freshness_hours > freshnessLimit) {
+    const lastSuccess = d.freshness_hours == null
+      ? "No successful pipeline run is recorded."
+      : `The last successful pipeline run was ${num(d.freshness_hours)} hours ago.`;
+    freshnessNotice.innerHTML = `<h2>Data may be stale</h2><p>${lastSuccess} The dashboard metrics may not reflect current source data; the freshness target is ${freshnessLimit} hours.</p>
+      <button class="btn light btn-sm" type="button" onclick="go('pipeline')">View pipeline log</button>`;
+    freshnessNotice.classList.remove("hidden");
+  } else {
+    freshnessNotice.classList.add("hidden");
+    freshnessNotice.textContent = "";
+  }
   const bars = [["Completeness (source → silver)", d.completeness], ["Validity (passed rules)", d.validity],
     ["Uniqueness (no duplicates)", d.uniqueness], ["Reconciliation (settlement match)", d.reconciliation]];
   $("dims").innerHTML = bars.map(([l, v]) => `<div class="bar"><div class="t"><span>${l}</span><b>${v ?? "–"}%</b></div>
@@ -203,19 +273,72 @@ function recordsButton(i) {
   return `<button class="btn light" onclick="DQ.open('${esc(i.business_date)}','${esc(ent || "")}','${esc(rule || "")}')">See records</button>`;
 }
 function renderDetect() {
-  const t = state.overview.trust, open = state.incidents.open;
+  const open = state.incidents.open;
   const top = open[0];
   $("detectBanner").innerHTML = top
     ? `<div class="banner bad"><h2>${top.severity} RISK DETECTED: ${esc(top.title)}</h2><div>${esc(top.summary)}</div></div>`
     : `<div class="banner ok"><h2>NO OPEN INCIDENTS</h2><div>Every check passed on the latest data.</div></div>`;
-  gauge("gauge2", t.score);
-  $("gaugeLabel2").innerHTML = `<span class="${tone(t.score)}">${t.label}</span>`;
-  drawChart("trendChart2", "line", t.trend.map((x) => x.business_date), t.trend.map((x) => x.score), "Trust score",
-    { min: 50, max: 100, pointColors: t.trend.map((x) => color[tone(x.score)]) });
-  $("incidentList").innerHTML = open.length ? open.map(incidentRow).join("") : "<p class='muted'>Nothing open.</p>";
+  $("incidentSearch").value = state.incidentFilters.query;
+  $("incidentSeverity").value = state.incidentFilters.severity;
+  const severityOptions = [
+    { value: "", label: "All" },
+    { value: "CRITICAL", label: "Critical" },
+    { value: "HIGH", label: "High" },
+    { value: "MEDIUM", label: "Medium" },
+    { value: "LOW", label: "Low" },
+  ];
+  $("incidentSeveritySummary").innerHTML = severityOptions.map(({ value, label }) => {
+    const count = value ? open.filter((i) => i.severity === value).length : open.length;
+    return `<button type="button" class="incident-severity-filter" data-severity="${value}" aria-pressed="false" aria-label="${label}: ${count} open incident${count === 1 ? "" : "s"}">
+      <span>${label}</span><strong>${count}</strong></button>`;
+  }).join("");
+  $("incidentSeveritySummary").querySelectorAll("button").forEach((button) => {
+    button.onclick = () => {
+      $("incidentSeverity").value = button.dataset.severity;
+      $("incidentSeverity").dispatchEvent(new Event("change"));
+    };
+  });
+  const applyFilters = () => {
+    state.incidentFilters.query = $("incidentSearch").value.trim();
+    state.incidentFilters.severity = $("incidentSeverity").value;
+    $("incidentSeveritySummary").querySelectorAll("button").forEach((button) => {
+      button.setAttribute("aria-pressed", String(button.dataset.severity === state.incidentFilters.severity));
+    });
+    const query = state.incidentFilters.query.toLowerCase();
+    const filtered = open.filter((i) => {
+      const matchesSeverity = !state.incidentFilters.severity || i.severity === state.incidentFilters.severity;
+      const searchable = `${i.severity} ${i.title} ${i.summary} ${i.type}`.toLowerCase();
+      return matchesSeverity && (!query || searchable.includes(query));
+    });
+    $("incidentCount").textContent = open.length
+      ? `Showing ${filtered.length} of ${open.length} open`
+      : "0 open";
+    $("incidentExport").disabled = filtered.length === 0;
+    $("incidentExport").title = `Download ${filtered.length} matching open incident${filtered.length === 1 ? "" : "s"} as CSV`;
+    $("incidentExport").onclick = () => exportIncidents(filtered);
+    $("incidentList").innerHTML = filtered.length
+      ? filtered.map(incidentRow).join("")
+      : open.length
+        ? `<div class="incident-empty"><p>No open incidents match these filters.</p><button class="btn light btn-sm" id="incidentNoMatchClear" type="button">Clear filters</button></div>`
+        : "<p class='muted'>Nothing open.</p>";
+    const clear = $("incidentNoMatchClear");
+    if (clear) clear.onclick = clearIncidentFilters;
+  };
+  $("incidentSearch").oninput = applyFilters;
+  $("incidentSeverity").onchange = applyFilters;
+  $("incidentFilterClear").onclick = clearIncidentFilters;
+  applyFilters();
+}
+
+function clearIncidentFilters() {
+  state.incidentFilters = { query: "", severity: "" };
+  $("incidentSearch").value = "";
+  $("incidentSeverity").value = "";
+  $("incidentSearch").dispatchEvent(new Event("input"));
 }
 
 // ------------------------------------------------------------------ 3. investigate
+let investigationRequest = 0;
 function fillSelect(sel, chosen) {
   const open = state.incidents.open;
   $(sel).innerHTML = open.map((i) => `<option value="${i.id}" ${i.id === chosen ? "selected" : ""}>${i.severity} · ${esc(i.title)}</option>`).join("");
@@ -223,23 +346,87 @@ function fillSelect(sel, chosen) {
 }
 $("invSelect").addEventListener("change", (e) => renderInvestigate(e.target.value));
 async function renderInvestigate(id) {
+  const request = ++investigationRequest;
   id = fillSelect("invSelect", id || state.selected);
   state.selected = id;
-  if (!id) { $("invBody").innerHTML = "<div class='banner ok'><h2>Nothing to investigate</h2>No open incidents.</div>"; return; }
-  $("invBody").innerHTML = "<p class='muted'>Running checks…</p>";
-  const inv = await api("/api/investigate/" + encodeURIComponent(id));
-  if (!inv.found) { $("invBody").innerHTML = "<p>That incident is no longer open.</p>"; return; }
+  if (!id) {
+    $("invBody").innerHTML = "<div class='banner ok'><h2>Nothing to investigate</h2>No open incidents. When an issue is detected, you can review its evidence here.</div>";
+    return;
+  }
+  $("invBody").innerHTML = `<div class="investigation-loading" role="status">Checking the evidence for this incident…</div>`;
+  let inv;
+  try {
+    inv = await api("/api/investigate/" + encodeURIComponent(id));
+  } catch (error) {
+    if (request !== investigationRequest) return;
+    $("invBody").innerHTML = `<div class="banner warn" role="alert"><h2>Could not load investigation</h2>
+      <p>${esc(error.message || "The evidence service is unavailable.")}</p>
+      <button class="btn light btn-sm" id="invRetry" type="button">Try again</button></div>`;
+    $("invRetry").addEventListener("click", () => renderInvestigate(id));
+    return;
+  }
+  if (request !== investigationRequest) return;
+  if (!inv.found) {
+    $("invBody").innerHTML = `<div class="banner warn"><h2>Incident no longer open</h2>
+      <p>This issue is no longer in the active incident list.</p>
+      <button class="btn light btn-sm" id="invBack" type="button">Return to Detect</button></div>`;
+    $("invBack").addEventListener("click", () => go("detect"));
+    return;
+  }
+  const incident = inv.incident;
+  const checks = Array.isArray(inv.checks) ? inv.checks : [];
+  const confirmed = checks.filter((check) => check.ok === true).length;
+  const needsReview = checks.filter((check) => check.ok === false).length;
+  const unavailable = checks.filter((check) => check.ok == null).length;
+  const evidenceTone = needsReview ? "bad" : unavailable ? "warn" : "ok";
+  const evidenceSummary = checks.length
+    ? `${confirmed} facts confirmed · ${needsReview} need review · ${unavailable} unavailable`
+    : "No evidence checks returned";
+  const impact = inv.impact || {};
+  const goldViews = Array.isArray(impact.gold_views) ? impact.gold_views : [];
+  const metrics = [
+    ["Business date", impact.business_date || incident.business_date || "—"],
+    ["Gold views affected", goldViews.length],
+    ["Revenue at risk", impact.amount_at_risk == null ? "—" : inr(impact.amount_at_risk)],
+  ];
   $("invBody").innerHTML = `
-    <div class="grid g-2">
-      <div class="card"><h3>What happened?</h3><div class="big">${esc(inv.incident.title)}</div><div class="muted">${esc(inv.incident.summary)}</div></div>
-      <div class="card"><h3>Root cause</h3><div class="big">${esc(inv.root_cause)}</div><div class="muted">Confidence ${inv.confidence}% (all evidence checks agree = high)</div></div>
+    <div class="investigation-head">
+      <div class="investigation-title">
+        <span class="sev ${esc(incident.severity)}">${esc(incident.severity)}</span>
+        <span class="chip grey">${esc(String(incident.type || "incident").replace(/_/g, " "))}</span>
+        <h2>${esc(incident.title)}</h2>
+        <p>${esc(incident.summary)}</p>
+      </div>
+      <div class="investigation-actions">
+        <button class="btn light btn-sm" id="invBack" type="button">← Detect</button>
+        <button class="btn btn-sm" id="invImpact" type="button">See impact &amp; decide →</button>
+      </div>
+    </div>
+    <div class="investigation-metrics">${metrics.map(([label, value]) => `<div class="investigation-metric"><span>${esc(label)}</span><b>${esc(value)}</b></div>`).join("")}</div>
+    <div class="investigation-root">
+      <div><p class="investigation-kicker">ROOT CAUSE</p><h3>${esc(inv.root_cause || "The available evidence does not identify a root cause yet.")}</h3></div>
+      <div class="evidence-summary ${evidenceTone}">
+        <b>${esc(evidenceSummary)}</b>
+        <small>Review checks below; unavailable data is not treated as a match.</small>
+      </div>
     </div>
     <div class="grid g-2">
-      <div class="card"><h3>Why does DataTrust believe this?</h3>${inv.checks.map((c) => `<div class="check"><span class="${c.ok ? "ok" : "bad"}">${c.ok ? "✓" : "✗"}</span> ${esc(c.text)}<div class="src">${esc(c.source)}</div></div>`).join("")}</div>
-      <div class="card"><h3>Evidence chain</h3><ul class="chain">${inv.chain.map((c) => `<li>${esc(c)}</li>`).join("")}</ul></div>
+      <div class="card">
+        <div class="investigation-section-head"><div><h3>Evidence checks</h3><p class="small muted">Each check includes the data source used.</p></div>
+          <span class="chip ${evidenceTone}">${esc(evidenceSummary)}</span></div>
+        ${checks.length ? checks.map((check) => `<div class="check">
+          <span class="${check.ok === true ? "ok" : check.ok === false ? "bad" : "grey"}"
+            aria-label="${check.ok === true ? "Corroborated" : check.ok === false ? "Needs review" : "Unavailable"}">
+            ${check.ok === true ? "✓" : check.ok === false ? "!" : "–"}</span>
+          <span>${esc(check.text)}</span><div class="src">${esc(check.source || "Source not specified")}</div></div>`).join("")
+          : `<p class="muted">No evidence checks were returned for this incident.</p>`}
+      </div>
+      <div class="card"><h3>Evidence path</h3><ol class="chain">${(Array.isArray(inv.chain) ? inv.chain : []).map((step) => `<li>${esc(step)}</li>`).join("")}</ol></div>
     </div>
-    ${inv.sample.length ? `<div class="card"><h3>Affected records (${inv.sample.length} shown)</h3>${objTable(inv.sample)}</div>` : ""}
-    <button class="btn" onclick="go('impact','${id}')">See impact and decide →</button>`;
+    ${Array.isArray(inv.sample) && inv.sample.length ? `<div class="card"><h3>Affected records <span class="small muted">(${inv.sample.length} sample rows)</span></h3>${objTable(inv.sample)}</div>` : ""}
+    ${goldViews.length ? `<div class="card"><h3>Downstream Gold views</h3><div class="investigation-views">${goldViews.map((view) => `<code>${esc(view)}</code>`).join("")}</div></div>` : ""}`;
+  $("invBack").addEventListener("click", () => go("detect"));
+  $("invImpact").addEventListener("click", () => go("impact", id));
 }
 
 // ------------------------------------------------------------------ 4. lineage
@@ -338,9 +525,20 @@ async function renderImpact(id) {
 let autofixSeq = 0;
 async function renderAutofix(id) {
   const my = ++autofixSeq;                       // the Impact page can be drawn twice quickly: only the newest wins
-  const p = await api("/api/autofix/" + encodeURIComponent(id)).catch(() => null);
   const box = $("autofixBox");
-  if (!p || !box || my !== autofixSeq) return;
+  if (!box) return;
+  box.innerHTML = "<div class='card'><h3>Auto-fix</h3><p class='muted'>Checking whether a safe fix is available…</p></div>";
+  let p;
+  try {
+    p = await api("/api/autofix/" + encodeURIComponent(id));
+  } catch (e) {
+    if (my !== autofixSeq) return;
+    box.innerHTML = `<div class="card"><h3>Auto-fix</h3><div class="error-box">Could not load the fix proposal: ${esc(e.message)}</div>
+      <button class="btn light btn-sm" id="afRetry">Try again</button></div>`;
+    box.querySelector("#afRetry").onclick = () => renderAutofix(id);
+    return;
+  }
+  if (my !== autofixSeq) return;
   if (!p.available) {
     box.innerHTML = p.reason && !/no automatic fix exists/i.test(p.reason) ? `<div class="card"><h3>Auto-fix</h3><p class="muted">${esc(p.reason)}</p></div>` : "";
     return;
@@ -407,10 +605,41 @@ async function renderVerify() {
 // ------------------------------------------------------------------ pipeline log
 async function renderPipeline() {
   const p = await api("/api/pipeline");
+  const batches = (p.adls_batches || []).map((b) => {
+    const cls = b.status === "SUCCEEDED" ? "ok" : b.status === "FAILED" ? "bad" : "warn";
+    const action = b.status === "FAILED"
+      ? `<button class="btn btn-sm" data-batch-action="retry" data-batch-id="${esc(b.batch_id)}">Retry failed batch</button>`
+      : "";
+    return `<div class="card">
+      <div class="draft-head"><h3>${esc(b.batch_name)} <span class="chip ${cls}">${esc(b.status)}</span></h3>${action}</div>
+      <div class="small muted">${esc(b.batch_folder)} · Attempt ${num(b.attempt_count)} · First seen ${esc(b.first_seen_at || "–")}</div>
+      ${b.started_at ? `<div class="small muted">Started ${esc(b.started_at)}${b.finished_at ? ` · Finished ${esc(b.finished_at)}` : ""}</div>` : ""}
+      ${b.pipeline_batch_id ? `<div class="small muted">Pipeline run ${esc(b.pipeline_batch_id)}</div>` : ""}
+      ${b.retry_requested_by ? `<div class="small muted">Last run request by ${esc(b.retry_requested_by)}</div>` : ""}
+      ${b.last_error ? `<div class="error-box">${esc(b.last_error)}</div>` : ""}
+    </div>`;
+  }).join("");
   $("pipeBody").innerHTML = `
+    <div class="card"><h3>ADLS batch runs</h3>
+      <p class="muted">Status is stored in PostgreSQL. Admins can retry failed batches using the files currently in ADLS.</p>
+      ${batches || "<p class='muted'>No ADLS batches have been detected yet.</p>"}</div>
     <div class="card"><h3>Latest batch ${esc(p.batch.batch_id || "–")}: every step</h3>${objTable(p.steps, ["layer", "pipeline_id", "status", "rows_in", "rows_out", "rows_rejected", "duration_sec", "message"]) || "<p class='muted'>No step log yet (run --setup and the pipeline after the step-log update).</p>"}</div>
     <div class="card"><h3>Recent batches</h3>${objTable(p.history)}</div>
     <div class="card"><h3>Error log (failures and warnings)</h3>${objTable(p.errors, ["logged_at", "batch_id", "layer", "pipeline_id", "status", "error_type", "error_message"]) || "<p class='muted'>Empty.</p>"}</div>`;
+  $("pipeBody").querySelectorAll("[data-batch-action]").forEach((button) => {
+    button.addEventListener("click", async () => {
+      if (!window.confirm("Retry this failed batch using the files currently in ADLS?")) return;
+      button.disabled = true;
+      try {
+        const result = await api(`/api/pipeline/batches/${encodeURIComponent(button.dataset.batchId)}/retry`, { method: "POST" });
+        toast(`Retry queued for ${result.batch_name}`);
+        await renderPipeline();
+      } catch (e) {
+        button.disabled = false;
+        toast(`Could not retry batch: ${e.message}`);
+      }
+    });
+  });
 }
 
 // ------------------------------------------------------------------ ask
@@ -470,7 +699,9 @@ async function askQuestion(q) {
 // ------------------------------------------------------------------ start
 (async function start() {
   await checkVersion();                      // loads the data and draws page 1
-  setInterval(checkVersion, 15000);          // auto refresh when the pipeline writes new data
+  setInterval(() => { if (!document.hidden) checkVersion(); }, 15000);
+  document.addEventListener("visibilitychange", () => { if (!document.hidden) checkVersion(); });
+  $("refreshBtn").addEventListener("click", () => checkVersion(true));
   openFromLink();
 })();
 // links from alerts / e-mails: #investigate=<incident id>, #impact=<id>, #verify, #estate-people ...

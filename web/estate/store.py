@@ -25,6 +25,10 @@ import config  # noqa: E402
 SESSION_HOURS = 8
 
 
+def auth_enabled() -> bool:
+    return os.getenv("PORTAL_AUTH_ENABLED", "true").strip().lower() not in ("0", "false", "no", "off")
+
+
 def db():
     """Connection to the portal's own database (the POC database)."""
     return psycopg.connect(host=config.PG_HOST, port=config.PG_PORT, dbname=config.PG_DATABASE,
@@ -44,6 +48,19 @@ def init() -> None:
                 active        BOOLEAN DEFAULT TRUE,
                 created_by    TEXT,
                 created_at    TIMESTAMP DEFAULT now());
+            ALTER TABLE portal.users ADD COLUMN IF NOT EXISTS email TEXT;
+            ALTER TABLE portal.users ADD COLUMN IF NOT EXISTS email_verified BOOLEAN NOT NULL DEFAULT FALSE;
+            ALTER TABLE portal.users ADD COLUMN IF NOT EXISTS google_sub TEXT;
+            ALTER TABLE portal.users ADD COLUMN IF NOT EXISTS session_version INTEGER NOT NULL DEFAULT 0;
+            CREATE UNIQUE INDEX IF NOT EXISTS portal_users_email_unique ON portal.users (lower(email)) WHERE email IS NOT NULL;
+            CREATE UNIQUE INDEX IF NOT EXISTS portal_users_google_sub_unique ON portal.users (google_sub) WHERE google_sub IS NOT NULL;
+            CREATE TABLE IF NOT EXISTS portal.auth_tokens (
+                token_hash  TEXT PRIMARY KEY,
+                username    TEXT NOT NULL REFERENCES portal.users(username) ON DELETE CASCADE,
+                purpose     TEXT NOT NULL CHECK (purpose IN ('verify_email', 'reset_password')),
+                expires_at  TIMESTAMPTZ NOT NULL,
+                consumed_at TIMESTAMPTZ,
+                created_at  TIMESTAMPTZ NOT NULL DEFAULT now());
             CREATE TABLE IF NOT EXISTS portal.connections (
                 connection_id SERIAL PRIMARY KEY,
                 name          TEXT UNIQUE NOT NULL,
@@ -95,11 +112,20 @@ def init() -> None:
         if not conn.execute("SELECT 1 FROM portal.users LIMIT 1").fetchone():
             user = os.getenv("PORTAL_ADMIN_USER", "admin")
             password = os.getenv("PORTAL_ADMIN_PASSWORD") or secrets.token_urlsafe(9)
-            conn.execute("INSERT INTO portal.users (username, password_hash, role, created_by) VALUES (%s, %s, 'admin', 'setup')",
-                         (user, hash_password(password)))
+            email = (os.getenv("PORTAL_ADMIN_EMAIL") or "").strip().lower() or None
+            conn.execute("""INSERT INTO portal.users
+                            (username, password_hash, role, email, email_verified, created_by)
+                            VALUES (%s, %s, 'admin', %s, %s, 'setup')""",
+                         (user, hash_password(password), email, bool(email)))
             if not os.getenv("PORTAL_ADMIN_PASSWORD"):
                 print("\n" + "=" * 70 + f"\n  Data Estate portal: first admin created\n  user: {user}   password: {password}\n"
                       "  (shown once; change it on the Access page, or set PORTAL_ADMIN_PASSWORD in .env)\n" + "=" * 70 + "\n")
+        admin_email = (os.getenv("PORTAL_ADMIN_EMAIL") or "").strip().lower()
+        if admin_email:
+            admin_user = os.getenv("PORTAL_ADMIN_USER", "admin")
+            conn.execute("""UPDATE portal.users SET email = %s, email_verified = TRUE
+                            WHERE username = %s AND (email IS NULL OR lower(email) = %s)""",
+                         (admin_email, admin_user, admin_email))
         if not conn.execute("SELECT 1 FROM portal.connections LIMIT 1").fetchone():
             conn.execute("""INSERT INTO portal.connections (name, host, port, database, username, password_env, created_by)
                             VALUES ('DataTrust POC (local)', %s, %s, %s, %s, 'PG_PASSWORD', 'setup')""",
@@ -137,15 +163,20 @@ def _secret() -> bytes:
         return conn.execute("SELECT value FROM portal.settings WHERE key = 'session_secret'").fetchone()["value"].encode()
 
 
-def make_session(username: str, role: str) -> str:
+def session_secret() -> str:
+    return _secret().decode()
+
+
+def make_session(username: str, role: str, session_version: int = 0) -> str:
     payload = base64.urlsafe_b64encode(json.dumps({"u": username, "r": role,
+                                                   "v": session_version,
                                                    "exp": int(time.time()) + SESSION_HOURS * 3600}).encode()).decode()
     sig = hmac.new(_secret(), payload.encode(), hashlib.sha256).hexdigest()
     return f"{payload}.{sig}"
 
 
 def read_session(token: str):
-    """-> {'username', 'role'} or None. The user must still exist and be active."""
+    """Return the public user identity only when the account remains active and verified."""
     try:
         payload, sig = token.split(".")
         if not hmac.compare_digest(sig, hmac.new(_secret(), payload.encode(), hashlib.sha256).hexdigest()):
@@ -154,22 +185,33 @@ def read_session(token: str):
         if data["exp"] < time.time():
             return None
         with db() as conn:
-            row = conn.execute("SELECT username, role FROM portal.users WHERE username = %s AND active",
+            row = conn.execute("""SELECT username, role, email, email_verified, session_version
+                                  FROM portal.users WHERE username = %s AND active""",
                                (data["u"],)).fetchone()
-        return row
+        if not row or not row["email_verified"] or data.get("v", 0) != row["session_version"]:
+            return None
+        return {"username": row["username"], "role": row["role"]}
     except Exception:
         return None
 
 
 def login(username: str, password: str):
+    identifier = username.strip().lower()
     with db() as conn:
-        row = conn.execute("SELECT username, role, password_hash FROM portal.users WHERE username = %s AND active",
-                           (username,)).fetchone()
+        row = conn.execute("""SELECT username, role, password_hash, email, email_verified, session_version
+                              FROM portal.users
+                              WHERE (lower(email) = %s OR lower(username) = %s) AND active
+                              ORDER BY (lower(username) = %s) DESC
+                              LIMIT 1""",
+                           (identifier, identifier, identifier)).fetchone()
     if not row or not check_password(password, row["password_hash"]):
         audit(username, "LOGIN_FAILED", "portal", "wrong user or password")
         return None
+    if not row["email_verified"]:
+        audit(username, "LOGIN_FAILED", "portal", "email is not verified")
+        return {"unverified": True}
     audit(username, "LOGIN", "portal", row["role"])
-    return {"username": row["username"], "role": row["role"]}
+    return {"username": row["username"], "role": row["role"], "session_version": row["session_version"]}
 
 
 # ============================================================================ portal users
@@ -181,23 +223,150 @@ def list_users():
 def save_user(username: str, role: str, password: str, by: str, active: bool = True):
     if role not in ("admin", "viewer"):
         raise ValueError("role must be admin or viewer")
-    if not username.strip() or len(password) < 8:
-        raise ValueError("username required and password of at least 8 characters")
+    email = username.strip().lower()
+    if "@" not in email or len(email) > 254 or len(password) < 12:
+        raise ValueError("enter a valid email address and a password of at least 12 characters")
     with db() as conn:
-        current = conn.execute("SELECT role, active FROM portal.users WHERE username = %s", (username.strip(),)).fetchone()
+        current = conn.execute("SELECT role, active FROM portal.users WHERE username = %s", (email,)).fetchone()
         if current and current["role"] == "admin" and (role != "admin" or not active):
-            if username.strip() == by:
+            if email == by:
                 raise ValueError("you cannot remove your own admin role; ask another admin")
             others = conn.execute("""SELECT COUNT(*) AS n FROM portal.users
-                                     WHERE role = 'admin' AND active AND username <> %s""", (username.strip(),)).fetchone()["n"]
+                                     WHERE role = 'admin' AND active AND username <> %s""", (email,)).fetchone()["n"]
             if not others:
                 raise ValueError("the portal needs at least one active admin")
-        conn.execute("""INSERT INTO portal.users (username, password_hash, role, active, created_by) VALUES (%s, %s, %s, %s, %s)
+        conn.execute("""INSERT INTO portal.users
+                        (username, password_hash, role, active, created_by, email, email_verified)
+                        VALUES (%s, %s, %s, %s, %s, %s, %s)
                         ON CONFLICT (username) DO UPDATE SET password_hash = EXCLUDED.password_hash,
-                               role = EXCLUDED.role, active = EXCLUDED.active""",
-                     (username.strip(), hash_password(password), role, active, by))
+                               role = EXCLUDED.role, active = EXCLUDED.active,
+                               email = COALESCE(portal.users.email, EXCLUDED.email),
+                               email_verified = portal.users.email_verified OR EXCLUDED.email_verified""",
+                     (email, hash_password(password), role, active, by, email, True))
         conn.commit()
-    audit(by, "PORTAL_USER_SAVED", username, role)
+    audit(by, "PORTAL_USER_SAVED", email, role)
+
+
+def register_email_user(email: str, password: str) -> tuple[str | None, bool]:
+    """Create an unverified viewer account, or request verification for an existing unverified account."""
+    email = email.strip().lower()
+    configured_admins = {
+        value.strip().lower()
+        for value in os.getenv("PORTAL_ADMIN_EMAILS", "").split(",")
+        if value.strip()
+    }
+    role = "admin" if email in configured_admins else "viewer"
+    with db() as conn:
+        created = conn.execute("""INSERT INTO portal.users
+                                  (username, email, password_hash, role, active, created_by)
+                                  VALUES (%s, %s, %s, %s, TRUE, 'self-signup')
+                                  ON CONFLICT DO NOTHING RETURNING username""",
+                               (email, email, hash_password(password), role)).fetchone()
+        if created:
+            return email, True
+        email_row = conn.execute("""SELECT username, email, email_verified, active FROM portal.users
+                                    WHERE lower(email) = %s""", (email,)).fetchone()
+        username_row = conn.execute("""SELECT username, email, email_verified, active FROM portal.users
+                                       WHERE lower(username) = %s""", (email,)).fetchone()
+        if email_row and username_row and email_row["username"] != username_row["username"]:
+            return None, False
+        row = email_row or username_row
+        if row and row["email"] and row["email"].lower() == email and not row["email_verified"] and row["active"]:
+            return row["username"], True
+        return None, False
+
+
+def register_google_user(email: str, google_sub: str) -> dict | None:
+    email = email.strip().lower()
+    configured_admins = {
+        value.strip().lower()
+        for value in os.getenv("PORTAL_ADMIN_EMAILS", "").split(",")
+        if value.strip()
+    }
+    configured_admin = (os.getenv("PORTAL_ADMIN_EMAIL") or "").strip().lower()
+    role = "admin" if email in configured_admins or email == configured_admin else "viewer"
+    with db() as conn:
+        email_row = conn.execute("""SELECT username, role, email, google_sub, session_version
+                                    FROM portal.users WHERE lower(email) = %s""", (email,)).fetchone()
+        subject_row = conn.execute("""SELECT username, role, email, google_sub, session_version
+                                      FROM portal.users WHERE google_sub = %s""", (google_sub,)).fetchone()
+        if email_row and subject_row and email_row["username"] != subject_row["username"]:
+            return None
+        row = email_row or subject_row
+        if row:
+            if ((row["email"] and row["email"].lower() != email)
+                    or (row["google_sub"] and row["google_sub"] != google_sub)):
+                return None
+            conn.execute("""UPDATE portal.users SET email = %s, email_verified = TRUE,
+                            google_sub = %s, role = CASE WHEN %s = 'admin' THEN 'admin' ELSE role END
+                            WHERE username = %s""", (email, google_sub, role, row["username"]))
+            username = row["username"]
+        else:
+            username = email
+            conn.execute("""INSERT INTO portal.users
+                            (username, email, email_verified, google_sub, password_hash, role, active, created_by)
+                            VALUES (%s, %s, TRUE, %s, %s, %s, TRUE, 'google-sso')""",
+                         (username, email, google_sub, hash_password(secrets.token_urlsafe(32)), role))
+        result = conn.execute("""SELECT username, role, session_version FROM portal.users
+                                 WHERE username = %s AND active AND email_verified""", (username,)).fetchone()
+        conn.commit()
+    if not result:
+        return None
+    audit(username, "GOOGLE_LOGIN", "portal", "Google OpenID Connect")
+    return result
+
+
+def issue_auth_token(username: str, purpose: str, minutes: int = 30) -> str:
+    if purpose not in ("verify_email", "reset_password"):
+        raise ValueError("unsupported authentication token purpose")
+    token = secrets.token_urlsafe(32)
+    token_hash = hashlib.sha256(token.encode()).hexdigest()
+    with db() as conn:
+        conn.execute("""UPDATE portal.auth_tokens SET consumed_at = now()
+                        WHERE username = %s AND purpose = %s AND consumed_at IS NULL""", (username, purpose))
+        conn.execute("""INSERT INTO portal.auth_tokens (token_hash, username, purpose, expires_at)
+                        VALUES (%s, %s, %s, now() + (%s * interval '1 minute'))""",
+                     (token_hash, username, purpose, minutes))
+        conn.commit()
+    return token
+
+
+def consume_auth_token(token: str, purpose: str) -> str | None:
+    token_hash = hashlib.sha256(token.encode()).hexdigest()
+    with db() as conn:
+        row = conn.execute("""UPDATE portal.auth_tokens SET consumed_at = now()
+                              WHERE token_hash = %s AND purpose = %s AND consumed_at IS NULL
+                                AND expires_at > now()
+                              RETURNING username""", (token_hash, purpose)).fetchone()
+        if not row:
+            return None
+        if purpose == "verify_email":
+            conn.execute("UPDATE portal.users SET email_verified = TRUE WHERE username = %s", (row["username"],))
+        conn.commit()
+    return row["username"]
+
+
+def reset_user_password(token: str, password: str) -> str | None:
+    token_hash = hashlib.sha256(token.encode()).hexdigest()
+    with db() as conn:
+        row = conn.execute("""UPDATE portal.auth_tokens SET consumed_at = now()
+                              WHERE token_hash = %s AND purpose = 'reset_password' AND consumed_at IS NULL
+                                AND expires_at > now()
+                              RETURNING username""", (token_hash,)).fetchone()
+        if not row:
+            return None
+        updated = conn.execute("""UPDATE portal.users SET password_hash = %s, session_version = session_version + 1
+                                  WHERE username = %s AND active AND email_verified
+                                  RETURNING username""",
+                               (hash_password(password), row["username"])).fetchone()
+        if not updated:
+            conn.commit()
+            return None
+        conn.execute("""UPDATE portal.auth_tokens SET consumed_at = now()
+                        WHERE username = %s AND consumed_at IS NULL""", (row["username"],))
+        conn.commit()
+    audit(row["username"], "PASSWORD_RESET", "portal", "password changed using a single-use email token")
+    return row["username"]
 
 
 # ============================================================================ connections

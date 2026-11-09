@@ -10,7 +10,7 @@ Safety model:
     against the live catalog. An AI model (if configured) may only fill in the same request fields.
   * the request is stored as PENDING and runs only after an admin clicks Approve.
 Step 1 is a built-in parser (free, offline). Step 2, only if it cannot understand the text and LLM_PROVIDER is
-set (ollama / anthropic), asks the model for the request fields as JSON.
+set (ollama / anthropic / gemini), asks the model for the request fields as JSON.
 """
 import difflib
 import json
@@ -176,7 +176,7 @@ def _plan(src, stype, database, text, privileges):
 def _ask_model(src, stype, database, text, privileges):
     """Ask the configured AI model for the request fields (JSON). Returns None when no model is configured."""
     provider = os.getenv("LLM_PROVIDER", "none").lower()
-    if provider not in ("ollama", "anthropic"):
+    if provider not in ("ollama", "anthropic", "gemini"):
         return None
     import requests
     principals = src.roles(database)
@@ -196,7 +196,10 @@ def _ask_model(src, stype, database, text, privileges):
         'for GRANT_ROLE / REVOKE_ROLE {"role"}; for DROP_PRINCIPAL {}.\n'
         "Use only names that exist in this catalog (except the new name when creating) and only the privileges listed for "
         f"the object type. If the request is unclear, reply {{\"error\": \"what is missing\"}}.\nCatalog: {json.dumps(catalog)}")
-    if provider == "ollama":
+    if provider == "gemini":
+        import llm_gemini
+        content = llm_gemini.complete_json(system, text)
+    elif provider == "ollama":
         r = requests.post(os.getenv("OLLAMA_URL", "http://localhost:11434") + "/api/chat", timeout=120, json={
             "model": os.getenv("OLLAMA_MODEL", "qwen2.5:7b"), "stream": False, "format": "json", "options": {"temperature": 0},
             "messages": [{"role": "system", "content": system}, {"role": "user", "content": text}]})

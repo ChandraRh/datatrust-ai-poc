@@ -22,9 +22,13 @@
 </head>
 <body>
 <header class="topbar">
-  <div class="brand"><button id="navToggle" class="nav-toggle" aria-label="Show or hide menu" title="Show or hide menu"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 6h16M4 12h16M4 18h16"/></svg></button><span class="brand-mark" aria-hidden="true"><svg viewBox="0 0 24 24"><path d="M12 3l7 3v5c0 4.6-3 8.4-7 10-4-1.6-7-5.4-7-10V6z"/><path d="M8.8 12.2l2.2 2.2 4.4-4.6"/></svg></span><b>DataTrust <em>AI</em></b><span>The Autonomous Data Trust Mesh</span></div>
+  <div class="brand"><button id="navToggle" class="nav-toggle" aria-label="Show or hide menu" title="Show or hide menu"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 6h16M4 12h16M4 18h16"/></svg></button><a class="brand-home" href="/" aria-label="DataTrust AI home"><span class="brand-mark" aria-hidden="true"><svg viewBox="0 0 24 24"><path d="M12 3l7 3v5c0 4.6-3 8.4-7 10-4-1.6-7-5.4-7-10V6z"/><path d="M8.8 12.2l2.2 2.2 4.4-4.6"/></svg></span><b>DataTrust <em>AI</em></b></a><span>The Autonomous Data Trust Mesh</span></div>
   <div class="topright">
-    <span id="refreshInfo" class="muted-light">loading…</span>
+    <span id="refreshInfo" class="muted-light" role="status" aria-live="polite">Checking data…</span>
+    <button id="refreshBtn" class="header-refresh" type="button" aria-label="Refresh dashboard data" title="Refresh dashboard data">
+      <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M20 7v5h-5M4 17v-5h5"/><path d="M5.6 9a7 7 0 0 1 11.6-2L20 12M4 12l2.8 5a7 7 0 0 0 11.6-2"/></svg>
+      <span>Refresh</span>
+    </button>
     <span id="topScore" class="topscore">Trust score –</span>
   </div>
 </header>
@@ -33,7 +37,7 @@
 <nav class="sidebar" id="tabs" aria-label="Main menu">
   <div class="nav-group"><div class="nav-title">Monitor</div>
     <button data-page="observe" title="1. Observe" class="active"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M3 12h4l3-8 4 16 3-8h4"/></svg><span class="label">1. Observe</span></button>
-    <button data-page="detect" title="2. Detect"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 3l9 16H3z"/><path d="M12 10v4M12 17h.01"/></svg><span class="label">2. Detect</span></button>
+    <button data-page="detect" title="2. Detect" aria-label="2. Detect"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 3l9 16H3z"/><path d="M12 10v4M12 17h.01"/></svg><span class="label">2. Detect</span><span id="detectNavCount" class="nav-count" aria-hidden="true" hidden></span></button>
   </div>
   <div class="nav-group"><div class="nav-title">Analyse</div>
     <button data-page="investigate" title="3. Investigate"><svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="11" cy="11" r="6"/><path d="M20 20l-4.5-4.5"/></svg><span class="label">3. Investigate</span></button>
@@ -71,6 +75,7 @@
   <section id="page-observe" class="page">
     <h1 id="obsTitle">1. Observe</h1>
     <p class="sub">Source files → Bronze → Silver → Gold, monitored after every pipeline run. <span id="obsCoverage"></span></p>
+    <div id="freshnessNotice" class="banner warn freshness-notice hidden" role="status"></div>
     <div class="grid g-1-2">
       <div class="card center">
         <div id="gauge"></div>
@@ -109,20 +114,34 @@
   <!-- 2. DETECT -->
   <section id="page-detect" class="page hidden">
     <h1>2. Detect</h1>
-    <p class="sub">Issues found in the data right now. They close themselves when a later run no longer shows them.</p>
+    <p class="sub">Review active data-quality and pipeline issues, inspect evidence, and export a filtered incident list.</p>
     <div id="detectBanner"></div>
-    <div class="grid g-1-2">
-      <div class="card center"><div id="gauge2"></div><div id="gaugeLabel2" class="gauge-label"></div></div>
-      <div class="card"><h3>Trust score by business date</h3><div class="chartbox"><canvas id="trendChart2"></canvas></div></div>
+    <div class="card">
+      <div class="incident-head"><h3>Active incidents</h3><span id="incidentCount" class="small muted" role="status" aria-live="polite"></span></div>
+      <div id="incidentSeveritySummary" class="incident-severity-summary" role="group" aria-label="Filter open incidents by severity"></div>
+      <div class="incident-filters">
+        <label class="sr-only" for="incidentSearch">Search open incidents</label>
+        <input id="incidentSearch" type="search" placeholder="Search incidents…" autocomplete="off">
+        <label class="sr-only" for="incidentSeverity">Filter by severity</label>
+        <select id="incidentSeverity">
+          <option value="">All severities</option>
+          <option value="CRITICAL">Critical</option>
+          <option value="HIGH">High</option>
+          <option value="MEDIUM">Medium</option>
+          <option value="LOW">Low</option>
+        </select>
+        <button id="incidentExport" class="btn light btn-sm" type="button">Export CSV</button>
+        <button id="incidentFilterClear" class="btn light btn-sm" type="button">Clear filters</button>
+      </div>
+      <div id="incidentList"></div>
     </div>
-    <div class="card"><h3>Open incidents</h3><div id="incidentList"></div></div>
   </section>
 
   <!-- 3. INVESTIGATE -->
   <section id="page-investigate" class="page hidden">
-    <h1>3. Investigate: evidence from the data</h1>
-    <p class="sub">Every check below is a query on your tables; the source is named under each one.
-      <select id="invSelect"></select></p>
+    <h1>3. Investigate</h1>
+    <p class="sub">Understand what happened, review the evidence, and see which downstream data is affected.
+      <label for="invSelect">Incident to investigate</label><select id="invSelect"></select></p>
     <div id="invBody"></div>
   </section>
 
@@ -153,7 +172,7 @@
   <!-- PIPELINE LOG -->
   <section id="page-pipeline" class="page hidden">
     <h1>Pipeline log</h1>
-    <p class="sub">audit.batch_control, audit.step_log and audit.error_log.</p>
+    <p class="sub">ADLS batch status and failed-batch retry controls, plus audit.batch_control, audit.step_log and audit.error_log.</p>
     <div id="pipeBody"></div>
   </section>
   <!-- DATA ESTATE: Connections -->

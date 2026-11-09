@@ -4,7 +4,14 @@ Connect databases and warehouses to the DataTrust portal and see, in one place:
 what is in them (catalog), who changed what, what failed, who has access, and grant access
 through request -> approve -> apply. An estate assistant answers questions about any connected source.
 
-Version 1 supports PostgreSQL sources. Snowflake / SQL Server connectors plug into `service.CONNECTORS`.
+PostgreSQL and SQL Server sources have catalog-browsing connectors. Snowflake and SAP HANA can be
+connection-tested, but cannot yet be browsed in the portal. Adding a source is not the same as
+collecting its pipeline telemetry.
+
+The web app currently monitors its own PySpark/PostgreSQL POC pipeline; it does not yet collect
+run events from arbitrary external orchestrators. A proposed vendor-neutral event envelope is
+documented in [`../../contracts/pipeline-event-v1.schema.json`](../../contracts/pipeline-event-v1.schema.json).
+That schema is not yet accepted by an API or persisted.
 
 ## Files
 | File | Purpose |

@@ -2,11 +2,10 @@
 /api/estate/* — the Data Estate module's API. Every call needs a portal login (cookie dt_session);
 changes (connections, change tracking, approvals, portal users) need the admin role.
 """
-import os
 from typing import Optional
 
 from fastapi import APIRouter, Depends, HTTPException, Request, Response
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 from . import service, store
 
@@ -15,6 +14,8 @@ COOKIE = "dt_session"
 
 
 def current_user(request: Request) -> dict:
+    if not store.auth_enabled():
+        return {"username": "local", "role": "admin"}
     user = store.read_session(request.cookies.get(COOKIE, ""))
     if not user:
         raise HTTPException(401, "please log in")
@@ -37,24 +38,6 @@ def guard(fn, *args, **kwargs):
         raise HTTPException(400, str(e))
 
 
-# ---------------------------------------------------------------- login
-class Login(BaseModel):
-    username: str
-    password: str
-
-
-@router.post("/login")
-def login(body: Login, response: Response):
-    user = store.login(body.username, body.password)
-    if not user:
-        raise HTTPException(401, "wrong user name or password")
-    # PORTAL_COOKIE_SECURE=true in the cloud (HTTPS): the login cookie is then never sent over plain HTTP
-    response.set_cookie(COOKIE, store.make_session(user["username"], user["role"]), httponly=True, samesite="lax",
-                        secure=os.getenv("PORTAL_COOKIE_SECURE", "false").lower() == "true",
-                        max_age=store.SESSION_HOURS * 3600)
-    return user
-
-
 @router.post("/logout")
 def logout(response: Response):
     response.delete_cookie(COOKIE)
@@ -64,6 +47,8 @@ def logout(response: Response):
 @router.get("/session")
 def session(request: Request):
     """Who is logged in (null when nobody): used by the page on load, never answers 401."""
+    if not store.auth_enabled():
+        return {"user": current_user(request)}
     return {"user": store.read_session(request.cookies.get(COOKIE, ""))}
 
 
@@ -75,7 +60,7 @@ def me(user: dict = Depends(current_user)):
 # ---------------------------------------------------------------- portal users (admin)
 class PortalUser(BaseModel):
     username: str
-    password: str
+    password: str = Field(min_length=12, max_length=256)
     role: str = "viewer"
     active: bool = True
 

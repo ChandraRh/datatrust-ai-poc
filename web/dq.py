@@ -378,7 +378,7 @@ def _name(col, rtype):
 
 def _ask_model(entity, cols, text):
     provider = os.getenv("LLM_PROVIDER", "none").lower()
-    if provider not in ("ollama", "anthropic"):
+    if provider not in ("ollama", "anthropic", "gemini"):
         return None
     import requests
     system = ("Turn one data quality rule written in plain English into JSON. Reply with JSON only.\n"
@@ -387,7 +387,10 @@ def _ask_model(entity, cols, text):
               '{"max"} for MAX_LENGTH, plus "allow_empty": true when an empty value is fine, "rule_name": UPPER_SNAKE_CASE, '
               f'"action": "REJECT" or "WARN"}}.\nTable: silver.{entity}; columns: {", ".join(cols)}')
     try:
-        if provider == "ollama":
+        if provider == "gemini":
+            import llm_gemini
+            content = llm_gemini.complete_json(system, text)
+        elif provider == "ollama":
             r = requests.post(os.getenv("OLLAMA_URL", "http://localhost:11434") + "/api/chat", timeout=90, json={
                 "model": os.getenv("OLLAMA_MODEL", "qwen2.5:7b"), "stream": False, "format": "json", "options": {"temperature": 0},
                 "messages": [{"role": "system", "content": system}, {"role": "user", "content": text}]})

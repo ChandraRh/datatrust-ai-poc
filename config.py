@@ -12,10 +12,10 @@ load_dotenv(PROJECT_DIR / ".env")
 
 #  PostgreSQL: ONE database, schemas bronze / silver / gold (+ audit for run logs)
 PG_HOST = os.getenv("PG_HOST", "localhost")
-PG_PORT = int(os.getenv("PG_PORT", "5433"))
+PG_PORT = int(os.getenv("PG_PORT", "5432"))
 PG_DATABASE = os.getenv("PG_DATABASE", "datatrust_poc")
 PG_USER = os.getenv("PG_USER", "postgres")
-PG_PASSWORD = os.getenv("PG_PASSWORD", "root")
+PG_PASSWORD = os.getenv("PG_PASSWORD", "admin")
 
 # Where the source CSV files are read from 
 # local : data/source_csv folder (no Azure needed)
@@ -26,7 +26,7 @@ ADLS_DOWNLOAD_DIR = PROJECT_DIR / "data" / "adls_download"      # files pulled f
 
 # ADLS Gen2 (Azure Storage account with hierarchical namespace) 
 ADLS_ACCOUNT_NAME = os.getenv("ADLS_ACCOUNT_NAME", "datatrustaicontainer")
-ADLS_ACCOUNT_KEY = os.getenv("ADLS_ACCOUNT_KEY", "H+mg2Qn3yJNjam/mDZ+8H3+JMYcEtwtxBklTUOOhuIoeRyqakJk7gojEiWyOQysatnO9VKzj2VSn+AStoNP0vg==")            # option 1: account key
+ADLS_ACCOUNT_KEY = os.getenv("ADLS_ACCOUNT_KEY", "")  # option 1: account key
 ADLS_CONNECTION_STRING = os.getenv("ADLS_CONNECTION_STRING", "")   # option 2: connection string
 ADLS_CONTAINER = os.getenv("ADLS_CONTAINER", "landing")          # option 3: neither -> az login (Azure AD)
 ADLS_FOLDER = os.getenv("ADLS_FOLDER", "raw")
@@ -51,5 +51,3 @@ SOURCES = [
     {"file": "products.csv",       "bronze": "bronze.products",       "date_column": None},
     {"file": "categories.csv",     "bronze": "bronze.categories",     "date_column": None},
 ]
-
-

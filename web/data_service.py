@@ -382,7 +382,7 @@ def investigate(incident_id: str) -> dict:
     inc = next((i for i in incidents() if i["id"] == incident_id), None)
     if inc is None:
         return {"found": False}
-    checks, chain, root, confidence = [], [], "", 0
+    checks, chain, root, sample = [], [], "", []
 
     if inc["type"] == "SETTLEMENT_MISMATCH":
         m, rej = inc["metrics"], inc["rejected_explained"]
@@ -394,27 +394,36 @@ def investigate(incident_id: str) -> dict:
                                         SELECT batch_id FROM bronze.payments WHERE business_date = %(d)s
                                         ORDER BY ingested_at DESC LIMIT 1)""", {"d": d})["n"]
         source_payments = _source_rows("payments.csv", d)
+        source_matches_bronze = None if source_payments is None else source_payments == bronze_payments
         checks = [
-            {"ok": True, "text": f"Gateway settled {m['settled_payments']:,} payments ({inr(m['settled_amount'])})",
+            {"ok": True, "text": f"Gateway settlement reports {m['settled_payments']:,} payments ({inr(m['settled_amount'])})",
              "source": "gold.settlement_reconciliation"},
-            {"ok": True, "text": f"Silver has {m['silver_payments']:,} captured payments ({inr(m['silver_amount'])})",
+            {"ok": True, "text": f"Silver contains {m['silver_payments']:,} captured payments ({inr(m['silver_amount'])})",
              "source": "silver.payments"},
-            {"ok": source_payments is None or source_payments == bronze_payments,
-             "text": f"Source file rows for {d}: {'n/a' if source_payments is None else f'{source_payments:,}'}; "
-                     f"bronze rows: {bronze_payments:,} (nothing lost in ingestion)", "source": "payments.csv / bronze.payments"},
+            {"ok": source_matches_bronze,
+             "text": (f"Source file rows for {d}: {source_payments:,}; bronze rows: {bronze_payments:,}"
+                      if source_payments is not None else
+                      f"Source file row count for {d} is unavailable; bronze contains {bronze_payments:,} rows"),
+             "source": "payments.csv / bronze.payments"},
             {"ok": count_match, "text": f"{rej['n']} captured payments rejected in silver by rule {rej['rules']} "
                                         f"= the gap of {m['payment_difference']} payments", "source": "silver.rejected_records"},
             {"ok": amount_match, "text": f"Rejected amount {inr(rej['amount'])} = gap amount {inr(m['amount_difference'])}",
              "source": "silver.rejected_records.raw_record"},
         ]
-        confidence = 97 if (count_match and amount_match) else 75 if count_match else 40
         why = {"CURRENCY_REQUIRED": "without a currency", "STATUS_VALID": "with an unknown status (e.g. a typo)",
                "AMOUNT_POSITIVE": "with a zero or negative amount", "PAYMENT_ID_REQUIRED": "without a payment id"}
         what = " / ".join(why.get(x.strip(), f"that failed {x.strip()}") for x in str(rej["rules"] or "").split(",") if x.strip())
-        root = (f"The source payments file sent {rej['n']} captured payments for {d} {what or 'that failed a rule'}. "
-                f"Silver rejected them (rule {rej['rules']}), so revenue in gold is short by {inr(m['amount_difference'])}."
-                if count_match else "The gap is not fully explained by rejected rows: check the source extract.")
-        chain = [f"Gateway settled {m['settled_payments']:,} payments", f"payments.csv: {(source_payments if source_payments is not None else bronze_payments):,} rows for {d}",
+        if count_match and amount_match:
+            root = (f"The source payments file sent {rej['n']} captured payments for {d} {what or 'that failed a rule'}. "
+                    f"Silver rejected them (rule {rej['rules']}), explaining the {inr(m['amount_difference'])} revenue gap.")
+        elif count_match:
+            root = ("Rejected payment counts match the settlement gap, but the rejected amount does not match the "
+                    f"{inr(m['amount_difference'])} revenue gap. Check the source extract and reconciliation.")
+        else:
+            root = "The gap is not fully explained by rejected rows: check the source extract and reconciliation."
+        source_step = (f"payments.csv: {source_payments:,} rows for {d}" if source_payments is not None
+                       else f"payments.csv row count unavailable for {d}")
+        chain = [f"Gateway settled {m['settled_payments']:,} payments", source_step,
                  f"Bronze landed {bronze_payments:,} rows (complete)",
                  f"Silver rejected {rej['n']} rows ({rej['rules']})",
                  f"Silver/Gold revenue short by {inr(m['amount_difference'])}",
@@ -429,21 +438,61 @@ def investigate(incident_id: str) -> dict:
                          FROM silver.rejected_records WHERE entity = %(e)s AND rule_name = %(r)s
                            AND business_date = %(d)s ORDER BY record_key LIMIT 20""",
                       {"e": m["entity"], "r": m["rule_name"], "d": m["business_date"]})
-        checks = [{"ok": True, "text": f"{m['n']} row(s) failed {m['rule_name']}", "source": "silver.rejected_records"},
-                  {"ok": True, "text": "Rows kept with their raw values for audit", "source": "silver.rejected_records.raw_record"}]
-        root, confidence = f"Source data for {m['entity']} broke rule {m['rule_name']}.", 95
+        observed = one("""SELECT COUNT(*) AS n,
+                                 COUNT(*) FILTER (WHERE raw_record IS NOT NULL) AS with_raw_record
+                          FROM silver.rejected_records
+                          WHERE entity = %(e)s AND rule_name = %(r)s AND business_date = %(d)s""",
+                       {"e": m["entity"], "r": m["rule_name"], "d": m["business_date"]})
+        checks = [
+            {"ok": observed["n"] == m["n"],
+             "text": f"Incident reports {m['n']} rejected row(s); current query returns {observed['n']}",
+             "source": "silver.rejected_records"},
+            {"ok": observed["with_raw_record"] == observed["n"],
+             "text": f"{observed['with_raw_record']} of {observed['n']} rejected row(s) retain raw source values",
+             "source": "silver.rejected_records.raw_record"},
+        ]
+        root = f"Source data for {m['entity']} broke rule {m['rule_name']}."
         chain = [f"{ENTITIES[m['entity']][0]} delivered the rows", f"Silver rule {m['rule_name']} rejected {m['n']}",
                  "Rows held back from silver and gold"]
+    elif inc["type"] == "DATA_LOSS":
+        m = inc["metrics"]
+        source_rows = m["source_rows"]
+        bronze_rows = m["bronze_rows"]
+        loaded = m["silver_loaded"]
+        rejected = m["rejected"]
+        duplicates = m["duplicates"]
+        unexplained = bronze_rows - loaded - rejected - duplicates
+        source_matches_bronze = None if source_rows is None else source_rows == bronze_rows
+        checks = [
+            {"ok": source_matches_bronze,
+             "text": (f"Source has {source_rows:,} rows; Bronze has {bronze_rows:,}"
+                      if source_rows is not None else "Source row count is unavailable"),
+             "source": f"{m['source_file']} / {m['bronze_table']}"},
+            {"ok": unexplained == 0,
+             "text": (f"Bronze rows {bronze_rows:,} = Silver loaded {loaded:,} + rejected {rejected:,} "
+                      f"+ duplicates {duplicates:,}; unexplained difference {unexplained:,}"),
+             "source": f"{m['bronze_table']} / {m['silver_table']} / silver.rejected_records"},
+        ]
+        causes = []
+        if source_rows is not None and source_rows != bronze_rows:
+            causes.append(f"{source_rows - bronze_rows:,} source row(s) did not reach Bronze")
+        if unexplained:
+            causes.append(f"{unexplained:,} Bronze row(s) are not accounted for in Silver, rejects, or duplicates")
+        root = "; ".join(causes) or "The recorded row counts do not currently identify the cause of the data-loss incident."
+        chain = [f"{m['source_file']}: {source_rows if source_rows is not None else 'count unavailable'} source rows",
+                 f"{m['bronze_table']}: {bronze_rows:,} rows",
+                 f"{m['silver_table']}: {loaded:,} loaded, {rejected:,} rejected, {duplicates:,} duplicates",
+                 root]
     elif inc["type"] == "SCHEMA_CHANGE":
         import schema_guard
         ev = schema_guard.investigate(inc)
-        checks, chain, root, confidence, sample = ev["checks"], ev["chain"], ev["root_cause"], ev["confidence"], ev["sample"]
+        checks, chain, root, sample = ev["checks"], ev["chain"], ev["root_cause"], ev["sample"]
     else:
-        sample, confidence = [], 80
+        sample = []
         checks = [{"ok": True, "text": inc["summary"], "source": "audit.step_log / audit.batch_control"}]
         root = inc["summary"]
         chain = [inc["title"]]
-    return {"found": True, "incident": inc, "checks": checks, "root_cause": root, "confidence": confidence,
+    return {"found": True, "incident": inc, "checks": checks, "root_cause": root,
             "chain": chain, "sample": sample, "impact": impact(inc)}
 
 
@@ -509,7 +558,10 @@ def trust_score() -> dict:
     penalty(PENALTY_STALE if hours_old is None or hours_old > FRESHNESS_HOURS else 0,
             f"no successful run in the last {FRESHNESS_HOURS} h")
     score = max(0, round(score))
-    label = "Healthy" if score >= HEALTHY else "Needs attention" if score >= ATTENTION else "At risk"
+    stale = hours_old is None or hours_old > FRESHNESS_HOURS
+    label = ("At risk" if score < ATTENTION else "Needs attention") if stale else (
+        "Healthy" if score >= HEALTHY else "Needs attention" if score >= ATTENTION else "At risk"
+    )
 
     matched = len(recon) - len(mismatches)
     dims = {
@@ -520,7 +572,8 @@ def trust_score() -> dict:
         "freshness_hours": round(hours_old, 1) if hours_old is not None else None,
     }
     return {"score": score, "label": label, "reasons": reasons, "dimensions": dims,
-            "rules": {"healthy_from": HEALTHY, "attention_from": ATTENTION}, "trend": trust_trend()}
+            "rules": {"healthy_from": HEALTHY, "attention_from": ATTENTION,
+                      "freshness_hours": FRESHNESS_HOURS}, "trend": trust_trend()}
 
 
 def trust_trend() -> list:

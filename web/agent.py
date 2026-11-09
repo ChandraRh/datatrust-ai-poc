@@ -7,6 +7,7 @@ Two modes (set LLM_PROVIDER in .env):
              rejected rows; duplicates; settlement reconciliation; pipeline status; trust score; customers).
   anthropic  Claude via the Anthropic API (ANTHROPIC_API_KEY), with the same tools.
   ollama     a free local model via Ollama (OLLAMA_MODEL, e.g. qwen2.5:7b), with the same tools.
+  gemini     Gemini via the Google Generative Language API (GEMINI_API_KEY), with the same tools.
 
 In LLM mode the model never sees the database directly: it can only call the tools below
 (fixed read-only queries + a SELECT-only, gold-only query tool). Every answer names its source.
@@ -258,7 +259,7 @@ def answer_investigate(incident_id: str):
     inv = ds.investigate(incident_id)
     if not inv["found"]:
         return reply("That incident is no longer open: the latest data does not show it.")
-    lines = [f"**{inv['incident']['title']}**", "", f"**Root cause** (confidence {inv['confidence']}%): {inv['root_cause']}",
+    lines = [f"**{inv['incident']['title']}**", "", f"**Root cause**: {inv['root_cause']}",
              "", "**Evidence:**"]
     lines += [f"{'✅' if c['ok'] else '⚠'} {c['text']}  _(source: {c['source']})_" for c in inv["checks"]]
     imp = inv["impact"]
@@ -481,6 +482,8 @@ def _table_from(result):
 
 def llm_agent(question: str, history: list) -> dict:
     import requests
+    if os.getenv("LLM_PROVIDER", "none").lower() == "gemini":
+        return _gemini_agent(question, history)
     provider = os.getenv("LLM_PROVIDER", "none").lower()
     used, last_table = [], None
     messages = [m for m in history[-6:] if m.get("role") in ("user", "assistant")] + [{"role": "user", "content": question}]
@@ -531,6 +534,47 @@ def llm_agent(question: str, history: list) -> dict:
     return reply("I needed too many steps for that question. Please ask it more specifically.", last_table, None, used)
 
 
+def _gemini_agent(question: str, history: list) -> dict:
+    import llm_gemini
+    used, last_table = [], None
+    contents = [{"role": "model" if m["role"] == "assistant" else "user",
+                 "parts": [{"text": str(m.get("content", ""))}]}
+                for m in history[-6:] if m.get("role") in ("user", "assistant")]
+    contents.append({"role": "user", "parts": [{"text": question}]})
+
+    decls = []
+    for n, desc, p, r in TOOLS:
+        declaration = {"name": n, "description": desc}
+        if p:
+            declaration["parameters"] = {"type": "object", "properties": p, "required": r}
+        decls.append(declaration)
+
+    for _ in range(6):
+        data = llm_gemini.generate({
+            "systemInstruction": {"parts": [{"text": _system_prompt()}]},
+            "contents": contents,
+            "tools": [{"functionDeclarations": decls}],
+            "generationConfig": {"temperature": 0},
+        }, timeout=90)
+        content = data["candidates"][0]["content"]
+        calls = [part["functionCall"] for part in content.get("parts", []) if "functionCall" in part]
+        if not calls:
+            text = "".join(part.get("text", "") for part in content.get("parts", []))
+            return reply(text, last_table, None, used, mode="gemini")
+        contents.append(content)
+        parts = []
+        for call in calls:
+            out = _safe_tool(call["name"], call.get("args") or {})
+            used.append(call["name"])
+            last_table = _table_from(out) or last_table
+            parts.append({"functionResponse": {
+                "name": call["name"],
+                "response": {"result": json.loads(json.dumps(out, default=str))}
+            }})
+        contents.append({"role": "user", "parts": parts})
+    return reply("I needed too many steps for that question. Please ask it more specifically.", last_table, None, used)
+
+
 def _safe_tool(name, args):
     try:
         return run_tool(name, args or {})
@@ -540,7 +584,7 @@ def _safe_tool(name, args):
 
 # ============================================================================ entry point
 def ask(question: str, history: list = None) -> dict:
-    if os.getenv("LLM_PROVIDER", "none").lower() in ("anthropic", "ollama"):
+    if os.getenv("LLM_PROVIDER", "none").lower() in ("anthropic", "ollama", "gemini"):
         try:
             return llm_agent(question, history or [])
         except Exception as e:

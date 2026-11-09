@@ -1,0 +1,289 @@
+<!doctype html>
+<html lang="en" data-theme="dark">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>DataTrust AI: trusted data for the enterprise</title>
+  <meta name="description" content="DataTrust AI watches your data from source files to Gold reports, catches the moment numbers stop adding up, explains the root cause and verifies the fix.">
+  <meta name="theme-color" content="#05070a">
+  <link rel="preload" href="/static/vendor/fonts/inter-latin-wght-normal.woff2" as="font" type="font/woff2" crossorigin>
+  <link rel="stylesheet" href="/static/landing.css">
+  <script>
+    /* saved look (mode + accent) is applied before first paint so there is no flash; black is the default */
+    try { var m = localStorage.getItem("dt-mode"), a = localStorage.getItem("dt-acc");
+      if (m === "light") document.documentElement.setAttribute("data-theme", "light");
+      if (a && a !== "emerald") document.documentElement.setAttribute("data-acc", a); } catch (e) {}
+  </script>
+  <script>
+    /* old alert / e-mail links like /#investigate=INC-1 still open the dashboard */
+    if (/^#(observe|detect|investigate|lineage|impact|verify|ask|pipeline|estate-[\w-]+)(=|$)/.test(location.hash)) {
+      location.replace("/app" + location.hash);
+    }
+  </script>
+</head>
+<body id="top">
+
+<a class="skip" href="#main">Skip to content</a>
+<div class="announce">NEW &nbsp;Ask DataTrust AI about revenue, rejects and reconciliation in plain English. <a href="/app#ask">Try it now →</a></div>
+
+<header class="hdr" id="hdr">
+  <div class="hdr-in">
+    <a class="logo" href="/" aria-label="DataTrust AI home">
+      <span class="logo-mark" aria-hidden="true"><svg viewBox="0 0 24 24"><path d="M12 3l7 3v5c0 4.6-3 8.4-7 10-4-1.6-7-5.4-7-10V6z"/><path d="M8.8 12.2l2.2 2.2 4.4-4.6"/></svg></span>DataTrust AI
+    </a>
+    <nav class="menus" aria-label="Services"><div class="dd"><button class="dd-btn" type="button" aria-expanded="false" aria-controls="m0">Platform<svg viewBox="0 0 12 12" aria-hidden="true"><path d="M2 4l4 4 4-4"/></svg></button><div class="menu" id="m0"><div class="mcol"><h4>Monitor</h4><ul><li><a href="/app#observe"><b>Observe</b><span>Trust score, KPIs, revenue charts and layer status</span></a></li><li><a href="/app#detect"><b>Detect</b><span>Open incidents, most severe first</span></a></li><li><a href="/app#pipeline"><b>Pipeline log</b><span>Every run and step, in order</span></a></li></ul></div><div class="mcol"><h4>Analyse</h4><ul><li><a href="/app#investigate"><b>Investigate</b><span>Root cause with evidence checks</span></a></li><li><a href="/app#lineage"><b>Explain (lineage)</b><span>Source to Gold, with rows held back</span></a></li><li><a href="/app#impact"><b>Impact &amp; decide</b><span>Revenue at risk, auto-fix and approval</span></a></li><li><a href="/app#verify"><b>Verify</b><span>Resolved only when the next run is clean</span></a></li></ul></div><div class="mcol"><h4>Assistant</h4><ul><li><a href="/app#ask"><b>Ask DataTrust AI</b><span>Plain-English questions on your Gold data</span></a></li><li><a href="/app#estate-ask"><b>Estate assistant</b><span>Ask about connections, catalog and access</span></a></li></ul></div></div></div><div class="dd"><button class="dd-btn" type="button" aria-expanded="false" aria-controls="m1">Data estate<svg viewBox="0 0 12 12" aria-hidden="true"><path d="M2 4l4 4 4-4"/></svg></button><div class="menu" id="m1"><div class="mcol"><h4>Data quality</h4><ul><li><a href="/app#estate-dq-rejected"><b>Rejected records</b><span>Review and correct rejected rows</span></a></li><li><a href="/app#estate-dq-rules"><b>DQ Rule Studio</b><span>Create and tune quality rules</span></a></li></ul></div><div class="mcol"><h4>Data estate</h4><ul><li><a href="/app#estate-connections"><b>Connections</b><span>Connect and test your databases</span></a></li><li><a href="/app#estate-catalog"><b>Catalog</b><span>Browse schemas, tables and columns</span></a></li><li><a href="/app#estate-activity"><b>Changes &amp; failures</b><span>What changed and what failed</span></a></li><li><a href="/app#estate-access"><b>Access</b><span>Request and approve access</span></a></li><li><a href="/app#estate-people"><b>Connect (people)</b><span>Find and reach the right people</span></a></li></ul></div></div></div><div class="dd"><button class="dd-btn" type="button" aria-expanded="false" aria-controls="m2">Developers<svg viewBox="0 0 12 12" aria-hidden="true"><path d="M2 4l4 4 4-4"/></svg></button><div class="menu" id="m2"><div class="mcol"><h4>Developers</h4><ul><li><a href="/docs"><b>API docs</b><span>Interactive REST API reference</span></a></li><li><a href="/health"><b>Health check</b><span>Is the service up?</span></a></li><li><a href="/api/version"><b>Version</b><span>Which build is running</span></a></li></ul></div></div></div>
+      <a class="plain" href="#how">How it works</a>
+      <a class="plain" href="#connect">Connect</a>
+    </nav>
+    <div class="hdr-cta">
+      <a class="btn btn-line" href="/app#ask">Ask AI</a>
+      <a class="btn btn-green" href="/app">Open dashboard</a>
+      <button class="burger" id="burger" type="button" aria-label="Menu" aria-expanded="false" aria-controls="mob"><i></i><i></i><i></i></button>
+    </div>
+  </div>
+  <div class="progress" id="progress" aria-hidden="true"></div>
+  <div class="mob" id="mob" hidden><h4>Monitor</h4><a href="/app#observe">Observe</a><a href="/app#detect">Detect</a><a href="/app#pipeline">Pipeline log</a><h4>Analyse</h4><a href="/app#investigate">Investigate</a><a href="/app#lineage">Explain (lineage)</a><a href="/app#impact">Impact &amp; decide</a><a href="/app#verify">Verify</a><h4>Assistant</h4><a href="/app#ask">Ask DataTrust AI</a><a href="/app#estate-ask">Estate assistant</a><h4>Data quality</h4><a href="/app#estate-dq-rejected">Rejected records</a><a href="/app#estate-dq-rules">DQ Rule Studio</a><h4>Data estate</h4><a href="/app#estate-connections">Connections</a><a href="/app#estate-catalog">Catalog</a><a href="/app#estate-activity">Changes &amp; failures</a><a href="/app#estate-access">Access</a><a href="/app#estate-people">Connect (people)</a><h4>Developers</h4><a href="/docs">API docs</a><a href="/health">Health check</a><a href="/api/version">Version</a></div>
+</header>
+
+<main id="main">
+<!-- HERO -->
+<section class="hero">
+  <div class="mesh" aria-hidden="true"><i></i><i></i><i></i></div>
+  <div class="wrap hero-grid">
+    <div class="hero-text">
+      <p class="eyebrow">Pipeline observability · data quality · governance</p>
+      <h1><span class="hl">Know when</span><br>your numbers don't add up</h1>
+      <p class="hero-lines">Trace an issue from source to report, understand its impact, and verify the fix after the next pipeline run.</p>
+      <div class="cta-row">
+        <a class="btn btn-green btn-lg" href="/app">Open the dashboard</a>
+        <a class="btn btn-line btn-lg" href="/app#ask">Ask DataTrust AI</a>
+      </div>
+      <ul class="hero-points" aria-label="What DataTrust AI helps you do">
+        <li><svg viewBox="0 0 20 20" aria-hidden="true"><path d="m4 10 4 4 8-8"/></svg>Catch data issues</li>
+        <li><svg viewBox="0 0 20 20" aria-hidden="true"><path d="m4 10 4 4 8-8"/></svg>Trace the impact</li>
+        <li><svg viewBox="0 0 20 20" aria-hidden="true"><path d="m4 10 4 4 8-8"/></svg>Verify the fix</li>
+      </ul>
+    </div>
+
+    <div class="orb" id="orb" role="img" aria-label="Animated picture: streams of data flow from source files into a glowing trust ring and come out as trusted reports.">
+      <canvas id="orbCanvas" aria-hidden="true"></canvas>
+      <div class="orb-center" aria-hidden="true"><small>Trust score</small><b id="orbScore">-</b><span id="orbNote">loading data</span></div>
+      <span class="orb-tag orb-l" aria-hidden="true">Source files</span>
+      <span class="orb-tag orb-r" aria-hidden="true">Trusted reports</span>
+    </div>
+  </div>
+</section>
+
+<!-- CONNECTS TO -->
+<section class="logos" aria-label="Connects to">
+  <div class="wrap"><p>Connects to your data estate</p></div>
+  <div class="lmask"><ul><li>PostgreSQL</li><li>Apache Spark</li><li>Apache Kafka</li><li>Azure Data Lake</li><li>Snowflake</li><li>SQL Server</li><li>Google Chat</li><li aria-hidden="true">PostgreSQL</li><li aria-hidden="true">Apache Spark</li><li aria-hidden="true">Apache Kafka</li><li aria-hidden="true">Azure Data Lake</li><li aria-hidden="true">Snowflake</li><li aria-hidden="true">SQL Server</li><li aria-hidden="true">Google Chat</li></ul></div>
+</section>
+
+<!-- PRODUCT TOUR -->
+<section class="wrap sec" id="tour">
+  <div class="head rv"><p class="eyebrow">Product tour</p><h2>See it in action</h2>
+    <p class="sub">Four of the screens you get. Click any card to open it. Values shown are illustrative.</p></div>
+  <div class="tour">
+    <a class="tcard rv t6" href="/app#observe" aria-label="Open Observe">
+      <div class="tv tv-obs">
+        <svg width="112" height="112" viewBox="0 0 124 124" aria-hidden="true"><circle cx="62" cy="62" r="50" fill="none" stroke="#e6ecf1" stroke-width="12"/><circle cx="62" cy="62" r="50" fill="none" stroke="#00c895" stroke-width="12" stroke-linecap="round" stroke-dasharray="289 314" transform="rotate(-90 62 62)"/><text x="62" y="72" text-anchor="middle" font-size="32" font-weight="700" fill="#0b1b2b">92</text></svg>
+        <div class="mbars"><div><span>Source to Silver</span><i style="--w:96%"></i></div><div><span>Silver to Gold</span><i style="--w:92%"></i></div><div><span>Settlement match</span><i style="--w:88%"></i></div></div>
+      </div>
+      <div class="tt"><small>Observe</small><h3>A trust score that explains itself</h3><span class="go">Open Observe →</span></div>
+    </a>
+    <a class="tcard rv t6" href="/app#detect" aria-label="Open Detect">
+      <div class="tv tv-det">
+        <ul><li><b class="dot hi"></b>Revenue gap on 30 Oct<em class="sv hi">HIGH</em></li><li><b class="dot md"></b>9 payments failed a rule<em class="sv md">MEDIUM</em></li><li><b class="dot lo"></b>6 duplicate payments removed<em class="sv lo">LOW</em></li></ul>
+      </div>
+      <div class="tt"><small>Detect</small><h3>Open incidents, most severe first</h3><span class="go">Open Detect →</span></div>
+    </a>
+    <a class="tcard rv t2" href="/app#lineage" aria-label="Open Lineage">
+      <div class="tv tv-lin">
+        <svg viewBox="0 0 200 150" aria-hidden="true"><path d="M30 75 H70 M100 75 H140 M70 75 L100 30 M70 75 L100 120 M140 75 H170" stroke="#9fd9c8" stroke-width="2" fill="none"/><g font-size="9" font-weight="600" text-anchor="middle" fill="#0b1b2b"><circle cx="30" cy="75" r="13" fill="#e5f8f2" stroke="#00c895" stroke-width="2"/><circle cx="70" cy="75" r="13" fill="#e5f8f2" stroke="#00c895" stroke-width="2"/><circle cx="100" cy="30" r="13" fill="#fdeeee" stroke="#e5484d" stroke-width="2"/><circle cx="100" cy="120" r="13" fill="#e5f8f2" stroke="#00c895" stroke-width="2"/><circle cx="140" cy="75" r="13" fill="#fff6e5" stroke="#f0a020" stroke-width="2"/><circle cx="170" cy="75" r="13" fill="#e5f8f2" stroke="#00c895" stroke-width="2"/></g></svg>
+      </div>
+      <div class="tt"><small>Explain</small><h3>Trace every number to its source</h3><span class="go">Open Lineage →</span></div>
+    </a>
+    <a class="tcard rv t4" href="/app#impact" aria-label="Open Impact and decide">
+      <div class="tv tv-imp">
+        <div class="gap"><span>Settlement</span><div class="bar"><i style="--w:100%"></i></div></div>
+        <div class="gap"><span>Gold revenue</span><div class="bar"><i style="--w:88%"></i><u style="--w:12%"></u></div></div>
+        <div class="gapnote">Gap: ₹6,401.15 <em>Approve auto-fix</em></div>
+      </div>
+      <div class="tt"><small>Impact &amp; decide</small><h3>Quantify the loss, then fix it in one click</h3><span class="go">Open Impact →</span></div>
+    </a>
+  </div>
+</section>
+
+<!-- ASK -->
+<section class="wrap sec" id="try-ai">
+  <div class="split">
+    <div class="rv">
+      <p class="eyebrow">Ask DataTrust AI</p>
+      <h2>Ask your data a question</h2>
+      <p class="sub left">Ask about revenue by period, method or region, missing data, rejected payments or reconciliation. Answers come from your Gold views, not from guesses.</p>
+      <div class="cta-row"><a class="btn btn-dark" href="/app#ask">Open the full assistant</a><a class="btn btn-line" href="/app#estate-ask">Estate assistant</a></div>
+    </div>
+    <div class="chat rv">
+      <div class="chat-log" id="chatLog" aria-live="polite"><div class="msg bot">Hi! Ask me about revenue, rejects or reconciliation.</div></div>
+      <div class="sugg" id="sugg"><button type="button">Revenue by month</button><button type="button">Why were payments rejected?</button><button type="button">Does settlement match silver?</button></div>
+      <form class="chat-form" id="askForm" autocomplete="off">
+        <input id="askInput" type="text" placeholder="Type a question…" aria-label="Your question" maxlength="300">
+        <button class="btn btn-green" type="submit" id="askBtn">Ask</button>
+      </form>
+    </div>
+  </div>
+</section>
+
+<!-- PLATFORM -->
+<section class="wrap sec" id="platform">
+  <div class="head rv"><p class="eyebrow">The platform</p><h2>The platform for trusted data</h2>
+    <p class="sub">One place to monitor every layer, prove why a number is wrong, and fix it. Every card below opens the matching service.</p></div>
+  <div class="pgrid"><article class="pcard rv c0"><span class="pic"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M3 12h4l3-8 4 16 3-8h4"/></svg></span><small>Monitor</small><h3>Know the state of your data at all times</h3><ul><li><a href="/app#observe">Observe <i>→</i></a></li><li><a href="/app#detect">Detect <i>→</i></a></li><li><a href="/app#pipeline">Pipeline log <i>→</i></a></li></ul></article><article class="pcard rv c1"><span class="pic"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M11 17a6 6 0 1 0 0-12 6 6 0 0 0 0 12zM20 20l-4.5-4.5"/></svg></span><small>Analyse</small><h3>Find the root cause and decide</h3><ul><li><a href="/app#investigate">Investigate <i>→</i></a></li><li><a href="/app#lineage">Explain (lineage) <i>→</i></a></li><li><a href="/app#impact">Impact &amp; decide <i>→</i></a></li><li><a href="/app#verify">Verify <i>→</i></a></li></ul></article><article class="pcard rv c2"><span class="pic"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M21 12a8 8 0 0 1-11.6 7.1L4 20l1.1-4.6A8 8 0 1 1 21 12z"/></svg></span><small>Assistant</small><h3>Ask in plain English</h3><ul><li><a href="/app#ask">Ask DataTrust AI <i>→</i></a></li><li><a href="/app#estate-ask">Estate assistant <i>→</i></a></li></ul></article><article class="pcard rv c3"><span class="pic"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M9 3h6M10 3v6l-5 9a2 2 0 0 0 1.7 3h10.6a2 2 0 0 0 1.7-3l-5-9V3"/></svg></span><small>Data quality</small><h3>Stop bad rows at the door</h3><ul><li><a href="/app#estate-dq-rejected">Rejected records <i>→</i></a></li><li><a href="/app#estate-dq-rules">DQ Rule Studio <i>→</i></a></li></ul></article></div>
+</section>
+
+<!-- ARCHITECTURE -->
+<section class="band-soft" id="how">
+  <div class="wrap sec">
+    <div class="head rv"><p class="eyebrow">How it works</p><h2>From source file to a verified fix</h2>
+      <p class="sub">Batch and streaming data flow through Bronze, Silver and Gold in PostgreSQL. DataTrust AI reads every layer and the audit trail.</p></div>
+    <div class="flowviz rv">
+      <svg class="flowsvg" viewBox="0 0 1000 250" role="img" aria-label="Animated data flow from source files through Bronze, Silver and Gold, watched by DataTrust AI, with an incident at Silver">
+        <defs><linearGradient id="gl" gradientUnits="userSpaceOnUse" x1="100" y1="0" x2="900" y2="0"><stop offset="0" stop-color="#00c895"/><stop offset="1" stop-color="#2b7de9"/></linearGradient></defs>
+        <path id="fp" d="M100 125 H900" fill="none" stroke="url(#gl)" stroke-width="3" stroke-dasharray="6 8" opacity=".55"/>
+        <circle r="6" fill="#00c895"><animateMotion dur="5s" repeatCount="indefinite"><mpath href="#fp"/></animateMotion></circle>
+        <circle r="6" fill="#00c895"><animateMotion dur="5s" begin="-1.25s" repeatCount="indefinite"><mpath href="#fp"/></animateMotion></circle>
+        <circle r="6" fill="#2b7de9"><animateMotion dur="5s" begin="-2.5s" repeatCount="indefinite"><mpath href="#fp"/></animateMotion></circle>
+        <circle r="6" fill="#2b7de9"><animateMotion dur="5s" begin="-3.75s" repeatCount="indefinite"><mpath href="#fp"/></animateMotion></circle>
+        <a class="fn" href="/app#pipeline"><rect x="30" y="92" width="140" height="66" rx="16"/><text x="100" y="123">Source</text><text class="s" x="100" y="143">CSV · Kafka</text></a>
+        <a class="fn" href="/app#lineage"><rect x="230" y="92" width="140" height="66" rx="16"/><text x="300" y="123">Bronze</text><text class="s" x="300" y="143">raw, as received</text></a>
+        <rect class="pingr" x="430" y="92" width="140" height="66" rx="16"/>
+        <a class="fn bad" href="/app#estate-dq-rejected"><rect x="430" y="92" width="140" height="66" rx="16"/><text x="500" y="123">Silver</text><text class="s" x="500" y="143">rules applied</text></a>
+        <a class="fn" href="/app#impact"><rect x="630" y="92" width="140" height="66" rx="16"/><text x="700" y="123">Gold</text><text class="s" x="700" y="143">reports</text></a>
+        <a class="fn ai" href="/app#observe"><rect x="830" y="92" width="140" height="66" rx="16"/><text x="900" y="123">DataTrust AI</text><text class="s" x="900" y="143">watching every layer</text></a>
+        <path d="M500 66 V90" stroke="#e5484d" stroke-width="2"/><rect x="428" y="36" width="144" height="30" rx="15" fill="#fde3e4"/><text class="ftag" x="500" y="56" fill="#b4262c">9 payments rejected</text>
+        <path d="M700 160 V188" stroke="#f0a020" stroke-width="2"/><rect x="592" y="188" width="216" height="30" rx="15" fill="#fff3dc"/><text class="ftag" x="700" y="208" fill="#8a5a00">₹6,401.15 short of settlement</text>
+      </svg>
+    </div>
+    <ol class="arch rv" aria-label="Architecture">
+      <li><b>Source</b><span>CSV on Azure Data Lake or local, plus Kafka events every 30 s</span></li>
+      <li><b>Bronze</b><span>Raw data, kept as received</span></li>
+      <li><b>Silver</b><span>Rules applied, duplicates removed, rejects kept for review</span></li>
+      <li><b>Gold</b><span>Revenue and settlement reconciliation views</span></li>
+      <li class="hl"><b>DataTrust AI</b><span>Detect, investigate, explain, decide, verify</span></li>
+    </ol>
+    <ol class="six">
+      <li class="rv"><a href="/app#observe"><em>1</em><b>Observe</b></a></li>
+      <li class="rv"><a href="/app#detect"><em>2</em><b>Detect</b></a></li>
+      <li class="rv"><a href="/app#investigate"><em>3</em><b>Investigate</b></a></li>
+      <li class="rv"><a href="/app#lineage"><em>4</em><b>Explain</b></a></li>
+      <li class="rv"><a href="/app#impact"><em>5</em><b>Impact &amp; decide</b></a></li>
+      <li class="rv"><a href="/app#verify"><em>6</em><b>Verify</b></a></li>
+    </ol>
+  </div>
+</section>
+
+<!-- SERVICES TABS -->
+<section class="wrap sec" id="services">
+  <div class="head rv"><p class="eyebrow">Services</p><h2>Everything in one app</h2>
+    <p class="sub">Pick an area and jump straight into it.</p></div>
+  <div class="tabs rv">
+    <div class="tablist" role="tablist" aria-label="Services"><button role="tab" id="t0" aria-controls="p0" aria-selected="true" tabindex="0">Monitor</button><button role="tab" id="t1" aria-controls="p1" aria-selected="false" tabindex="-1">Analyse</button><button role="tab" id="t2" aria-controls="p2" aria-selected="false" tabindex="-1">Assistant</button><button role="tab" id="t3" aria-controls="p3" aria-selected="false" tabindex="-1">Data quality</button><button role="tab" id="t4" aria-controls="p4" aria-selected="false" tabindex="-1">Data estate</button></div>
+    <div role="tabpanel" id="p0" aria-labelledby="t0" class="tp"><div class="tp-text"><h3>Observe every run</h3><p>A trust score that explains itself, KPIs, quality bars and revenue charts. Detect lists open incidents, most severe first, and the pipeline log shows every step of every run.</p><a class="btn btn-dark" href="/app#observe">Open Observe</a></div><div class="svc-list"><a class="svc" href="/app#observe"><b>Observe</b><span>Trust score, KPIs, revenue charts and layer status</span><i>→</i></a><a class="svc" href="/app#detect"><b>Detect</b><span>Open incidents, most severe first</span><i>→</i></a><a class="svc" href="/app#pipeline"><b>Pipeline log</b><span>Every run and step, in order</span><i>→</i></a></div></div><div role="tabpanel" id="p1" aria-labelledby="t1" class="tp" hidden><div class="tp-text"><h3>From a wrong number to a proven cause</h3><p>Investigate shows the root cause with evidence checks that name their source. Explain traces lineage, Impact quantifies revenue at risk and offers one-click auto-fix, and Verify confirms on the next run.</p><a class="btn btn-dark" href="/app#investigate">Open Investigate</a></div><div class="svc-list"><a class="svc" href="/app#investigate"><b>Investigate</b><span>Root cause with evidence checks</span><i>→</i></a><a class="svc" href="/app#lineage"><b>Explain (lineage)</b><span>Source to Gold, with rows held back</span><i>→</i></a><a class="svc" href="/app#impact"><b>Impact &amp; decide</b><span>Revenue at risk, auto-fix and approval</span><i>→</i></a><a class="svc" href="/app#verify"><b>Verify</b><span>Resolved only when the next run is clean</span><i>→</i></a></div></div><div role="tabpanel" id="p2" aria-labelledby="t2" class="tp" hidden><div class="tp-text"><h3>Ask DataTrust AI</h3><p>Ask about revenue by period, method or region, missing data, rejects and reconciliation. Models only get fixed read-only tools, so answers stay grounded in your Gold views.</p><a class="btn btn-dark" href="/app#ask">Open Ask DataTrust AI</a></div><div class="svc-list"><a class="svc" href="/app#ask"><b>Ask DataTrust AI</b><span>Plain-English questions on your Gold data</span><i>→</i></a><a class="svc" href="/app#estate-ask"><b>Estate assistant</b><span>Ask about connections, catalog and access</span><i>→</i></a></div></div><div role="tabpanel" id="p3" aria-labelledby="t3" class="tp" hidden><div class="tp-text"><h3>Fix data at the source</h3><p>Review rejected records and correct them, then approve. Use DQ Rule Studio to create and tune the rules that decide what Silver accepts.</p><a class="btn btn-dark" href="/app#estate-dq-rejected">Open Rejected records</a></div><div class="svc-list"><a class="svc" href="/app#estate-dq-rejected"><b>Rejected records</b><span>Review and correct rejected rows</span><i>→</i></a><a class="svc" href="/app#estate-dq-rules"><b>DQ Rule Studio</b><span>Create and tune quality rules</span><i>→</i></a></div></div><div role="tabpanel" id="p4" aria-labelledby="t4" class="tp" hidden><div class="tp-text"><h3>Know every connection</h3><p>Connect databases, browse the catalog, see what changed and what failed, and manage access requests. Connect helps you find the right person for a data question.</p><a class="btn btn-dark" href="/app#estate-connections">Open Connections</a></div><div class="svc-list"><a class="svc" href="/app#estate-connections"><b>Connections</b><span>Connect and test your databases</span><i>→</i></a><a class="svc" href="/app#estate-catalog"><b>Catalog</b><span>Browse schemas, tables and columns</span><i>→</i></a><a class="svc" href="/app#estate-activity"><b>Changes &amp; failures</b><span>What changed and what failed</span><i>→</i></a><a class="svc" href="/app#estate-access"><b>Access</b><span>Request and approve access</span><i>→</i></a><a class="svc" href="/app#estate-people"><b>Connect (people)</b><span>Find and reach the right people</span><i>→</i></a></div></div>
+  </div>
+</section>
+
+<!-- WHAT IT CATCHES -->
+<section class="band-dark">
+  <div class="wrap sec">
+    <div class="head rv light"><p class="eyebrow g">What it catches</p><h2>Problems that quietly shrink your numbers</h2>
+      <p class="sub">These are planted in the sample data to test the product.</p></div>
+    <div class="catch">
+      <article class="ccard rv"><span class="tag bad">HIGH</span><h3>Typo in status</h3><p>3 payments with status <code>CAPTRED</code> are rejected. Revenue is short by ₹3,186.00.</p><a href="/app#investigate">Investigate →</a></article>
+      <article class="ccard rv"><span class="tag mid">AUTO-FIX</span><h3>Negative amount</h3><p>4 orders arrive with a sign error and are rejected from Silver.</p><a href="/app#impact">Impact &amp; decide →</a></article>
+      <article class="ccard rv"><span class="tag bad">HIGH</span><h3>Empty currency</h3><p>9 payments have no currency. Revenue is short by ₹6,401.15. Auto-fix takes it from each order.</p><a href="/app#impact">Impact &amp; decide →</a></article>
+      <article class="ccard rv"><span class="tag low">LOW</span><h3>Duplicate payments</h3><p>6 payments are sent twice. They are removed and settlement still matches.</p><a href="/app#verify">Verify →</a></article>
+    </div>
+  </div>
+</section>
+
+<!-- TRUST SCORE -->
+<section class="wrap sec split" id="score">
+  <div class="rv">
+    <p class="eyebrow">Explainable by design</p><h2>A trust score that shows its working</h2>
+    <p class="sub left">The score starts at 100 and loses points for specific, visible reasons. The rules are plain constants in <code>data_service.py</code>, so anyone can read and tune them.</p>
+    <div class="chips"><span class="chip ok">90+ Healthy</span><span class="chip mid">75+ Needs attention</span><span class="chip bad">Below 75 At risk</span></div>
+    <a class="btn btn-dark" href="/app#observe">See your score</a>
+  </div>
+  <div class="rules rv" role="table" aria-label="Trust score rules">
+    <div role="row"><span>Start</span><b class="ok">100</b><i class="gd" style="--w:100%"></i></div>
+    <div role="row"><span>Settlement ≠ silver, per business date</span><b>−15 (max −45)</b><i style="--w:45%"></i></div>
+    <div role="row"><span>Rows lost from source to silver</span><b>up to −10</b><i style="--w:10%"></i></div>
+    <div role="row"><span>Rejected rows</span><b>up to −10</b><i style="--w:10%"></i></div>
+    <div role="row"><span>Duplicates</span><b>up to −5</b><i style="--w:5%"></i></div>
+    <div role="row"><span>Latest run has a failed or skipped layer</span><b>−30</b><i style="--w:30%"></i></div>
+    <div role="row"><span>No successful run in 24 h</span><b>−10</b><i style="--w:10%"></i></div>
+  </div>
+</section>
+
+<!-- CONNECT -->
+<section class="band-soft" id="connect">
+  <div class="wrap sec">
+    <div class="head rv"><p class="eyebrow">Connections</p><h2>Connect everything. Everywhere.</h2>
+      <p class="sub">Bring in databases, streams, alerts and AI models, then manage them from one place.</p></div>
+    <div class="cols3">
+      <article class="ccol rv"><h3>Databases &amp; lakes</h3><ul><li>PostgreSQL</li><li>SQL Server</li><li>Snowflake</li><li>Azure Data Lake</li></ul><a class="btn btn-dark" href="/app#estate-connections">Manage connections</a></article>
+      <article class="ccol rv"><h3>Pipelines &amp; streams</h3><ul><li>Apache Spark batch pipeline</li><li>Kafka payment events</li><li>Pipeline log and audit trail</li></ul><a class="btn btn-dark" href="/app#pipeline">Open pipeline log</a></article>
+      <article class="ccol rv"><h3>Alerts, AI &amp; APIs</h3><ul><li>Google Chat alerts</li><li>Ollama or Claude assistants</li><li>REST API and docs</li></ul><a class="btn btn-dark" href="/docs">Open API docs</a></article>
+    </div>
+  </div>
+</section>
+
+<!-- CTA -->
+<section class="wrap sec">
+  <div class="final rv">
+    <h2>What's holding you back from trusted data?</h2>
+    <p>Open the live app and see your own trust score, incidents and lineage.</p>
+    <div class="cta-row center-row">
+      <a class="btn btn-green btn-lg" href="/app">Open the dashboard</a>
+      <a class="btn btn-white btn-lg" href="/app#ask">Ask DataTrust AI</a>
+    </div>
+  </div>
+</section>
+</main>
+
+<footer class="foot">
+  <div class="wrap">
+    <div class="foot-grid">
+      <div class="fbrand"><a class="logo" href="/"><span class="logo-mark" aria-hidden="true"><svg viewBox="0 0 24 24"><path d="M12 3l7 3v5c0 4.6-3 8.4-7 10-4-1.6-7-5.4-7-10V6z"/><path d="M8.8 12.2l2.2 2.2 4.4-4.6"/></svg></span>DataTrust AI</a>
+        <p>The Autonomous Data Trust Mesh. Know whether you can trust your data, and why.</p>
+        <a class="btn btn-green" href="/app">Open dashboard</a></div>
+      <div><h4>Monitor</h4><ul><li><a href="/app#observe">Observe</a></li><li><a href="/app#detect">Detect</a></li><li><a href="/app#pipeline">Pipeline log</a></li></ul></div><div><h4>Analyse</h4><ul><li><a href="/app#investigate">Investigate</a></li><li><a href="/app#lineage">Explain (lineage)</a></li><li><a href="/app#impact">Impact &amp; decide</a></li><li><a href="/app#verify">Verify</a></li></ul></div><div><h4>Assistant</h4><ul><li><a href="/app#ask">Ask DataTrust AI</a></li><li><a href="/app#estate-ask">Estate assistant</a></li></ul></div><div><h4>Data quality</h4><ul><li><a href="/app#estate-dq-rejected">Rejected records</a></li><li><a href="/app#estate-dq-rules">DQ Rule Studio</a></li></ul></div><div><h4>Data estate</h4><ul><li><a href="/app#estate-connections">Connections</a></li><li><a href="/app#estate-catalog">Catalog</a></li><li><a href="/app#estate-activity">Changes &amp; failures</a></li><li><a href="/app#estate-access">Access</a></li><li><a href="/app#estate-people">Connect (people)</a></li></ul></div><div><h4>Developers</h4><ul><li><a href="/docs">API docs</a></li><li><a href="/health">Health check</a></li><li><a href="/api/version">Version</a></li></ul></div>
+    </div>
+    <p class="copy">© 2026 DataTrust AI</p>
+  </div>
+</footer>
+
+<!-- CUSTOMIZE (mode + accent, saved in this browser) -->
+<div class="cust" id="cust">
+  <div class="cust-panel" id="custPanel" hidden>
+    <h4>Customize this page</h4>
+    <p class="cl">Mode</p>
+    <div class="seg" role="group" aria-label="Mode"><button type="button" data-mode="light" aria-pressed="true">Light</button><button type="button" data-mode="dark" aria-pressed="false">Dark</button></div>
+    <p class="cl">Accent</p>
+    <div class="sw" role="group" aria-label="Accent colour">
+      <button type="button" data-acc="emerald" style="--c:#00c895" aria-label="Emerald" aria-pressed="true"></button>
+      <button type="button" data-acc="ocean" style="--c:#2b7de9" aria-label="Ocean" aria-pressed="false"></button>
+      <button type="button" data-acc="violet" style="--c:#7c5cff" aria-label="Violet" aria-pressed="false"></button>
+      <button type="button" data-acc="sunset" style="--c:#f0801f" aria-label="Sunset" aria-pressed="false"></button>
+    </div>
+    <button class="cust-reset" id="custReset" type="button">Reset to default</button>
+  </div>
+  <button class="cust-btn" id="custBtn" type="button" aria-expanded="false" aria-controls="custPanel" aria-label="Customize this page">
+    <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 3a9 9 0 1 0 0 18c1.2 0 1.8-.8 1.8-1.7 0-1-.9-1.4-.9-2.4 0-1 .8-1.7 1.8-1.7H17a4 4 0 0 0 4-4C21 6.6 17 3 12 3z"/><circle cx="7.6" cy="11" r="1.1"/><circle cx="10.2" cy="7.4" r="1.1"/><circle cx="14.4" cy="7.4" r="1.1"/></svg>
+  </button>
+</div>
+
+<script src="/static/landing.js"></script>
+</body>
+</html>
