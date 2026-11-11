@@ -29,6 +29,13 @@ class Connection:
 
 
 class BatchStatusTests(unittest.TestCase):
+    def test_connection_uses_configured_postgres_sslmode(self):
+        with patch.object(batch_status.config, "PG_SSLMODE", "require"), \
+             patch.object(batch_status.psycopg, "connect") as connect:
+            batch_status.connect()
+
+        self.assertEqual(connect.call_args.kwargs["sslmode"], "require")
+
     def test_retry_transitions_only_failed_batches_to_ready(self):
         row = {"batch_id": 7, "batch_folder": "batches/2026-11-09",
                "batch_name": "2026-11-09", "status": "READY"}

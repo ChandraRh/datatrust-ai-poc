@@ -16,6 +16,7 @@ PG_PORT = int(os.getenv("PG_PORT", "5432"))
 PG_DATABASE = os.getenv("PG_DATABASE", "datatrust_poc")
 PG_USER = os.getenv("PG_USER", "postgres")
 PG_PASSWORD = os.getenv("PG_PASSWORD", "admin")
+PG_SSLMODE = os.getenv("PGSSLMODE", "prefer")
 
 # Where the source CSV files are read from 
 # local : data/source_csv folder (no Azure needed)

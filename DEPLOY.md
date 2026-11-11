@@ -40,6 +40,7 @@ project schema and data before using the dashboard.
 |---|---|---|
 | PG_HOST, PG_PORT, PG_DATABASE, PG_USER | managed PostgreSQL | |
 | PG_PASSWORD | database password | yes |
+| PGSSLMODE | `require` for Azure PostgreSQL; defaults to `prefer` for local development | |
 | WEB_HOST | 0.0.0.0 (already set in the image) | |
 | PORT or WEB_PORT | port the platform expects (default 8000) | |
 | PORTAL_ADMIN_USER / PORTAL_ADMIN_PASSWORD | first portal admin (used only when no portal user exists) | password: yes |

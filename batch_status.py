@@ -9,6 +9,7 @@ import config
 
 def connect():
     return psycopg.connect(
+        sslmode=config.PG_SSLMODE,
         host=config.PG_HOST,
         port=config.PG_PORT,
         dbname=config.PG_DATABASE,

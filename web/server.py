@@ -64,6 +64,11 @@ try:                                                    # table for approvals ma
 except Exception as e:
     print(f"!! could not prepare audit.remediation_log: {e}")
 
+try:                                                    # PostgreSQL lifecycle state for ADLS batches
+    batch_status.ensure_table()
+except Exception as e:
+    print(f"!! could not prepare audit.adls_batch_runs: {e}")
+
 try:                                                    # DQ Rule Studio + Rejected records (own tables, own API)
     import dq
     import dq_routes

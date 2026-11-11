@@ -31,7 +31,7 @@ def auth_enabled() -> bool:
 
 def db():
     """Connection to the portal's own database (the POC database)."""
-    return psycopg.connect(host=config.PG_HOST, port=config.PG_PORT, dbname=config.PG_DATABASE,
+    return psycopg.connect(sslmode=config.PG_SSLMODE, host=config.PG_HOST, port=config.PG_PORT, dbname=config.PG_DATABASE,
                            user=config.PG_USER, password=config.PG_PASSWORD, row_factory=dict_row, connect_timeout=5)
 
 

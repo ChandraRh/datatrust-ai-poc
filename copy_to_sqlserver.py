@@ -48,7 +48,7 @@ def q(name: str) -> str:
 
 # ============================================================================ PostgreSQL side
 def pg_connect():
-    return psycopg.connect(host=config.PG_HOST, port=config.PG_PORT, dbname=config.PG_DATABASE,
+    return psycopg.connect(sslmode=config.PG_SSLMODE, host=config.PG_HOST, port=config.PG_PORT, dbname=config.PG_DATABASE,
                            user=config.PG_USER, password=config.PG_PASSWORD, connect_timeout=10)
 
 

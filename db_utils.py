@@ -15,13 +15,14 @@ from pyspark.sql import types as T
 import config
 
 JDBC_URL = f"jdbc:postgresql://{config.PG_HOST}:{config.PG_PORT}/{config.PG_DATABASE}"
-JDBC_PROPS = {"user": config.PG_USER, "password": config.PG_PASSWORD, "driver": "org.postgresql.Driver"}
+JDBC_PROPS = {"user": config.PG_USER, "password": config.PG_PASSWORD, "driver": "org.postgresql.Driver",
+              "sslmode": config.PG_SSLMODE}
 
 
 # ----------------------------------------------------------------------------- connection
 def get_connection() -> psycopg.Connection:
     """Open a connection. Nothing is saved until conn.commit() (one transaction)."""
-    return psycopg.connect(host=config.PG_HOST, port=config.PG_PORT, dbname=config.PG_DATABASE,
+    return psycopg.connect(sslmode=config.PG_SSLMODE, host=config.PG_HOST, port=config.PG_PORT, dbname=config.PG_DATABASE,
                            user=config.PG_USER, password=config.PG_PASSWORD)
 
 

@@ -28,6 +28,7 @@ services:
       PG_DATABASE: datatrust_poc
       PG_USER: postgres
       PG_PASSWORD: ${PG_PASSWORD:?Set PG_PASSWORD in a .env file}
+      PGSSLMODE: ${PGSSLMODE:-prefer}
       PORTAL_ADMIN_USER: ${PORTAL_ADMIN_USER:-admin}
       PORTAL_ADMIN_PASSWORD: ${PORTAL_ADMIN_PASSWORD:-}
       PORTAL_SECRET: ${PORTAL_SECRET:-}

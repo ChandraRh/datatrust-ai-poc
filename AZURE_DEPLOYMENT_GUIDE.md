@@ -76,9 +76,9 @@ Install Azure CLI. Install Docker too if you plan to build the image on your com
 2. Select a PostgreSQL version supported by Azure and compatible with the project's data/backup. Check compatibility before restoring; the project deployment notes have targeted PostgreSQL 17.
 3. Create a database, for example `datatrust_poc`.
 4. Create dedicated logins for the website and pipeline worker. Do not use the PostgreSQL server administrator as an application login.
-5. Grant each login only the database/schema permissions it needs:
-   - Website: read access to `bronze`, `silver`, `gold`, and `audit`; permission to create portal tables on first start; required portal/approval writes; and `SELECT`/`UPDATE` on `audit.adls_batch_runs` so the Pipeline log can show batches and admins can queue retries.
-   - Pipeline worker: permission to create/update `bronze`, `silver`, `gold`, and `audit` objects and write pipeline status, quality, and error records, including `audit.adls_batch_runs`.
+5. Run `python run_pipeline.py --setup` using a deployment/migration login before starting the services. Grant each application login only the required database/schema permissions:
+   - Website: read access to `bronze`, `silver`, `gold`, and `audit`; write access to the portal and approval tables; and `SELECT`/`UPDATE` on `audit.adls_batch_runs`. The web app initializes portal and feature tables at startup, so pre-create the `portal` schema and grant the web login `USAGE` and `CREATE` on `portal` and `audit` (or use an approved migration process that supplies these tables).
+   - Pipeline worker: permission to create/update `bronze`, `silver`, `gold`, and `audit` objects and write pipeline status, quality, error, and batch lifecycle records.
 6. Load the project's data by restoring an available database backup or running the separate data pipeline.
 
 The repository mentions a `datatrust_backup.backup` file. Confirm that your team has the file before planning to restore it.
@@ -179,22 +179,20 @@ Open **App Service > Settings > Environment variables** and add the settings bel
 
 ### Required: Data Estate login
 
-These settings keep sign-in enabled for the Data Estate sections (Connections, Catalog, Activity, Access, and their APIs).
+These settings keep sign-in enabled for the Data Estate sections (Connections, Catalog, Activity, Access, and their APIs). Set the bootstrap password to a unique, strong value before the first start; store it as a Key Vault secret.
 
 | Setting name | Value to enter |
 |---|---|
 | `PORTAL_AUTH_ENABLED` | `true` |
 | `PORTAL_ADMIN_USER` | `admin` for the current POC setup |
 | `PORTAL_ADMIN_EMAIL` | The admin's real email address |
-| `PORTAL_ADMIN_PASSWORD` | `admin` for the current temporary POC setup; store as a Key Vault secret and restrict access to the site |
+| `PORTAL_ADMIN_PASSWORD` | A unique, strong bootstrap password; store as a Key Vault secret |
 | `PORTAL_SECRET` | A long random secret stored in Key Vault; keep it unchanged across restarts and instances |
 | `PORTAL_COOKIE_SECURE` | `true` because the Azure site uses HTTPS |
 
-For a **new/empty portal user table**, the first admin account is created from these settings. The current requested sign-in is `admin` / `admin`. The configured admin email is marked verified when the account is first created.
+For a **new/empty portal user table**, the first admin account is created from these settings. The configured admin email is marked verified when the account is first created. If no bootstrap password is configured, the app generates one and prints it once to its startup logs; configure the Key Vault secret first to avoid putting a credential in logs.
 
 The account is created only when the portal has no users. If the Azure database already contains portal accounts, changing `PORTAL_ADMIN_PASSWORD` will **not** reset an existing password. Use the existing account or its password-reset process.
-
-`admin/admin` is a weak password. Use it only temporarily, restrict access to the Azure site, and replace it before allowing broader access.
 
 To generate a random value for `PORTAL_SECRET`, run locally:
 
@@ -266,7 +264,7 @@ Before sharing the site publicly, use an approved Azure-level access control, su
 - App Service Authentication with Microsoft Entra ID, configured to require sign-in; or
 - App Service access restrictions or private networking so only approved users/network locations can reach it.
 
-The Data Estate `admin/admin` login is a temporary POC login, not a replacement for company-wide single sign-on.
+The Data Estate login is a POC login, not a replacement for company-wide single sign-on. Use a unique bootstrap password and protect the whole site with Azure-level access control.
 
 ## Step 7: Create the ADLS pipeline worker
 
@@ -382,7 +380,7 @@ Kafka streaming is a different, optional input path. It is not needed for ADLS b
 5. Upload a complete test batch to ADLS, then upload `_READY` last. Within the polling interval, worker logs should show the batch starting.
 6. Confirm the website's Pipeline log shows the batch status and PostgreSQL has the run details.
 7. Open the dashboard and check that expected data appears. The website checks for updates about every 15 seconds.
-8. Open a Data Estate section and sign in. For a new portal database, use `admin` / `admin` as configured above.
+8. Open a Data Estate section and sign in with the bootstrap credentials configured in App Service.
 9. If something fails, check both App Service and worker logs, plus PostgreSQL connectivity and permissions.
 
 The Docker image has a container health check. App Service's Health check feature is configured separately; if you use it, set its path to `/health` and confirm your App Service plan supports it.

@@ -53,7 +53,7 @@ HEALTHY, ATTENTION = 90, 75             # >= 90 Healthy, >= 75 Needs attention, 
 
 # ============================================================================ database helpers
 def connect(read_only: bool = True):
-    conn = psycopg.connect(host=config.PG_HOST, port=config.PG_PORT, dbname=config.PG_DATABASE,
+    conn = psycopg.connect(sslmode=config.PG_SSLMODE, host=config.PG_HOST, port=config.PG_PORT, dbname=config.PG_DATABASE,
                            user=config.PG_USER, password=config.PG_PASSWORD, row_factory=dict_row,
                            connect_timeout=5)
     if read_only:
@@ -79,7 +79,7 @@ def _reader():
     part of a page refresh). Autocommit: every query sees the latest committed data. Reconnects when broken."""
     conn = getattr(_local, "conn", None)
     if conn is None or conn.closed or conn.broken:
-        conn = psycopg.connect(host=config.PG_HOST, port=config.PG_PORT, dbname=config.PG_DATABASE,
+        conn = psycopg.connect(sslmode=config.PG_SSLMODE, host=config.PG_HOST, port=config.PG_PORT, dbname=config.PG_DATABASE,
                                user=config.PG_USER, password=config.PG_PASSWORD, row_factory=dict_row,
                                connect_timeout=5, autocommit=True)
         conn.execute("SET default_transaction_read_only = on")
