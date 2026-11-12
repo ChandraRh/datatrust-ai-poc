@@ -48,9 +48,27 @@ def sources(user: dict = Depends(current_user)):
     return _hide(insights.sources(), user)
 
 
+@router.get("/draft")
+def get_draft(user: dict = Depends(admin_user)):
+    """The Connect ADF form as the admin last saved it (survives restarts), or null."""
+    return store.get_draft()
+
+
+@router.put("/draft")
+def save_draft(body: SourceBody, user: dict = Depends(admin_user)):
+    return {"saved": store.save_draft(body.name, body.config, user["username"])}
+
+
+@router.delete("/draft")
+def clear_draft(user: dict = Depends(admin_user)):
+    store.clear_draft()
+    return {"ok": True}
+
+
 @router.post("/test")
 def test(body: SourceBody, user: dict = Depends(admin_user)):
     """Try the settings step by step and say exactly which step fails (sign-in, factory, pipelines, run history)."""
+    store.save_draft(body.name, body.config, user["username"])          # testing keeps what was typed
     steps = []
     try:
         cfg = store.validate_config(body.config)
@@ -82,6 +100,7 @@ def test(body: SourceBody, user: dict = Depends(admin_user)):
 @router.post("/sources")
 def add_source(body: SourceBody, user: dict = Depends(admin_user)):
     sid = guard(store.add_source, body.name, body.config, user["username"])
+    store.clear_draft()                                                  # connected: the form starts empty again
     estate_store.audit(user["username"], "ADF_CONNECTED", body.name or body.config.get("factory_name", ""),
                        f"{body.config.get('resource_group')}/{body.config.get('factory_name')}")
     _sync_now(sid, user["username"])

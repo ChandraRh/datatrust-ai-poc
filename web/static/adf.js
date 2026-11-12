@@ -355,8 +355,10 @@
           ${log.map((l) => `<tr><td class="nowrap small">${esc(when(l.started_at))}</td><td class="small">${esc(l.started_by)}</td><td>${chip(l.status === "SUCCEEDED" ? "Succeeded" : l.status === "FAILED" ? "Failed" : l.status === "RUNNING" ? "InProgress" : "WARN")}</td>
             <td class="num">${n0(l.pipeline_runs)}</td><td class="num">${n0(l.task_runs)}</td><td class="num">${n0(l.checks)}</td><td class="small adf-msg">${esc(l.error || "")}</td></tr>`).join("")}</tbody></table></div></details></div>`;
     }));
-    const e = A.editing ? (srcs.find((s) => s.source_id === A.editing) || {}) : {};
+    const draft = admin && !A.editing ? await api("/draft").catch(() => null) : null;
+    const e = A.editing ? (srcs.find((s) => s.source_id === A.editing) || {}) : draft ? { name: draft.body.name, config: draft.body.config } : {};
     const c = e.config || { auth_mode: "service_principal", lookback_days: 30, client_secret_env: "ADF_CLIENT_SECRET" };
+    const savedNote = (d) => d ? `Details saved ${esc(ago(d.saved_at))}${d.saved_by ? ` by ${esc(d.saved_by)}` : ""}. They stay here until you connect or clear them.` : "";
     const field = (id, label, val, ph, help) => `<label class="field"><span>${label}</span><input id="${id}" value="${esc(val ?? "")}" placeholder="${esc(ph || "")}" autocomplete="off">${help ? `<span class="small muted">${help}</span>` : ""}</label>`;
     const form = admin ? `<div class="card" id="adfForm"><h3>${A.editing ? `Edit ${esc(e.name)}` : "Connect a Data Factory"}</h3>
         <p class="small muted">DataTrust only reads. It never changes pipelines, triggers or data. Secrets are not stored here: you enter the <b>name</b> of an environment variable (.env locally, an App Service setting / Key Vault reference in Azure).</p>
@@ -374,13 +376,17 @@
           <div class="sp ${c.auth_mode === "service_principal" ? "" : "hidden"}">${field("afSecret", "Client secret variable", c.client_secret_env, "ADF_CLIENT_SECRET", "name of the variable that holds the secret")}</div>
           ${field("afStorage", "Storage connection variable (optional)", c.storage_connection_env, "e.g. ADF_STORAGE_CONN", "only if the storage checks should not use the identity above")}
           <label class="field"><span>Target database for checks (optional)</span><select id="afTarget"><option value="">Match by host name automatically</option>
-            ${conns.filter((x) => x.source_type === "postgresql").map((x) => `<option value="${x.connection_id}" ${c.target_connection_id === x.connection_id ? "selected" : ""}>${esc(x.name)} (${esc(x.host)})</option>`).join("")}</select>
+            ${conns.filter((x) => x.source_type === "postgresql").map((x) => `<option value="${x.connection_id}" ${String(c.target_connection_id ?? "") === String(x.connection_id) ? "selected" : ""}>${esc(x.name)} (${esc(x.host)})</option>`).join("")}</select>
             <span class="small muted">Data estate connection used to check the target tables</span></label>
           ${field("afDays", "History to read (days)", c.lookback_days || 30, "30", "ADF keeps 45 days")}
           ${field("afFresh", "Max hours between successful runs (optional)", c.freshness_hours || "", "e.g. 24", "for pipelines without a schedule trigger")}
         </div>
-        <div class="pacts"><button class="btn light" id="afTest">Test connection</button> <button class="btn" id="afSave">${A.editing ? "Save changes" : "Connect"}</button>
-          ${A.editing ? `<label class="small"><input type="checkbox" id="afEnabled" ${e.enabled ? "checked" : ""}> sync enabled</label> <button class="btn light" id="afCancel">Cancel</button>` : ""}</div>
+        <div class="pacts"><button class="btn light" id="afTest">Test connection</button>
+          ${A.editing ? "" : `<button class="btn light" id="afDraft">Save details</button>`}
+          <button class="btn" id="afSave">${A.editing ? "Save changes" : "Connect"}</button>
+          ${A.editing ? `<label class="small"><input type="checkbox" id="afEnabled" ${e.enabled ? "checked" : ""}> sync enabled</label> <button class="btn light" id="afCancel">Cancel</button>`
+            : `<button class="btn light ${draft ? "" : "hidden"}" id="afClear">Clear form</button>`}</div>
+        ${A.editing ? "" : `<p class="small muted" id="afSaved">${savedNote(draft)}</p>`}
         <div id="afResult"></div></div>` : `<div class="card"><p class="muted">Only an admin can connect or change a Data Factory.</p></div>`;
     const guide = `<div class="card"><h3>What DataTrust needs in Azure</h3><ol class="small adf-guide">
         <li><b>An identity.</b> Create an app registration (Entra ID → App registrations → New) and a client secret, or run DataTrust with a managed identity.
@@ -424,10 +430,22 @@
           target_connection_id: $e("afTarget").value || null, lookback_days: Number($e("afDays").value) || 30,
           freshness_hours: Number($e("afFresh").value) || null } });
         const out = $e("afResult");
+        const showSaved = (when) => { if (A.editing) return;
+          $e("afSaved").innerHTML = savedNote({ saved_at: when || new Date().toISOString(), saved_by: est.user && est.user.username });
+          $e("afClear").classList.remove("hidden"); };
+        if ($e("afDraft")) $e("afDraft").onclick = async () => {
+          try { await eapi("/adf/draft", { method: "PUT", body: JSON.stringify(body()) }); showSaved(); toast("Details saved"); }
+          catch (x) { out.innerHTML = errBox(x); }
+        };
+        if ($e("afClear")) $e("afClear").onclick = async () => {
+          try { await eapi("/adf/draft", { method: "DELETE" }); toast("Form cleared"); renderEstate("estate-adf-setup"); }
+          catch (x) { out.innerHTML = errBox(x); }
+        };
         $e("afTest").onclick = async () => {
           out.innerHTML = "<p class='muted'>Testing… (sign-in, factory, pipelines, run history)</p>";
           try {
             const r = await post("/adf/test", body());
+            showSaved();
             out.innerHTML = `<div class="${r.ok ? "draft" : "error-box"}">${r.steps.map((s) => `<div>${s.ok ? "✔" : "✖"} <b>${esc(s.step)}</b>: ${esc(s.detail)}</div>`).join("")}</div>`;
           } catch (x) { out.innerHTML = errBox(x); }
         };

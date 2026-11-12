@@ -238,6 +238,19 @@ class StoreHelperTests(unittest.TestCase):
 
 
 # ============================================================================ webhook
+    def test_draft_keeps_partial_form_but_never_a_secret(self):
+        d = store.clean_draft(" My ADF ", {"subscription_id": "1234abcd", "factory_name": "adf-demo",
+                                           "client_secret_env": "abc1~fake-secret-value", "storage_connection_env": "ADF_STORAGE_CONN",
+                                           "lookback_days": 30, "freshness_hours": None, "password": "x"})
+        self.assertEqual(d["name"], "My ADF")
+        self.assertEqual(d["config"]["subscription_id"], "1234abcd")          # unfinished values are kept as typed
+        self.assertEqual(d["config"]["client_secret_env"], "")                # a pasted secret is dropped
+        self.assertEqual(d["config"]["storage_connection_env"], "ADF_STORAGE_CONN")
+        self.assertEqual(d["config"]["lookback_days"], "30")
+        self.assertEqual(d["config"]["freshness_hours"], "")
+        self.assertNotIn("password", d["config"])
+
+
 class WebhookTests(unittest.TestCase):
     def setUp(self):
         from adf import routes

@@ -168,6 +168,14 @@ CREATE TABLE IF NOT EXISTS telemetry.sync_log (
     checks           INTEGER DEFAULT 0,
     error            TEXT
 );
+
+-- what an admin typed on Connect ADF but has not connected yet (one form; no secrets, only variable names)
+CREATE TABLE IF NOT EXISTS telemetry.setup_draft (
+    draft_id   INTEGER PRIMARY KEY DEFAULT 1 CHECK (draft_id = 1),
+    body       JSONB NOT NULL,
+    saved_by   TEXT,
+    saved_at   TIMESTAMPTZ NOT NULL DEFAULT now()
+);
 """
 
 
@@ -216,6 +224,41 @@ def validate_config(cfg: dict) -> dict:
     if not 1 <= out["lookback_days"] <= 45:
         raise ValueError("lookback_days must be 1-45 (ADF keeps run history for 45 days)")
     return out
+
+
+DRAFT_KEYS = ("subscription_id", "resource_group", "factory_name", "auth_mode", "tenant_id", "client_id",
+              "client_secret_env", "storage_connection_env", "target_connection_id", "lookback_days", "freshness_hours")
+
+
+def clean_draft(name: str, cfg: dict) -> dict:
+    """The unfinished form, kept as typed (no validation), minus anything that is not a variable NAME where one is expected,
+    so a secret pasted into the wrong field is never saved."""
+    out = {k: str(cfg.get(k) if cfg.get(k) is not None else "").strip()[:200] for k in DRAFT_KEYS}
+    for k in ("client_secret_env", "storage_connection_env"):
+        if out[k] and not ENV_NAME.match(out[k]):
+            out[k] = ""
+    return {"name": (name or "").strip()[:90], "config": out}
+
+
+def get_draft() -> dict | None:
+    with connect() as conn:
+        return conn.execute("SELECT body, saved_by, saved_at FROM telemetry.setup_draft WHERE draft_id = 1").fetchone()
+
+
+def save_draft(name: str, cfg: dict, by: str) -> dict:
+    body = clean_draft(name, cfg)
+    with connect() as conn:
+        conn.execute("""INSERT INTO telemetry.setup_draft (draft_id, body, saved_by, saved_at) VALUES (1, %s, %s, now())
+                        ON CONFLICT (draft_id) DO UPDATE SET body = EXCLUDED.body, saved_by = EXCLUDED.saved_by, saved_at = now()""",
+                     (J(body), by))
+        conn.commit()
+    return body
+
+
+def clear_draft() -> None:
+    with connect() as conn:
+        conn.execute("DELETE FROM telemetry.setup_draft")
+        conn.commit()
 
 
 def public(src: dict) -> dict:
