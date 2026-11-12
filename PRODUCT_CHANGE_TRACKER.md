@@ -30,7 +30,7 @@ Plain-language record of architecture and deployment foundation work. Improvemen
 | P0 | Build and test automation | Run Docker builds in CI and add automated API, database migration, and connector contract tests. |
 | P0 | Secure tenant identity | Implement and test tenant-scoped authentication/authorization before exposing ingestion to customers. |
 | P1 | Telemetry ingestion | Add an authenticated, durable, idempotent ingestion path that validates the event contract and records provenance. |
-| P1 | First customer integration | Choose the first customer-priority platform and implement read-only run/error/asset collection end-to-end. Azure Data Factory is one candidate, not an implemented connector. |
+| P1 | First customer integration | **Azure Data Factory connector built** (`web/adf`, pages under "Azure Data Factory", [`docs/ADF_CONNECTOR.md`](./docs/ADF_CONNECTOR.md)). Tested with recorded-shape API payloads, a real PostgreSQL database and headless-browser screenshots; **still to do: validate against the live ADF pipelines** (ADLS/Blob → PostgreSQL). |
 | P1 | Shared observability model | Persist tenants, sources, pipelines, runs, tasks, assets, lineage edges, quality results, and incidents with migrations and retention policies. |
 | P1 | Incident operations | Add configurable severity, ownership, acknowledgement, routing, escalation, and incident audit history. |
 | P2 | Enterprise operations | Add SSO, secret-store integration/rotation, retention/deletion, backups, monitoring, and runbooks. |

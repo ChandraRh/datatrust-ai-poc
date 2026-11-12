@@ -43,6 +43,12 @@ With authentication enabled, copy `.env.example` to `.env`, then configure:
 
 Set `DATATRUST_PUBLIC_URL` for deployed environments so emailed links use the public HTTPS address. Email/password accounts must verify their email before signing in. New accounts are viewers; admin access is assigned through the bootstrap account or `PORTAL_ADMIN_EMAILS`. Existing users without a linked verified email need an administrator email configured before they can sign in. See the [Azure deployment guide](../AZURE_DEPLOYMENT_GUIDE.md) for cloud settings and Google/Gmail setup.
 
+## Azure Data Factory connector
+Connect a factory on **Connect ADF** (read-only Azure access: see [docs/ADF_CONNECTOR.md](../docs/ADF_CONNECTOR.md)). The
+server reads it every `ADF_POLL_SECONDS` and the **ADF pipelines / ADF issues / ADF runs** pages show every run, step, error,
+diagnosed cause and the checks DataTrust runs on the ADLS source files and PostgreSQL target tables. Run the collector as its own
+process with `ADF_COLLECTOR_IN_WEB=false` and `python web/adf/collector.py`.
+
 ## Pages
 | Page | What it shows | Where the data comes from |
 |---|---|---|

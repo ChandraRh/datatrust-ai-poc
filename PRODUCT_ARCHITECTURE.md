@@ -5,7 +5,8 @@
 - The main pipeline is a PySpark medallion POC: local/ADLS files flow through Bronze, Silver, and PostgreSQL Gold views.
 - The web dashboard reads that POC's Gold views and audit tables. Its trust score, reconciliation, and some incident logic use the demo's data model.
 - The Data Estate can browse PostgreSQL and SQL Server. Snowflake and SAP HANA can be connection-tested, but do not have catalog-browsing connectors.
-- Kafka streaming is an optional add-on. The web app is not yet a general collector for third-party orchestrators.
+- Kafka streaming is an optional add-on.
+- **Azure Data Factory connector (first external integration):** read-only collection of pipelines, runs, activity runs, trigger runs, errors with diagnosed causes, and checks of ADLS/Blob sources and PostgreSQL targets, stored in the platform-neutral `telemetry` schema. See [`docs/ADF_CONNECTOR.md`](./docs/ADF_CONNECTOR.md). Not yet validated against a live customer factory; tenant isolation is still the portal's single-tenant login.
 
 These are implemented capabilities, not a claim that arbitrary cloud pipelines are currently monitored.
 

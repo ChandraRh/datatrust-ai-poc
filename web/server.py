@@ -77,6 +77,18 @@ try:                                                    # DQ Rule Studio + Rejec
 except Exception as e:
     print(f"!! DQ Rule Studio / Rejected records not ready: {e}")
 
+try:                                                    # Azure Data Factory connector (own tables, own API, collector thread)
+    from adf import collector as adf_collector, routes as adf_routes, store as adf_store
+    app.include_router(adf_routes.router)
+    app.include_router(adf_routes.hooks)
+    adf_store.ensure_tables()
+    if adf_store.bootstrap_from_env():
+        print("Azure Data Factory: factory from .env (ADF_FACTORY_NAME) added")
+    if adf_collector.start_background():
+        print(f"Azure Data Factory collector: on (each factory every {adf_collector.POLL_SECONDS} s)")
+except Exception as e:
+    print(f"!! Azure Data Factory connector not ready: {e}")
+
 try:                                                    # Google Chat alerts (only when GOOGLE_CHAT_WEBHOOK_URL is set)
     import alerts
     if alerts.start_background():

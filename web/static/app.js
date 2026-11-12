@@ -709,7 +709,8 @@ function openFromLink() {
   const m = decodeURIComponent(location.hash.slice(1)).match(/^([\w-]+)(?:=(.+))?$/);
   if (!m || !document.getElementById("page-" + m[1])) return;
   const btn = document.querySelector(`#tabs button[data-page="${m[1]}"]`);
-  if (m[1] === "estate-dq-rejected" && m[2] && window.DQ) DQ.open(m[2]);   // #estate-dq-rejected=2026-10-08
+  if (m[1] === "estate-adf-runs" && m[2] && window.ADF) { ADF.open(m[2]); btn.click(); }   // #estate-adf-runs=<ADF run ID>
+  else if (m[1] === "estate-dq-rejected" && m[2] && window.DQ) DQ.open(m[2]);   // #estate-dq-rejected=2026-10-08
   else if (m[2]) go(m[1], m[2]); else if (btn) btn.click();
   history.replaceState(null, "", location.pathname);
 }
