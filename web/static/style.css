@@ -631,3 +631,14 @@ tr.clickable { cursor: pointer; } tr.clickable:hover td { background: var(--bran
 .adf-form .field.wide { grid-column: 1 / -1; }
 .adf-form textarea { font-family: ui-monospace, Consolas, monospace; font-size: 12.5px; padding: 9px 11px; border: 1px solid var(--line); border-radius: var(--radius-sm); resize: vertical; }
 .adf-form select[multiple] { padding: 4px; }
+
+/* ---------------------------------------------------------------- source picker (top bar): every page shows one source */
+.scope-pick { display: inline-flex; align-items: center; gap: 6px; color: rgba(255,255,255,.85); font-size: 12px; font-weight: 600;
+  text-transform: uppercase; letter-spacing: .05em; }
+.scope-pick select { max-width: 280px; padding: 6px 10px; border-radius: 999px; border: 1px solid rgba(255,255,255,.35);
+  background: rgba(255,255,255,.12); color: #fff; font-size: 13px; font-weight: 600; text-transform: none; letter-spacing: 0; }
+.scope-pick select option, .scope-pick select optgroup { color: #0F1D2E; background: #fff; }
+.scope-pick select:focus-visible { outline: 2px solid #fff; outline-offset: 2px; }
+@media (max-width: 900px) { .scope-pick span { display: none; } .scope-pick select { max-width: 170px; } }
+#refreshInfo { white-space: nowrap; }
+@media (max-width: 1500px) { .brand > span:last-child { display: none; } }

@@ -65,6 +65,21 @@ that is always rolled back, and user SQL must be one SELECT. On first start a fe
 database, including the payment-gateway reconciliation. Run the scheduler separately with `CHECKS_IN_WEB=false` and
 `python web/checks/runner.py`. SQL Server sources need `pip install pyodbc` and Microsoft ODBC Driver 18.
 
+## One source at a time
+Pick a **Source** at the top of the page: every connection (PostgreSQL, SQL Server) and every connected Data Factory.
+Observe, Detect, Investigate, Explain, Impact, Verify and the trust score then show **only that source**; nothing is
+blended across sources.
+
+| Source | Trust score from | Incidents |
+|---|---|---|
+| The POC database (the `PG_*` connection) | its pipeline rules (below), minus its other failing data checks | pipeline findings + data checks |
+| Any other database | its data checks: 100 − 40 / 25 / 10 / 4 per failing CRITICAL / HIGH / MEDIUM / LOW check, − 5 per check that could not run, − 2 per warning | its failing checks |
+| An Azure Data Factory | the average of its pipeline scores (ADF connector) | its ADF issues |
+
+A source with nothing measured yet shows "No data yet" rather than a perfect score. Incidents have a lifecycle in
+`app.incident_state`: first seen, acknowledged (button on Detect), resolved when the source's data no longer shows them.
+Google Chat alerts cover every source and name it on each card. Links: `#observe=db:3`, `#detect=adf:3`.
+
 ## Pages
 | Page | What it shows | Where the data comes from |
 |---|---|---|

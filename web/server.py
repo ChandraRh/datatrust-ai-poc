@@ -10,6 +10,8 @@ import os
 import sys
 from pathlib import Path
 
+from typing import Optional
+
 import uvicorn
 from fastapi import Depends, FastAPI, HTTPException, Request
 from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, RedirectResponse
@@ -22,6 +24,7 @@ sys.path.insert(0, str(HERE))
 import agent          # noqa: E402
 import data_service as ds  # noqa: E402
 import batch_status  # noqa: E402
+import scopes  # noqa: E402  one source at a time: overview / incidents / investigate per connection
 
 app = FastAPI(title="DataTrust AI")
 app.mount("/static", StaticFiles(directory=HERE / "static"), name="static")
@@ -99,6 +102,8 @@ try:                                                    # Data checks on any con
     checks_store.ensure_tables()
     if (n := checks_runner.seed_starter_checks()):
         print(f"Data checks: {n} starter checks added for the POC database")
+
+    scopes.ensure_tables()
     if checks_runner.start_background():
         print(f"Data checks scheduler: on (every {checks_runner.POLL_SECONDS} s)")
 except Exception as e:
@@ -150,28 +155,60 @@ def health():
 
 @app.get("/api/version")
 def version():
-    return ds.data_version()
+    """Changes whenever any source writes something: the POC pipeline, a data check result, or an ADF sync."""
+    v = ds.data_version()
+    try:
+        extra = appdb.one("""SELECT (SELECT max(result_id) FROM monitor.results) AS r,
+                                    (SELECT max(last_sync_finished)::text FROM telemetry.sources) AS t,
+                                    (SELECT count(*) FROM app.remediation_log) AS a""")
+        v["signature"] += f"|{extra.get('r')}|{extra.get('t')}|{extra.get('a')}"
+    except Exception:
+        pass
+    return v
+
+
+def _scoped(fn, *a):
+    try:
+        return fn(*a)
+    except ValueError as e:
+        raise HTTPException(400, str(e))
+
+
+@app.get("/api/scopes")
+def scopes_list():
+    """The sources a user can pick at the top of the page; every page then shows only that source."""
+    return {"scopes": scopes.list_scopes()}
 
 
 @app.get("/api/overview")
-def overview():
-    return {"overview": ds.overview(), "trust": ds.trust_score(), "pipeline": ds.pipeline_status(),
-            "as_of": ds.as_of_date().isoformat(), "llm": os.getenv("LLM_PROVIDER", "none")}
+def overview(scope: Optional[str] = None):
+    o = _scoped(scopes.overview, scope)
+    o["llm"] = os.getenv("LLM_PROVIDER", "none")
+    return o
 
 
 @app.get("/api/incidents")
-def incidents():
-    return {"open": ds.incidents(), "resolved": ds.resolved_incidents()}
+def incidents(scope: Optional[str] = None):
+    return _scoped(scopes.incidents, scope)
+
+
+@app.post("/api/incidents/{incident_id}/ack")
+def acknowledge(incident_id: str, user: dict = Depends(estate_routes.current_user)):
+    _scoped(scopes.acknowledge, incident_id, user["username"])
+    return {"ok": True}
 
 
 @app.get("/api/investigate/{incident_id}")
-def investigate(incident_id: str):
-    return ds.investigate(incident_id)
+def investigate(incident_id: str, scope: Optional[str] = None):
+    return _scoped(scopes.investigate, incident_id, scope)
 
 
 @app.get("/api/lineage")
-def lineage():
-    return ds.lineage()
+def lineage(scope: Optional[str] = None):
+    s = _scoped(scopes.resolve, scope)
+    if s["poc"]:
+        return {**ds.lineage(), "kind": "poc"}
+    return {"kind": s["kind"], **_scoped(scopes.lineage, s)}
 
 
 @app.get("/api/autofix/{incident_id}")

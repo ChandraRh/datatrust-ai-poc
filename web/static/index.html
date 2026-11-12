@@ -84,7 +84,7 @@
   <!-- 1. OBSERVE -->
   <section id="page-observe" class="page">
     <h1 id="obsTitle">1. Observe</h1>
-    <p class="sub">Source files → Bronze → Silver → Gold, monitored after every pipeline run. <span id="obsCoverage"></span></p>
+    <p class="sub"><span id="obsSub">Source files → Bronze → Silver → Gold, monitored after every pipeline run.</span> <span id="obsCoverage"></span></p>
     <div id="freshnessNotice" class="banner warn freshness-notice hidden" role="status"></div>
     <div class="grid g-1-2">
       <div class="card center">
@@ -92,14 +92,15 @@
         <div id="gaugeLabel" class="gauge-label"></div>
         <div class="muted">Data Trust Score</div>
       </div>
-      <div class="card"><h3>Trust score by business date</h3><div class="chartbox"><canvas id="trendChart"></canvas></div></div>
+      <div class="card"><h3 id="trendTitle">Trust score by business date</h3><div class="chartbox"><canvas id="trendChart"></canvas></div><p id="trendEmpty" class="muted small hidden"></p></div>
     </div>
     <div class="kpis" id="obsKpis"></div>
     <div class="grid g-2">
       <div class="card"><h3>Data quality</h3><div id="dims"></div><div id="reasons" class="small muted"></div></div>
-      <div class="card"><h3>Revenue by business date (gold.daily_revenue)</h3><div class="chartbox"><canvas id="revChart"></canvas></div></div>
+      <div class="card" id="revCard"><h3>Revenue by business date (gold.daily_revenue)</h3><div class="chartbox"><canvas id="revChart"></canvas></div></div>
+      <div class="card hidden" id="itemsCard"><h3 id="itemsTitle">What is watched</h3><div id="itemsBody" class="estate"></div></div>
     </div>
-    <div class="card"><h3>Connected estate</h3><div id="estate" class="estate"></div></div>
+    <div class="card" id="estateCard"><h3>Connected estate</h3><div id="estate" class="estate"></div></div>
   </section>
 
   <!-- ASK -->
@@ -175,7 +176,7 @@
   <!-- 6. VERIFY -->
   <section id="page-verify" class="page hidden">
     <h1>6. Verify</h1>
-    <p class="sub">An approved incident is marked resolved only when the next pipeline run no longer shows it.</p>
+    <p class="sub">An incident is marked resolved only when the latest data of this source no longer shows it: a later pipeline run, sync or check run.</p>
     <div id="verifyBody"></div>
   </section>
 

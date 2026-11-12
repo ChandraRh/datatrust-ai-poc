@@ -103,6 +103,8 @@ def _button(text, url):
 def incident_card(inc: dict, owners: list) -> dict:
     sev = inc["severity"]
     rows = [{"textParagraph": {"text": inc["summary"][:900]}}]
+    if inc.get("scope_name"):
+        rows.append({"decoratedText": {"topLabel": "Source", "text": str(inc["scope_name"])}})
     if inc.get("business_date"):
         rows.append({"decoratedText": {"topLabel": "Business date", "text": str(inc["business_date"])}})
     rows.append({"decoratedText": {"topLabel": "Owner", "text": ", ".join(f"{o['name']} ({o['email']})" for o in owners[:3])
@@ -144,7 +146,8 @@ def check_once() -> dict:
     if not webhook():
         return {"configured": False}
     floor = SEVERITY[min_severity()]
-    current = {i["id"]: i for i in ds.incidents() if SEVERITY.get(i["severity"], 0) >= floor}
+    import scopes                                           # every connected source, each incident keeps its source
+    current = {i["id"]: i for i in scopes.all_incidents() if SEVERITY.get(i["severity"], 0) >= floor}
     sent_new, sent_resolved, errors = [], [], []
     with appdb.connect() as conn:                          # DataTrust's own database
         _ensure(conn)

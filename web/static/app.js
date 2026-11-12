@@ -1,7 +1,47 @@
 // DataTrust AI web page. All data comes from /api/* (PostgreSQL gold + audit), nothing is hard-coded.
-const state = { page: "observe", version: null, overview: null, incidents: null, charts: {}, history: [], incidentFilters: { query: "", severity: "" } };
+const state = { page: "observe", version: null, overview: null, incidents: null, charts: {}, history: [], incidentFilters: { query: "", severity: "" },
+  scope: null, scopes: [] };
+try { state.scope = localStorage.getItem("dt.scope") || null; } catch (e) {}
 const $ = (id) => document.getElementById(id);
 let versionCheck = null;
+// every Observe → Verify number belongs to ONE source (picked at the top); the server resolves an unknown scope to the first source
+const sq = () => (state.scope ? "scope=" + encodeURIComponent(state.scope) : "");
+const isPoc = () => state.overview && state.overview.kind === "poc";
+function scopeOfIncident(id) {
+  const m = /^db(\d+):/.exec(id) || null, a = /^adf:(\d+):/.exec(id) || null;
+  if (m) return `db:${m[1]}`;
+  if (a) return `adf:${a[1]}`;
+  const poc = state.scopes.find((s) => s.poc);
+  return poc ? poc.key : state.scope;
+}
+async function initScopes() {
+  try { state.scopes = (await api("/api/scopes")).scopes; } catch (e) { state.scopes = []; }
+  let pick = $("scopePick");
+  if (!pick) {
+    const wrap = document.createElement("label");
+    wrap.className = "scope-pick";
+    wrap.innerHTML = `<span>Source</span><select id="scopePick" aria-label="Source shown on Observe to Verify"></select>`;
+    document.querySelector(".topright").prepend(wrap);
+    pick = $("scopePick");
+    pick.addEventListener("change", () => setScope(pick.value));
+  }
+  const group = (kind, label) => {
+    const items = state.scopes.filter((s) => s.kind === kind);
+    return items.length ? `<optgroup label="${label}">${items.map((s) => `<option value="${esc(s.key)}">${esc(s.name)}${s.poc ? " (POC pipeline)" : ""} · ${esc(s.type)}</option>`).join("")}</optgroup>` : "";
+  };
+  pick.innerHTML = group("db", "Databases") + group("adf", "Data factories");
+  if (state.scope) pick.value = state.scope;
+}
+async function setScope(key) {
+  if (!key || key === state.scope) return;
+  state.scope = key;
+  try { localStorage.setItem("dt.scope", key); } catch (e) {}
+  state.selected = null;
+  state.version = null;
+  if ($("scopePick")) $("scopePick").value = key;
+  await checkVersion(true);
+  if (state.page.startsWith("estate-")) toast(`Observe to Verify now show ${($("scopePick").selectedOptions[0] || {}).textContent || key}`);
+}
 
 // ------------------------------------------------------------------ helpers
 async function api(path, options) {
@@ -98,6 +138,12 @@ function tableHtml(t, maxRows = 500) {
 const objTable = (rows, cols) => tableHtml(rows && rows.length ? { columns: cols || Object.keys(rows[0]), rows: rows.map((r) => (cols || Object.keys(rows[0])).map((c) => r[c])) } : null);
 
 function gauge(el, score, label) {
+  if (score == null) {                                           // a source with nothing measured yet
+    $(el).innerHTML = `<svg width="190" height="190" viewBox="0 0 190 190" role="img" aria-label="No trust score yet">
+      <circle cx="95" cy="95" r="70" fill="none" stroke="#EAEFF4" stroke-width="16"/>
+      <text x="95" y="104" text-anchor="middle" font-size="36" font-weight="700" fill="#94A3B8">–</text></svg>`;
+    return;
+  }
   const t = tone(score), r = 70, c = 2 * Math.PI * r, filled = (c * score) / 100;
   $(el).innerHTML = `<svg width="190" height="190" viewBox="0 0 190 190" role="img" aria-label="Trust score ${score}">
     <circle cx="95" cy="95" r="${r}" fill="none" stroke="#EAEFF4" stroke-width="16"/>
@@ -155,9 +201,15 @@ async function render(page, arg) {
 
 // ------------------------------------------------------------------ data loading + auto refresh
 async function loadCore() {
-  const [ov, inc] = await Promise.all([api("/api/overview"), api("/api/incidents")]);
+  if (!state.scopes.length) await initScopes();
+  const [ov, inc] = await Promise.all([api("/api/overview?" + sq()), api("/api/incidents?" + sq())]);
   state.overview = ov;
   state.incidents = inc;
+  if (ov.scope && ov.scope.key !== state.scope) {               // unknown / removed source: the server picked the first one
+    state.scope = ov.scope.key;
+    try { localStorage.setItem("dt.scope", state.scope); } catch (e) {}
+  }
+  if ($("scopePick") && state.scope) $("scopePick").value = state.scope;
   const openIncidents = inc.open || [];
   const urgentIncidents = openIncidents.filter((incident) => ["CRITICAL", "HIGH"].includes(incident.severity)).length;
   const incidentBadge = $("detectNavCount");
@@ -170,7 +222,8 @@ async function loadCore() {
     `2. Detect, ${openIncidents.length} open incident${openIncidents.length === 1 ? "" : "s"}${urgentIncidents ? `, ${urgentIncidents} high or critical` : ""}`
   );
   const t = ov.trust;
-  $("topScore").textContent = `Trust score ${t.score} · ${t.label}`;
+  $("topScore").textContent = t.score == null ? `Trust score – · ${t.label}` : `Trust score ${t.score} · ${t.label}`;
+  $("topScore").title = `${(ov.scope || {}).name || ""}: ${t.basis ? "from its " + t.basis : "from its pipeline rules and data checks"}`;
   showError(null);
 }
 
@@ -194,7 +247,9 @@ async function checkVersion(force = false) {
         await renderPipeline();
       }
       $("refreshInfo").dataset.state = "online";
-      $("refreshInfo").textContent = `Connected · last run ${(v.last_run || "–").slice(0, 16)} · checked ${new Date().toLocaleTimeString()}`;
+      $("refreshInfo").textContent = isPoc()
+        ? `Connected · last run ${(v.last_run || "–").slice(0, 16)} · checked ${new Date().toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}`
+        : `Connected · checked ${new Date().toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}`;
     } catch (e) {
       $("refreshInfo").dataset.state = "error";
       $("refreshInfo").textContent = "Refresh failed · retrying automatically";
@@ -208,7 +263,19 @@ async function checkVersion(force = false) {
 }
 
 // ------------------------------------------------------------------ 1. observe
+const OBS_TITLE = { Healthy: "is healthy", "Needs attention": "needs attention", "At risk": "is at risk", "No data yet": "has nothing measured yet" };
+function showPocCards(poc) {
+  $("revCard").classList.toggle("hidden", !poc);
+  $("estateCard").classList.toggle("hidden", !poc);
+  $("itemsCard").classList.toggle("hidden", poc);
+  $("trendEmpty").classList.add("hidden");
+  $("trendChart").parentElement.classList.remove("hidden");
+}
 function renderObserve() {
+  if (!isPoc()) return renderObserveGeneric();
+  showPocCards(true);
+  $("obsSub").textContent = `${state.overview.scope ? state.overview.scope.name + ": " : ""}source files → Bronze → Silver → Gold, monitored after every pipeline run.`;
+  $("trendTitle").textContent = "Trust score by business date";
   const { overview: o, trust: t, pipeline: p } = state.overview;
   const cov = o.coverage || {};
   $("obsTitle").textContent = "1. Observe: " + ({ Healthy: "the estate is healthy", "Needs attention": "the estate needs attention", "At risk": "the estate is at risk" }[t.label] || t.label);
@@ -257,14 +324,76 @@ function renderObserve() {
   ].map(([n, d2, c, s]) => `<div class="item"><div>${n} <span class="small muted">${d2}</span></div><span class="chip ${c}">${esc(s)}</span></div>`).join("");
 }
 
+// any source other than the POC pipeline: a database scored by its data checks, or a factory scored by its pipelines
+const STATUS_CHIP = { PASS: ["ok", "Pass"], WARN: ["warn", "Warning"], FAIL: ["bad", "Fail"], ERROR: ["bad", "Error"] };
+function renderObserveGeneric() {
+  const o = state.overview, t = o.trust, s = o.scope || {};
+  showPocCards(false);
+  $("obsTitle").textContent = `1. Observe: ${s.name || "this source"} ${OBS_TITLE[t.label] || t.label}`;
+  $("obsSub").textContent = s.kind === "adf"
+    ? `Azure Data Factory ${s.name}: scored from its pipeline runs, failures, freshness and source / target checks.`
+    : `${s.type} connection ${s.name}: scored from its data checks.`;
+  $("obsCoverage").textContent = o.last_activity ? `Last ${s.kind === "adf" ? "sync" : "check run"} ${String(o.last_activity).slice(0, 16)}.` : "";
+  $("freshnessNotice").classList.add("hidden");
+  gauge("gauge", t.score);
+  $("gaugeLabel").innerHTML = `<span class="${t.score == null ? "muted" : tone(t.score)}">${esc(t.label)}</span>`;
+  $("trendTitle").textContent = o.trend_label || "Trust score by day";
+  if (o.trend && o.trend.length) {
+    drawChart("trendChart", "line", o.trend.map((x) => x.day), o.trend.map((x) => x.score), o.trend_label || "Score",
+      { min: 0, max: 100, pointColors: o.trend.map((x) => color[tone(x.score)]) });
+  } else {
+    if (state.charts.trendChart) { state.charts.trendChart.destroy(); delete state.charts.trendChart; }
+    $("trendChart").parentElement.classList.add("hidden");
+    $("trendEmpty").textContent = "No history yet: the chart fills in as checks and runs are recorded.";
+    $("trendEmpty").classList.remove("hidden");
+  }
+  $("obsKpis").innerHTML = o.kpis.map((k) => `<div class="kpi ${k.tone && Number(k.value) ? k.tone : ""}"><div class="l">${esc(k.label)}</div>
+    <div class="v">${typeof k.value === "number" ? num(k.value) : esc(k.value)}</div>${k.sub ? `<div class="small muted">${esc(k.sub)}</div>` : ""}</div>`).join("");
+  $("dims").innerHTML = o.dimensions.length
+    ? o.dimensions.map((d) => `<div class="bar"><div class="t"><span>${esc(d.label)}</span><b>${d.value}%</b></div>
+        <div class="track"><div class="fill" style="width:${d.value}%;background:${color[tone(d.value)]}"></div></div></div>`).join("")
+    : `<p class="muted">Nothing measured yet.</p>`;
+  $("reasons").innerHTML = t.reasons.length ? "<p><b>Why not 100:</b> " + t.reasons.map((r) => `−${r.points} ${esc(r.reason)}`).join(" · ") + "</p>"
+    : t.score != null ? "<p>Nothing is lowering the score.</p>" : "";
+  $("itemsTitle").textContent = o.items_title || "What is watched";
+  $("itemsBody").innerHTML = o.items.length
+    ? o.items.map((i) => { const [c, l] = STATUS_CHIP[i.status] || ["grey", "Not run"];
+        return `<div class="item"><div>${esc(i.name)} <span class="small muted">${esc(i.detail || "")}</span></div><span class="chip ${c}">${esc(i.label || l)}</span></div>`; }).join("")
+    : `<p class="muted small">${esc(o.empty || "Nothing yet.")}</p>`
+      + (s.kind === "db" ? `<button class="btn btn-sm" onclick="document.querySelector('#tabs [data-page=estate-checks-new]').click()">+ Add a data check</button>` : "");
+}
+
 // ------------------------------------------------------------------ 2. detect
+function since(t) {
+  if (!t) return "";
+  const d = new Date(String(t).replace(" ", "T").replace(/(\.\d{3})\d+/, "$1"));
+  const h = (Date.now() - d) / 36e5;
+  return isNaN(h) ? "" : h < 1 ? "open < 1 h" : h < 48 ? `open ${Math.round(h)} h` : `open ${Math.round(h / 24)} days`;
+}
 function incidentRow(i) {
   const appr = i.approval ? `<span class="chip warn">remediation approved by ${esc(i.approval.approved_by)}</span>` : "";
+  const ack = i.acknowledged_by ? `<span class="chip grey">acknowledged by ${esc(i.acknowledged_by)}</span>` : "";
+  const age = since(i.first_seen);
   return `<div class="incident"><span class="sev ${i.severity}">${i.severity}</span>
-    <div class="body"><div class="t">${esc(i.title)} ${appr}</div><div class="small muted">${esc(i.summary)}</div></div>
-    <div class="inc-acts"><button class="btn light" data-contact="${esc(i.title + " — " + i.summary)}">Contact owner</button>
-    ${recordsButton(i)}<button class="btn light" onclick="go('investigate','${i.id}')">Investigate</button></div></div>`;
+    <div class="body"><div class="t">${esc(i.title)} ${appr} ${ack}</div><div class="small muted">${esc(i.summary)}${age ? ` · ${age}` : ""}</div></div>
+    <div class="inc-acts">${i.acknowledged_by ? "" : `<button class="btn light" data-ack="${esc(i.id)}">Acknowledge</button>`}
+    <button class="btn light" data-contact="${esc(i.title + " — " + i.summary)}">Contact owner</button>
+    ${recordsButton(i)}<button class="btn light" onclick="go('investigate','${esc(i.id)}')">Investigate</button></div></div>`;
 }
+document.addEventListener("click", async (e) => {                // Acknowledge: "someone is on it" (needs a sign-in when sign-in is on)
+  const b = e.target.closest("[data-ack]");
+  if (!b) return;
+  b.disabled = true;
+  try {
+    const r = await fetch(`/api/incidents/${encodeURIComponent(b.dataset.ack)}/ack`, { method: "POST", credentials: "same-origin" });
+    const body = await r.json().catch(() => ({}));
+    if (r.status === 401) throw new Error("Sign in first (Data estate → Connections), then acknowledge");
+    if (!r.ok) throw new Error(body.detail || body.error || r.statusText);
+    toast("Acknowledged");
+    state.version = null;
+    await checkVersion(true);
+  } catch (x) { toast(x.message); b.disabled = false; }
+});
 // held-back rows behind an incident -> the Rejected records page, filtered to that date / table / rule
 function recordsButton(i) {
   if (!window.DQ || !["REJECTED_ROWS", "SETTLEMENT_MISMATCH"].includes(i.type) || !i.business_date) return "";
@@ -356,7 +485,7 @@ async function renderInvestigate(id) {
   $("invBody").innerHTML = `<div class="investigation-loading" role="status">Checking the evidence for this incident…</div>`;
   let inv;
   try {
-    inv = await api("/api/investigate/" + encodeURIComponent(id));
+    inv = await api("/api/investigate/" + encodeURIComponent(id) + "?" + sq());
   } catch (error) {
     if (request !== investigationRequest) return;
     $("invBody").innerHTML = `<div class="banner warn" role="alert"><h2>Could not load investigation</h2>
@@ -386,9 +515,9 @@ async function renderInvestigate(id) {
   const goldViews = Array.isArray(impact.gold_views) ? impact.gold_views : [];
   const metrics = [
     ["Business date", impact.business_date || incident.business_date || "—"],
-    ["Gold views affected", goldViews.length],
+    [impact.views_label || "Gold views affected", goldViews.length],
     ["Revenue at risk", impact.amount_at_risk == null ? "—" : inr(impact.amount_at_risk)],
-  ];
+  ].filter(([label, value]) => isPoc() || value !== "—");      // other sources have no business date / revenue: no empty tiles
   $("invBody").innerHTML = `
     <div class="investigation-head">
       <div class="investigation-title">
@@ -399,6 +528,8 @@ async function renderInvestigate(id) {
       </div>
       <div class="investigation-actions">
         <button class="btn light btn-sm" id="invBack" type="button">← Detect</button>
+        ${inv.check_id ? `<button class="btn light btn-sm" id="invOpenCheck" type="button">Open the data check</button>` : ""}
+        ${inv.run_id ? `<button class="btn light btn-sm" id="invOpenRun" type="button">Open the ADF run</button>` : ""}
         <button class="btn btn-sm" id="invImpact" type="button">See impact &amp; decide →</button>
       </div>
     </div>
@@ -424,9 +555,12 @@ async function renderInvestigate(id) {
       <div class="card"><h3>Evidence path</h3><ol class="chain">${(Array.isArray(inv.chain) ? inv.chain : []).map((step) => `<li>${esc(step)}</li>`).join("")}</ol></div>
     </div>
     ${Array.isArray(inv.sample) && inv.sample.length ? `<div class="card"><h3>Affected records <span class="small muted">(${inv.sample.length} sample rows)</span></h3>${objTable(inv.sample)}</div>` : ""}
-    ${goldViews.length ? `<div class="card"><h3>Downstream Gold views</h3><div class="investigation-views">${goldViews.map((view) => `<code>${esc(view)}</code>`).join("")}</div></div>` : ""}`;
+    ${goldViews.length ? `<div class="card"><h3>${esc(impact.views_label || "Downstream Gold views")}</h3><div class="investigation-views">${goldViews.map((view) => `<code>${esc(view)}</code>`).join("")}</div></div>` : ""}`;
   $("invBack").addEventListener("click", () => go("detect"));
   $("invImpact").addEventListener("click", () => go("impact", id));
+  if ($("invOpenCheck")) $("invOpenCheck").onclick = () => { CHECKS.open(inv.check_id); document.querySelector('#tabs [data-page="estate-checks"]').click(); };
+  if ($("invOpenRun")) $("invOpenRun").onclick = () => { ADF.open(inv.run_id); document.querySelector('#tabs [data-page="estate-adf-runs"]').click(); };
+  if (inv.sql) $("invBody").insertAdjacentHTML("beforeend", `<div class="card"><details><summary>SQL the check ran</summary><pre class="code">${esc(inv.sql)}</pre></details></div>`);
 }
 
 // ------------------------------------------------------------------ 4. lineage
@@ -440,7 +574,17 @@ document.querySelectorAll("#linToggle button").forEach((b) => b.addEventListener
   renderLineage();
 }));
 async function renderLineage() {
-  const lin = await api("/api/lineage");
+  const lin = await api("/api/lineage?" + sq());
+  $("linToggle").classList.toggle("hidden", lin.kind !== "poc");
+  if (lin.kind !== "poc") {                                     // another source: its own flows (factory copy steps, or watched tables -> views)
+    const C = { PASS: "ok", WARN: "warn", FAIL: "bad", ERROR: "bad" };
+    $("linSub").textContent = lin.note || "";
+    $("linBody").innerHTML = `<div class="card"><h3>${esc(lin.title)}</h3>${lin.flows.length ? `<div class="tablewrap" style="max-height:none"><table>
+      <thead><tr><th>From</th><th>Through</th><th>To</th><th>Status</th></tr></thead><tbody>${lin.flows.map((f) => `<tr><td class="small">${esc(f.from)}</td>
+      <td class="small">${esc(f.via)}</td><td class="small">${esc(f.to)}</td><td><span class="chip ${C[f.status] || "grey"}">${esc({ PASS: "OK", WARN: "Warning", FAIL: "Problem", ERROR: "Error" }[f.status] || "Not checked")}</span></td></tr>`).join("")}
+      </tbody></table></div>` : `<p class="muted">${esc(lin.note)}</p>`}</div>`;
+    return;
+  }
   $("linSub").textContent = `Latest batch ${lin.batch_id} (${lin.business_date}). Gold views come from the PostgreSQL catalog (information_schema.view_table_usage).`;
   document.querySelectorAll("#linToggle button").forEach((b) => b.classList.toggle("active", b.dataset.view === linView));
   if (linView === "graph" && window.LineageGraph) {             // graph view (lineage-graph.js); List below is unchanged
@@ -486,10 +630,10 @@ async function renderImpact(id) {
   id = fillSelect("impSelect", id || state.selected);
   state.selected = id;
   if (!id) { $("impBody").innerHTML = "<div class='banner ok'><h2>Nothing to decide</h2>No open incidents.</div>"; return; }
-  const inv = await api("/api/investigate/" + encodeURIComponent(id));
+  const inv = await api("/api/investigate/" + encodeURIComponent(id) + "?" + sq());
   if (!inv.found) { $("impBody").innerHTML = "<p>That incident is no longer open.</p>"; return; }
   const im = inv.impact, inc = inv.incident;
-  const tiles = [["Gold views affected", im.gold_views.length], ["Business date", im.business_date || "–"],
+  const tiles = [[im.views_label || "Gold views affected", im.gold_views.length], ["Business date", im.business_date || "–"],
     ["Rows affected", inc.metrics.payment_difference ?? inc.metrics.n ?? inc.metrics.duplicates ?? "–"],
     ["Revenue at risk", im.amount_at_risk != null ? inr(im.amount_at_risk) : "–"]];
   $("impBody").innerHTML = `
@@ -497,8 +641,8 @@ async function renderImpact(id) {
     <div class="grid g-2">
       <div class="card"><h3>What it touches</h3>
         <p><b>${esc(inc.title)}</b></p>
-        <p>Gold views reading <code>${esc(im.entity || "")}</code>: ${im.gold_views.map((v) => `<span class="chip warn">gold.${esc(v)}</span>`).join(" ") || "–"}</p>
-        <p class="small muted">Revenue at risk is the exact amount of the gap in the data, not an estimate. Reports built on the views above show the reduced numbers until the fix is loaded.</p></div>
+        <p>${esc(im.views_label || "Gold views reading")} <code>${esc(im.entity || "")}</code>: ${im.gold_views.map((v) => `<span class="chip warn">${im.views_label ? "" : "gold."}${esc(v)}</span>`).join(" ") || "–"}</p>
+        <p class="small muted">${im.views_label ? "Everything listed reads the affected data, so it shows the problem too until the fix is loaded." : "Revenue at risk is the exact amount of the gap in the data, not an estimate. Reports built on the views above show the reduced numbers until the fix is loaded."}</p></div>
       <div class="card"><h3>Recommended remediation</h3>
         <div class="actions">${im.actions.map((a) => `<label><input type="checkbox" checked value="${esc(a)}"> ${esc(a)}</label>`).join("")}</div>
         <div class="field"><input id="approver" placeholder="Approved by (your name)"></div>
@@ -589,21 +733,30 @@ async function renderVerify() {
   const t = state.overview.trust, p = state.overview.pipeline;
   const waiting = open.filter((i) => i.approval);
   $("verifyBody").innerHTML = `
-    ${resolved.length ? `<div class="banner ok"><h2>INCIDENT(S) RESOLVED</h2>${resolved.map((r) => `✓ ${esc(r.incident_title)} (approved by ${esc(r.approved_by)}): no longer present in the latest data.`).join("<br>")}</div>` : ""}
+    ${resolved.length ? `<div class="banner ok"><h2>INCIDENT(S) RESOLVED</h2>${resolved.map((r) => `✓ ${esc(r.incident_title)}${r.approved_by ? ` (approved by ${esc(r.approved_by)})` : ""}: no longer present in the latest data${r.resolved_at ? ` (since ${esc(String(r.resolved_at).slice(0, 16))})` : ""}.`).join("<br>")}</div>` : ""}
     <div class="grid g-2">
       <div class="card"><h3>Remediation log</h3>
         ${waiting.map((i) => `<div class="check"><span class="warn">⏳</span> <b>${esc(i.title)}</b><div class="small muted">Approved by ${esc(i.approval.approved_by)} at ${esc(i.approval.approved_at)}. Still present in the data: fix the source and re-run the pipeline.</div></div>`).join("")}
         ${resolved.map((r) => `<div class="check"><span class="ok">✓</span> <b>${esc(r.incident_title)}</b><div class="small muted">${esc(r.actions)}</div></div>`).join("")}
-        ${!waiting.length && !resolved.length ? "<p class='muted'>No remediation approved yet. Approve one on page 5.</p>" : ""}
+        ${!waiting.length && !resolved.length ? "<p class='muted'>Nothing approved or resolved in the last 7 days. Approve a fix on page 5; it shows as resolved once the data no longer has the problem.</p>" : ""}
       </div>
-      <div class="card center"><div id="gauge3"></div><div class="gauge-label"><span class="${tone(t.score)}">${t.label}</span></div>
-        <div class="small muted">Open incidents ${open.length} · Latest run ${esc(p.batch.batch_id || "–")}: ${p.layers.map((l) => l.layer + " " + l.status).join(", ")}</div></div>
+      <div class="card center"><div id="gauge3"></div><div class="gauge-label"><span class="${t.score == null ? "muted" : tone(t.score)}">${esc(t.label)}</span></div>
+        <div class="small muted">${esc((state.overview.scope || {}).name || "")} · open incidents ${open.length}${p ? ` · latest run ${esc(p.batch.batch_id || "–")}: ${p.layers.map((l) => l.layer + " " + l.status).join(", ")}` : ""}</div></div>
     </div>`;
   gauge("gauge3", t.score);
 }
 
 // ------------------------------------------------------------------ pipeline log
 async function renderPipeline() {
+  await ensureCore();
+  if (!isPoc()) {                                               // the pipeline log is the POC pipeline's own diary
+    const s = state.overview.scope || {};
+    $("pipeBody").innerHTML = `<div class="card"><h3>${esc(s.name || "This source")} has no POC pipeline log</h3>
+      <p class="muted">The pipeline log shows the POC pipeline's own runs. ${s.kind === "adf" ? "For this factory, every run and step is on <b>ADF runs</b>."
+        : "For this database, every check run is on <b>Data checks</b>."}</p>
+      <button class="btn btn-sm" onclick="document.querySelector('#tabs [data-page=${s.kind === "adf" ? "estate-adf-runs" : "estate-checks"}]').click()">Open ${s.kind === "adf" ? "ADF runs" : "Data checks"}</button></div>`;
+    return;
+  }
   const p = await api("/api/pipeline");
   const batches = (p.adls_batches || []).map((b) => {
     const cls = b.status === "SUCCEEDED" ? "ok" : b.status === "FAILED" ? "bad" : "warn";
@@ -705,9 +858,19 @@ async function askQuestion(q) {
   openFromLink();
 })();
 // links from alerts / e-mails: #investigate=<incident id>, #impact=<id>, #verify, #estate-people ...
-function openFromLink() {
+async function openFromLink() {
   const m = decodeURIComponent(location.hash.slice(1)).match(/^([\w-]+)(?:=(.+))?$/);
   if (!m || !document.getElementById("page-" + m[1])) return;
+  if (["investigate", "impact"].includes(m[1]) && m[2]) {        // an alert link: show the incident's own source first
+    const sc = scopeOfIncident(m[2]);
+    if (sc && sc !== state.scope) await setScope(sc);
+  }
+  if (m[2] && /^(db|adf):\d+$/.test(m[2])) {                     // #observe=db:3 / #detect=adf:3: a page of a given source
+    if (m[2] !== state.scope) await setScope(m[2]);
+    go(m[1]);
+    history.replaceState(null, "", location.pathname);
+    return;
+  }
   const btn = document.querySelector(`#tabs button[data-page="${m[1]}"]`);
   if (m[1] === "estate-adf-runs" && m[2] && window.ADF) { ADF.open(m[2]); btn.click(); }   // #estate-adf-runs=<ADF run ID>
   else if (m[1] === "estate-dq-rejected" && m[2] && window.DQ) DQ.open(m[2]);   // #estate-dq-rejected=2026-10-08
