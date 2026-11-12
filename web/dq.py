@@ -819,23 +819,20 @@ def _apply(req: dict, by: str) -> dict:
                 if not still:
                     conn.execute("""UPDATE audit.dq_reprocess SET status = 'CLOSED', result = %s, decided_by = %s, decided_at = now()
                                     WHERE request_id = %s""", (f"Nothing left to do: re-inserted by request #{rid}", by, other["request_id"]))
+        remediations = []
         if scd1 and loaded:                                            # Detect / Verify: the matching DQ incidents
-            ds.ensure_web_tables()
             open_ids = {i["id"] for i in ds.incidents()}               # read before this commit: still open
             for rule in {it.get("rule_name") for it in ready if it.get("rule_name")}:
                 for d in {it.get("business_date") for it in ready}:
                     if f"DQ-{entity}-{rule}-{d}" not in open_ids:
                         continue
-                    conn.execute("""INSERT INTO audit.remediation_log (incident_id, incident_title, actions, approved_by, note, status)
-                                    VALUES (%s, %s, %s, %s, %s, 'APPLIED')""",
-                                 (f"DQ-{entity}-{rule}-{d}", f"{entity} rows failed rule {rule}",
-                                  f"Re-insert request #{rid}: {result}", by, req.get("note") or ""))
+                    remediations.append((f"DQ-{entity}-{rule}-{d}", f"{entity} rows failed rule {rule}",
+                                         f"Re-insert request #{rid}: {result}", by, req.get("note") or "", "APPLIED"))
                     if entity == "payments" and f"RECON-{d}" in open_ids:   # the money gap of that date is the same rows
-                        conn.execute("""INSERT INTO audit.remediation_log (incident_id, incident_title, actions, approved_by, note, status)
-                                        VALUES (%s, %s, %s, %s, %s, 'APPLIED')""",
-                                     (f"RECON-{d}", f"Revenue gap on {d}", f"Re-insert request #{rid}: {result}", by,
-                                      req.get("note") or ""))
+                        remediations.append((f"RECON-{d}", f"Revenue gap on {d}", f"Re-insert request #{rid}: {result}", by,
+                                             req.get("note") or "", "APPLIED"))
         conn.commit()
+    ds.log_remediation(remediations)                                   # DataTrust's own database, after the data commit
     return {"status": status, "result": result, "loaded": loaded}
 
 

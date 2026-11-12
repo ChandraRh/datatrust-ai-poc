@@ -26,6 +26,15 @@ import batch_status  # noqa: E402
 app = FastAPI(title="DataTrust AI")
 app.mount("/static", StaticFiles(directory=HERE / "static"), name="static")
 
+# DataTrust's own database (APP_PG_*): created on first start; DataTrust's tables move out of the POC database once
+import appdb  # noqa: E402
+try:
+    _prep = appdb.prepare()
+    print(f"DataTrust database: {_prep['database']}" + (" (created)" if _prep.get("created") else "")
+          + (f"; moved from the POC database: {_prep['copied']}" if _prep.get("copied") else ""))
+except Exception as e:
+    print(f"!! DataTrust database ({appdb.label()}) not ready: {e}")
+
 # Data Estate module (connections, catalog, changes, access): separate package, own API under /api/estate
 from estate import routes as estate_routes, store as estate_store  # noqa: E402
 app.include_router(estate_routes.router)
@@ -58,11 +67,6 @@ async def on_error(request, exc):
     """Any database / query problem is shown on the page instead of a blank screen."""
     return JSONResponse(status_code=500, content={"error": f"{type(exc).__name__}: {exc}"})
 
-
-try:                                                    # table for approvals made on the page
-    ds.ensure_web_tables()
-except Exception as e:
-    print(f"!! could not prepare audit.remediation_log: {e}")
 
 try:                                                    # PostgreSQL lifecycle state for ADLS batches
     batch_status.ensure_table()
@@ -125,9 +129,9 @@ def index():
 
 @app.get("/health")
 def health():
-    """For the cloud load balancer / container health check: 200 when the app and its database answer."""
+    """For the cloud load balancer / container health check: 200 when the app and its own database answer."""
     try:
-        ds.one("SELECT 1 AS ok")
+        appdb.one("SELECT 1 AS ok")
         return {"status": "ok"}
     except Exception as e:
         return JSONResponse(status_code=503, content={"status": "database unavailable", "error": type(e).__name__})

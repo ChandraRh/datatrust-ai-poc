@@ -205,7 +205,7 @@ def find_pg_connection(asset: dict, cfg: dict):
     if host and host == config.PG_HOST.lower() and (not db or db == config.PG_DATABASE):
         own = {"host": config.PG_HOST, "port": config.PG_PORT, "database": config.PG_DATABASE, "username": config.PG_USER,
                "password_env": "PG_PASSWORD"}
-        return PostgresSource(own), db or config.PG_DATABASE, "this app's database"
+        return PostgresSource(own), db or config.PG_DATABASE, "the POC database (PG_*)"
     return None, db, None
 
 

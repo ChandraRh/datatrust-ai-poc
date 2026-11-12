@@ -36,9 +36,9 @@ NAME = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_.()\- ]{0,89}$")
 
 
 def connect():
-    return psycopg.connect(sslmode=config.PG_SSLMODE, host=config.PG_HOST, port=config.PG_PORT, dbname=config.PG_DATABASE,
-                           user=config.PG_USER, password=config.PG_PASSWORD, row_factory=dict_row, connect_timeout=5,
-                           application_name="datatrust-adf-connector")
+    """DataTrust's own database (APP_PG_*): telemetry is the product's data, not the monitored source's."""
+    import appdb
+    return appdb.connect(application_name="datatrust-adf-connector")
 
 
 DDL = """

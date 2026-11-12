@@ -7,6 +7,7 @@ import re
 from datetime import date, datetime
 
 import data_service as ds
+import appdb
 
 MONTHS = ["January", "February", "March", "April", "May", "June", "July", "August", "September", "October",
           "November", "December"]
@@ -102,8 +103,8 @@ def build() -> dict:
                 f"{held['n']} rows are held back by quality rules on {held['days']} date{'s' if held['days'] != 1 else ''}"
                 + (f", including {say_inr(held['amount'])} of payments" if held["amount"] else "") + "."
                 + (f" {pend} re-insert request{'s' if pend != 1 else ''} {'are' if pend != 1 else 'is'} waiting for approval." if pend else ""))
-    if ds.table_exists("portal.access_requests"):
-        acc = ds.one("SELECT COUNT(*) AS n FROM portal.access_requests WHERE status = 'PENDING'")["n"]
+    if appdb.table_exists("portal.access_requests"):
+        acc = appdb.one("SELECT COUNT(*) AS n FROM portal.access_requests WHERE status = 'PENDING'")["n"]
         if acc:
             add(f"{acc} access request(s) wait for an admin.",
                 f"{acc} access request{'s are' if acc != 1 else ' is'} waiting for an admin.")

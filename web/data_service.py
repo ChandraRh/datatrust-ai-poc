@@ -108,19 +108,26 @@ def table_exists(name: str) -> bool:
 
 
 def ensure_web_tables() -> None:
-    """Remediation approvals made on the web page (created on first start, never dropped)."""
-    with connect(read_only=False) as conn:
-        conn.execute("""
-            CREATE TABLE IF NOT EXISTS audit.remediation_log (
-                remediation_id  BIGINT GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
-                incident_id     TEXT,
-                incident_title  TEXT,
-                actions         TEXT,
-                approved_by     TEXT,
-                note            TEXT,
-                status          TEXT DEFAULT 'APPROVED',
-                approved_at     TIMESTAMP DEFAULT now())""")
+    """Remediation approvals live in DataTrust's own database (app.remediation_log), not in the monitored POC database."""
+    import appdb
+    appdb.ensure_tables()
+
+
+def log_remediation(entries: list) -> None:
+    """entries: (incident_id, incident_title, actions, approved_by, note, status) -> app.remediation_log."""
+    if not entries:
+        return
+    import appdb
+    with appdb.connect() as conn:
+        for e in entries:
+            conn.execute("""INSERT INTO app.remediation_log (incident_id, incident_title, actions, approved_by, note, status)
+                            VALUES (%s, %s, %s, %s, %s, %s)""", e)
         conn.commit()
+
+
+def _approvals_sql(query: str) -> list:
+    import appdb
+    return appdb.rows(query) if appdb.table_exists("app.remediation_log") else []
 
 
 # ============================================================================ freshness / version
@@ -129,8 +136,8 @@ def data_version() -> dict:
     v = one("""SELECT (SELECT MAX(ended_at) FROM audit.batch_control)::text AS last_run,
                       (SELECT COUNT(*) FROM audit.batch_control)            AS runs,
                       (SELECT COUNT(*) FROM audit.error_log)                AS log_rows""")
-    if table_exists("audit.remediation_log"):
-        v["approvals"] = one("SELECT COUNT(*) AS n FROM audit.remediation_log")["n"]
+    n = _approvals_sql("SELECT COUNT(*) AS n FROM app.remediation_log")
+    v["approvals"] = n[0]["n"] if n else 0
     v["signature"] = f"{v.get('last_run')}|{v.get('runs')}|{v.get('log_rows')}|{v.get('approvals')}"
     return v
 
@@ -277,11 +284,9 @@ def incidents() -> list:
     """Every open issue the data shows right now, most severe first. An issue disappears by itself
     when a later pipeline run no longer shows it (that is how 'verified resolved' works)."""
     found = []
-    approvals = {}
-    if table_exists("audit.remediation_log"):
-        for a in rows("""SELECT DISTINCT ON (incident_id) incident_id, approved_by, approved_at, status
-                         FROM audit.remediation_log ORDER BY incident_id, approved_at DESC"""):
-            approvals[a["incident_id"]] = a
+    approvals = {a["incident_id"]: a for a in _approvals_sql(
+        """SELECT DISTINCT ON (incident_id) incident_id, approved_by, approved_at, status
+           FROM app.remediation_log ORDER BY incident_id, approved_at DESC""")}
 
     # 1. settlement vs silver mismatch (money)
     for r in settlement_recon():
@@ -360,20 +365,16 @@ def incidents() -> list:
 
 def resolved_incidents() -> list:
     """Approved incidents that the latest data no longer shows = verified resolved."""
-    if not table_exists("audit.remediation_log"):
+    logged = _approvals_sql("""SELECT DISTINCT ON (incident_id) incident_id, incident_title, actions, approved_by,
+                                      approved_at FROM app.remediation_log ORDER BY incident_id, approved_at DESC""")
+    if not logged:
         return []
     open_ids = {i["id"] for i in incidents()}
-    return [r for r in rows("""SELECT DISTINCT ON (incident_id) incident_id, incident_title, actions, approved_by,
-                                      approved_at FROM audit.remediation_log ORDER BY incident_id, approved_at DESC""")
-            if r["incident_id"] not in open_ids]
+    return [r for r in logged if r["incident_id"] not in open_ids]
 
 
 def approve(incident_id: str, title: str, actions: list, approved_by: str, note: str = "") -> None:
-    ensure_web_tables()
-    with connect(read_only=False) as conn:
-        conn.execute("""INSERT INTO audit.remediation_log (incident_id, incident_title, actions, approved_by, note)
-                        VALUES (%s, %s, %s, %s, %s)""", (incident_id, title, "; ".join(actions), approved_by, note))
-        conn.commit()
+    log_remediation([(incident_id, title, "; ".join(actions), approved_by, note, "APPROVED")])
 
 
 # ============================================================================ investigation (evidence)

@@ -11,7 +11,7 @@ How it works: every interval the server reads the open incidents (the same list 
   * new incident            -> one card in the space (thread per incident), with owner and a button to open it
   * incident gone (fixed)   -> "Resolved" reply in the same thread
   * first time switched on  -> one summary card instead of a burst of old incidents
-audit.alert_log remembers what was sent; the INSERT ... ON CONFLICT claim makes every alert go out once, even with
+app.alert_log remembers what was sent; the INSERT ... ON CONFLICT claim makes every alert go out once, even with
 several app instances. Without a webhook URL nothing runs and nothing else changes.
 """
 import os
@@ -22,6 +22,7 @@ from datetime import datetime
 from urllib.parse import quote
 
 import data_service as ds
+import appdb
 
 SEVERITY = {"LOW": 0, "MEDIUM": 1, "HIGH": 2, "CRITICAL": 3}
 ICON = {"CRITICAL": "🔴", "HIGH": "🔴", "MEDIUM": "🟠", "LOW": "🔵"}
@@ -120,7 +121,8 @@ def text_message(text: str) -> dict:
 
 # ---------------------------------------------------------------- the check
 def _ensure(conn):
-    conn.execute("""CREATE TABLE IF NOT EXISTS audit.alert_log (
+    conn.execute("CREATE SCHEMA IF NOT EXISTS app")
+    conn.execute("""CREATE TABLE IF NOT EXISTS app.alert_log (
                         incident_id         TEXT PRIMARY KEY,
                         severity            TEXT,
                         title               TEXT,
@@ -144,16 +146,16 @@ def check_once() -> dict:
     floor = SEVERITY[min_severity()]
     current = {i["id"]: i for i in ds.incidents() if SEVERITY.get(i["severity"], 0) >= floor}
     sent_new, sent_resolved, errors = [], [], []
-    with ds.connect(read_only=False) as conn:
+    with appdb.connect() as conn:                          # DataTrust's own database
         _ensure(conn)
         conn.commit()
-        known = {r["incident_id"]: r for r in conn.execute("SELECT * FROM audit.alert_log").fetchall()}
+        known = {r["incident_id"]: r for r in conn.execute("SELECT * FROM app.alert_log").fetchall()}
 
         if BASELINE not in known:                               # first time: one summary, no burst of old alerts
-            if conn.execute("INSERT INTO audit.alert_log (incident_id, title) VALUES (%s, 'alerts switched on') "
+            if conn.execute("INSERT INTO app.alert_log (incident_id, title) VALUES (%s, 'alerts switched on') "
                             "ON CONFLICT DO NOTHING RETURNING incident_id", (BASELINE,)).fetchone():
                 for iid, inc in current.items():
-                    conn.execute("INSERT INTO audit.alert_log (incident_id, severity, title) VALUES (%s, %s, %s) ON CONFLICT DO NOTHING",
+                    conn.execute("INSERT INTO app.alert_log (incident_id, severity, title) VALUES (%s, %s, %s) ON CONFLICT DO NOTHING",
                                  (iid, inc["severity"], inc["title"]))
                 conn.commit()
                 lines = "\n".join(f"{ICON.get(i['severity'], '⚪')} {i['severity']}: {i['title']}" for i in current.values()) or "No open incidents."
@@ -167,9 +169,9 @@ def check_once() -> dict:
         new = [i for iid, i in current.items() if iid not in known or known[iid]["resolved_alerted_at"]]
         for inc in new[:MAX_CARDS_PER_CHECK]:
             reopened = inc["id"] in known
-            claimed = conn.execute("""INSERT INTO audit.alert_log (incident_id, severity, title) VALUES (%s, %s, %s)
+            claimed = conn.execute("""INSERT INTO app.alert_log (incident_id, severity, title) VALUES (%s, %s, %s)
                                       ON CONFLICT (incident_id) DO UPDATE SET resolved_alerted_at = NULL, first_alerted_at = now()
-                                      WHERE audit.alert_log.resolved_alerted_at IS NOT NULL
+                                      WHERE app.alert_log.resolved_alerted_at IS NOT NULL
                                       RETURNING incident_id""", (inc["id"], inc["severity"], inc["title"])).fetchone()
             conn.commit()
             if not claimed:
@@ -181,7 +183,7 @@ def check_once() -> dict:
                 send(card, thread=inc["id"])
                 sent_new.append(inc["id"])
             except Exception as e:                              # not sent: release the claim, retry next round
-                conn.execute("DELETE FROM audit.alert_log WHERE incident_id = %s AND resolved_alerted_at IS NULL", (inc["id"],))
+                conn.execute("DELETE FROM app.alert_log WHERE incident_id = %s AND resolved_alerted_at IS NULL", (inc["id"],))
                 conn.commit()
                 errors.append(f"{inc['id']}: {e}")
         if len(new) > MAX_CARDS_PER_CHECK:
@@ -194,7 +196,7 @@ def check_once() -> dict:
         for iid, row in known.items():
             if iid == BASELINE or row["resolved_alerted_at"] or iid in current:
                 continue
-            claimed = conn.execute("""UPDATE audit.alert_log SET resolved_alerted_at = now()
+            claimed = conn.execute("""UPDATE app.alert_log SET resolved_alerted_at = now()
                                       WHERE incident_id = %s AND resolved_alerted_at IS NULL RETURNING incident_id""", (iid,)).fetchone()
             conn.commit()
             if not claimed:
@@ -203,7 +205,7 @@ def check_once() -> dict:
                 send(text_message(f"✅ *Resolved:* {row['title']}\nNo longer present in the latest data. {public_url()}/#verify"), thread=iid)
                 sent_resolved.append(iid)
             except Exception as e:
-                conn.execute("UPDATE audit.alert_log SET resolved_alerted_at = NULL WHERE incident_id = %s", (iid,))
+                conn.execute("UPDATE app.alert_log SET resolved_alerted_at = NULL WHERE incident_id = %s", (iid,))
                 conn.commit()
                 errors.append(f"{iid}: {e}")
     return {"configured": True, "new": sent_new, "resolved": sent_resolved, "open": len(current), "errors": errors}
@@ -218,8 +220,8 @@ def send_test() -> None:
 
 def status() -> dict:
     recent = []
-    if ds.table_exists("audit.alert_log"):
-        recent = ds.rows("""SELECT incident_id, severity, title, first_alerted_at, resolved_alerted_at FROM audit.alert_log
+    if appdb.table_exists("app.alert_log"):
+        recent = appdb.rows("""SELECT incident_id, severity, title, first_alerted_at, resolved_alerted_at FROM app.alert_log
                             WHERE incident_id <> %(b)s ORDER BY first_alerted_at DESC LIMIT 20""", {"b": BASELINE})
     return {"configured": bool(webhook()), "problem": problem(), "running": state["running"], "space": masked(), "min_severity": min_severity(),
             "interval_seconds": interval(), "public_url": public_url(), "last_check": state["last_check"],

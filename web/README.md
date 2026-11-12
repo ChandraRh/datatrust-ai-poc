@@ -29,6 +29,12 @@ stores `READY`, `RUNNING`, `SUCCEEDED`, or `FAILED` in PostgreSQL; the Pipeline 
 failed batches using the files currently stored in ADLS. To upload local sample CSVs and create `_READY`, run
 `python upload_to_adls.py full` or `python upload_to_adls.py YYYY-MM-DD`.
 
+## Two databases
+DataTrust keeps its own data (logins, connections, ADF telemetry, approvals, alerts sent) in its **own database**,
+`APP_PG_*` in `.env` (default: database `datatrust_app` on the `PG_*` server). It is created on first start, and
+DataTrust's tables that used to live in the POC database are copied over once. The POC database (`PG_*`) is only a
+monitored source. If the database user may not create databases (common on Azure), create `datatrust_app` once by hand.
+
 ## Sign-in setup
 
 The dashboard opens without a sign-in prompt. The Data Estate sections (Connections, Catalog, Activity, Access, and related tools) ask you to sign in when opened; their APIs remain protected. `/login` is not shown on initial website entry. `PORTAL_AUTH_ENABLED=true` keeps Data Estate sign-in enabled. Setting it to `false` disables sign-in for those sections and opens their APIs/admin actions, so only use that setting for a trusted local instance.

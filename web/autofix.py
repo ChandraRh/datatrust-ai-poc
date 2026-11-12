@@ -6,7 +6,7 @@ Auto-fix with approval: repair rows that silver rejected, using evidence from th
                                    1. records every correction in audit.dq_corrections (who, when, old -> new, evidence)
                                    2. loads the corrected rows into silver (same cleaning as the PySpark silver layer)
                                    3. removes them from silver.rejected_records
-                                   4. logs the remediation (audit.remediation_log), so Verify shows the result
+                                 then logs the remediation in DataTrust's own database (app.remediation_log), so Verify shows it
 The pipeline reads audit.dq_corrections too (silver_layer.apply_corrections), so a later re-run gives the same result.
 
 Fix rules (only where the evidence is unambiguous; anything else stays for the source team):
@@ -184,7 +184,7 @@ def proposal(incident_id: str) -> dict:
     sql = (f"-- 1. record {len(rows)} correction(s) with evidence\nINSERT INTO audit.dq_corrections (entity, record_key, column_name, old_value, new_value, evidence, approved_by, ...) VALUES ...;\n"
            f"-- 2. load the corrected rows into silver (same cleaning as the silver layer)\nINSERT INTO {silver_table} (...) VALUES ... ON CONFLICT ({key}) DO UPDATE ...;  -- {len(rows)} row(s), {col} filled in\n"
            f"-- 3. take them out of the rejected list\nDELETE FROM silver.rejected_records WHERE entity = '{entity}' AND rule_name = '{rule}' AND business_date = '{day}' AND record_key IN (...);\n"
-           f"-- 4. log the remediation\nINSERT INTO audit.remediation_log (...) VALUES (...);  -- all in ONE transaction")
+           f"-- (steps 1-3 run in ONE transaction)\n-- 4. log the remediation in DataTrust's database\nINSERT INTO app.remediation_log (...) VALUES (...);")
     title = (f"Fill in {col} for {len(rows)} {entity} row(s) of {day} from {'their orders' if rule == 'CURRENCY_REQUIRED' else 'amount_paid'}"
              if rows else "Nothing can be fixed automatically")
     return {"available": bool(rows), "incident_id": incident_id, "entity": entity, "rule": rule, "business_date": day,
@@ -258,15 +258,11 @@ def _apply(incident_id: str, approved_by: str) -> dict:
                   "AMOUNT_POSITIVE": "amount_paid (sign error)"}.get(rule, "evidence in the data")
         action = (f"Auto-fix applied: {fixed} {entity} row(s) of {day} loaded into silver, {p['rows'][0]['column']} taken from "
                   f"{source}; every change recorded in audit.dq_corrections")
-        conn.execute("""CREATE TABLE IF NOT EXISTS audit.remediation_log (
-                            remediation_id BIGINT GENERATED ALWAYS AS IDENTITY PRIMARY KEY, incident_id TEXT, incident_title TEXT,
-                            actions TEXT, approved_by TEXT, note TEXT, status TEXT DEFAULT 'APPROVED', approved_at TIMESTAMP DEFAULT now())""")
         titles = {i["id"]: i["title"] for i in ds.incidents()}
-        for iid in p["resolves"]:
-            conn.execute("""INSERT INTO audit.remediation_log (incident_id, incident_title, actions, approved_by, note, status)
-                            VALUES (%s, %s, %s, %s, %s, 'APPLIED')""",
-                         (iid, titles.get(iid, iid), action, approved_by, f"{fixed} correction(s) in audit.dq_corrections"))
         conn.commit()
+    # the approval record belongs to DataTrust (its own database), written once the data change is committed
+    ds.log_remediation([(iid, titles.get(iid, iid), action, approved_by, f"{fixed} correction(s) in audit.dq_corrections", "APPLIED")
+                        for iid in p["resolves"]])
     return {"fixed": fixed, "resolves": p["resolves"], "action": action}
 
 

@@ -1,6 +1,6 @@
 """
 Portal store: who can log in, which sources are connected, access requests and the portal's own audit log.
-Everything lives in schema `portal` of the POC database (config.py / .env PG_*). Created on first start.
+Everything lives in schema `portal` of DataTrust's own database (config.py / .env APP_PG_*). Created on first start.
 
 Passwords of connected sources are NEVER stored here: a connection keeps the NAME of a .env variable
 (e.g. CONN_SALES_PASSWORD) and the password is read from .env when the portal connects.
@@ -30,13 +30,13 @@ def auth_enabled() -> bool:
 
 
 def db():
-    """Connection to the portal's own database (the POC database)."""
-    return psycopg.connect(sslmode=config.PG_SSLMODE, host=config.PG_HOST, port=config.PG_PORT, dbname=config.PG_DATABASE,
-                           user=config.PG_USER, password=config.PG_PASSWORD, row_factory=dict_row, connect_timeout=5)
+    """Connection to DataTrust's own database (config APP_PG_*), not to any monitored source."""
+    import appdb
+    return appdb.connect()
 
 
-def init() -> None:
-    """Create the portal tables, the first admin and the default connection (safe to run every start)."""
+def create_tables() -> None:
+    """The portal tables only, no rows (appdb.prepare moves existing rows in before init() seeds anything)."""
     with db() as conn:
         conn.execute("""
             CREATE SCHEMA IF NOT EXISTS portal;
@@ -109,6 +109,13 @@ def init() -> None:
                 target     TEXT,
                 detail     TEXT);
         """)
+        conn.commit()
+
+
+def init() -> None:
+    """Create the portal tables, the first admin and the default connection (safe to run every start)."""
+    create_tables()
+    with db() as conn:
         if not conn.execute("SELECT 1 FROM portal.users LIMIT 1").fetchone():
             user = os.getenv("PORTAL_ADMIN_USER", "admin")
             password = os.getenv("PORTAL_ADMIN_PASSWORD") or secrets.token_urlsafe(9)

@@ -3,6 +3,7 @@
 ## What exists today
 
 - The main pipeline is a PySpark medallion POC: local/ADLS files flow through Bronze, Silver, and PostgreSQL Gold views.
+- **DataTrust has its own database** (`APP_PG_*`, default `datatrust_app`) for logins, connections, connector telemetry, approvals and alerts. The systems it monitors, including the POC database, are separate and only read through connections.
 - The web dashboard reads that POC's Gold views and audit tables. Its trust score, reconciliation, and some incident logic use the demo's data model.
 - The Data Estate can browse PostgreSQL and SQL Server. Snowflake and SAP HANA can be connection-tested, but do not have catalog-browsing connectors.
 - Kafka streaming is an optional add-on.

@@ -27,7 +27,7 @@ from __future__ import annotations
 import statistics
 from datetime import datetime, timezone
 
-import data_service as ds
+import appdb as ds                       # telemetry.* lives in DataTrust's own database
 
 from . import diagnose, resolve, store
 

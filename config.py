@@ -18,6 +18,16 @@ PG_USER = os.getenv("PG_USER", "postgres")
 PG_PASSWORD = os.getenv("PG_PASSWORD", "admin")
 PG_SSLMODE = os.getenv("PGSSLMODE", "prefer")
 
+#  DataTrust's OWN database (logins, connections, connector telemetry, incidents, approvals, alerts).
+#  Separate from the data it monitors: the POC database above is just one connected source.
+#  Unset values fall back to the PG_* server, with database datatrust_app.
+APP_PG_HOST = os.getenv("APP_PG_HOST") or PG_HOST                 # `or`: an empty value in .env also means "unset"
+APP_PG_PORT = int(os.getenv("APP_PG_PORT") or PG_PORT)
+APP_PG_DATABASE = os.getenv("APP_PG_DATABASE") or "datatrust_app"
+APP_PG_USER = os.getenv("APP_PG_USER") or PG_USER
+APP_PG_PASSWORD = os.getenv("APP_PG_PASSWORD") or PG_PASSWORD
+APP_PG_SSLMODE = os.getenv("APP_PGSSLMODE") or PG_SSLMODE
+
 # Where the source CSV files are read from 
 # local : data/source_csv folder (no Azure needed)
 # adls : Azure Data Lake Storage Gen2 container (files uploaded with upload_to_adls.py)

@@ -183,7 +183,7 @@ Azure management API (read-only)            DataTrust
 - Every write is an upsert keyed on ADF's own IDs, so repeating a sync changes nothing.
 - A PostgreSQL advisory lock ensures each factory has only one sync at a time, even across processes.
 
-**Storage** (`telemetry` schema)
+**Storage** (`telemetry` schema in DataTrust's own database, `APP_PG_*`)
 
 - Tables: `sources`, `definitions`, `pipeline_runs`, `task_runs`, `trigger_runs`, `checks` and `sync_log`.
 - The tables are platform-neutral, so the next connector (Airflow, Databricks, …) can reuse them.
