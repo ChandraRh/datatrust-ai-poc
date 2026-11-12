@@ -32,7 +32,7 @@ COPY llm_gemini.py .
 COPY web/ web/
 
 # Catch missing files and imports during the image build, rather than at container startup.
-RUN python -c "import sys; sys.path.insert(0, '/app/web'); import alerts, agent, appdb, autofix, batch_status, briefing, data_service, dq, dq_routes, schema_guard; from estate import drafting, routes, service, source_types, store; from adf import client, collector, diagnose, insights, probes, resolve, routes, store"
+RUN python -c "import sys; sys.path.insert(0, '/app/web'); import alerts, agent, appdb, autofix, batch_status, briefing, data_service, dq, dq_routes, schema_guard; from estate import drafting, routes, service, source_types, store; from adf import client, collector, diagnose, insights, probes, resolve, routes, store; from checks import dialects, engine, routes, runner, store"
 
 # run as a non-root user
 RUN useradd --create-home --uid 10001 appuser

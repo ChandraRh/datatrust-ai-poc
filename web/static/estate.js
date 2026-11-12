@@ -105,8 +105,9 @@ async function renderEstate(page) {
       if (!est.user) return loginForm(el, page);
     }
     el.innerHTML = "<p class='muted'>Loading…</p>";
-    if (page === "estate-people" || page.startsWith("estate-dq-") || page.startsWith("estate-adf-")) {   // no source to pick
-      const body = await (page === "estate-people" ? window.Connect.page() : page.startsWith("estate-adf-") ? window.ADF.page(page) : window.DQ.page(page));
+    if (page === "estate-people" || page.startsWith("estate-dq-") || page.startsWith("estate-adf-") || page.startsWith("estate-checks")) {   // no source to pick
+      const body = await (page === "estate-people" ? window.Connect.page() : page.startsWith("estate-adf-") ? window.ADF.page(page)
+        : page.startsWith("estate-checks") ? window.CHECKS.page(page) : window.DQ.page(page));
       el.innerHTML = body.html;
       body.bind();
       return;
@@ -129,8 +130,9 @@ async function renderEstate(page) {
     el.innerHTML = `<div class="error-box">${esc(e.message)}</div>`;
   }
 }
-document.querySelectorAll("#tabs button").forEach((b) => b.addEventListener("click", () => {
+document.querySelectorAll("#tabs button").forEach((b) => b.addEventListener("click", (ev) => {
   if (b.dataset.page.startsWith("estate-adf-") && window.ADF) window.ADF.navigated(b.dataset.page);
+  if (b.dataset.page.startsWith("estate-checks") && window.CHECKS) window.CHECKS.navigated(b.dataset.page, ev.isTrusted);
   if (b.dataset.page.startsWith("estate-")) renderEstate(b.dataset.page);
 }));
 

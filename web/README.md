@@ -55,6 +55,16 @@ server reads it every `ADF_POLL_SECONDS` and the **ADF pipelines / ADF issues / 
 diagnosed cause and the checks DataTrust runs on the ADLS source files and PostgreSQL target tables. Run the collector as its own
 process with `ADF_COLLECTOR_IN_WEB=false` and `python web/adf/collector.py`.
 
+## Data checks
+**Data checks** watches any table or query in a connected PostgreSQL or SQL Server database (Data estate →
+Connections): freshness, row volume against the usual, empty values, unique keys, schema changes, your own read-only
+SQL, and reconciliations between two queries (also across databases, e.g. source totals vs target totals). Each check
+runs on its own schedule; results and their evidence (duplicate keys, differing rows, the SQL that ran) are kept in
+DataTrust's database (`monitor.*`). Checks only read: PostgreSQL in a read-only session, SQL Server inside a transaction
+that is always rolled back, and user SQL must be one SELECT. On first start a few starter checks are added for the POC
+database, including the payment-gateway reconciliation. Run the scheduler separately with `CHECKS_IN_WEB=false` and
+`python web/checks/runner.py`. SQL Server sources need `pip install pyodbc` and Microsoft ODBC Driver 18.
+
 ## Pages
 | Page | What it shows | Where the data comes from |
 |---|---|---|

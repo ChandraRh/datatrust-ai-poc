@@ -171,7 +171,9 @@ class AuthRouteTests(unittest.TestCase):
         self.assertEqual(session, {"user": user})
 
     def test_dashboard_stays_public_while_estate_api_requires_sign_in(self):
-        import server
+        # importing the server must not start its background loops in a test (no Google Chat posts, no syncs, no checks)
+        with patch.dict(os.environ, {"ALERTS_ENABLED": "false", "ADF_COLLECTOR_IN_WEB": "false", "CHECKS_IN_WEB": "false"}):
+            import server
 
         with patch.object(server.estate_store, "auth_enabled", return_value=True), \
                 patch.object(server.estate_store, "read_session", return_value=None):

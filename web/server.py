@@ -93,6 +93,17 @@ try:                                                    # Azure Data Factory con
 except Exception as e:
     print(f"!! Azure Data Factory connector not ready: {e}")
 
+try:                                                    # Data checks on any connected database (own tables, own API, scheduler)
+    from checks import routes as checks_routes, runner as checks_runner, store as checks_store
+    app.include_router(checks_routes.router)
+    checks_store.ensure_tables()
+    if (n := checks_runner.seed_starter_checks()):
+        print(f"Data checks: {n} starter checks added for the POC database")
+    if checks_runner.start_background():
+        print(f"Data checks scheduler: on (every {checks_runner.POLL_SECONDS} s)")
+except Exception as e:
+    print(f"!! Data checks not ready: {e}")
+
 try:                                                    # Google Chat alerts (only when GOOGLE_CHAT_WEBHOOK_URL is set)
     import alerts
     if alerts.start_background():

@@ -610,3 +610,24 @@ tr.clickable { cursor: pointer; } tr.clickable:hover td { background: var(--bran
 .adf-guide li { margin: 6px 0; } .adf-guide code { white-space: normal; overflow-wrap: anywhere; }
 @media (max-width: 900px) { .adf-g { grid-template-columns: 1fr 56px; } .adf-g-name { grid-column: 1 / -1; } .adf-arrow { min-width: 0; width: 100%; } }
 .adf-clamp { display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; }
+
+/* ---------------------------------------------------------------- Data checks (checks.js) */
+.ck-table { max-height: none; }
+.ck-table table td { vertical-align: top; }
+.ck-table tr.muted td { opacity: .6; }
+.ck-msg { max-width: 420px; }
+.ck-dots { display: inline-flex; gap: 2px; align-items: center; }
+.ck-dots i { width: 7px; height: 14px; border-radius: 2px; background: #D5DEE8; display: inline-block; }
+.ck-dots i.ok { background: var(--teal); } .ck-dots i.warn { background: var(--accent); } .ck-dots i.bad { background: var(--red); }
+.ck-facts { display: grid; grid-template-columns: repeat(auto-fill, minmax(170px, 1fr)); gap: 12px 18px; margin: 12px 0 4px; }
+.ck-facts .l { display: block; color: var(--muted); font-size: 11px; font-weight: 600; text-transform: uppercase; letter-spacing: .05em; margin-bottom: 2px; }
+.ck-facts b { font-weight: 600; font-size: 13.5px; }
+.ck-facts .wide { grid-column: 1 / -1; }
+.ck-result { border: 1px solid var(--line); border-left: 3px solid #C3CFDB; border-radius: 10px; padding: 12px 14px; display: grid; gap: 8px; }
+.ck-result.ck-ok { border-left-color: var(--teal); } .ck-result.ck-warn { border-left-color: var(--accent); } .ck-result.ck-bad { border-left-color: var(--red); }
+.ck-result-head { display: flex; gap: 8px; align-items: baseline; flex-wrap: wrap; }
+.ck-result h4, .ck-side h4 { margin: 6px 0 0; font-size: 13px; }
+.ck-side { grid-column: 1 / -1; border: 1px dashed var(--line); border-radius: 10px; padding: 4px 12px 12px; }
+.adf-form .field.wide { grid-column: 1 / -1; }
+.adf-form textarea { font-family: ui-monospace, Consolas, monospace; font-size: 12.5px; padding: 9px 11px; border: 1px solid var(--line); border-radius: var(--radius-sm); resize: vertical; }
+.adf-form select[multiple] { padding: 4px; }
