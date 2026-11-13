@@ -172,7 +172,9 @@ def _facts(scope: str | None) -> dict:
         except ValueError:
             return None
     new = [i for i in inc["open"] if (age_h((st.get(i["id"]) or {}).get("first_seen")) or 1e9) <= 24]
-    fixed = [r for r in inc["resolved"] if (age_h(r.get("resolved_at")) or 1e9) <= 24]
+    gone = [r for r in inc["resolved"] if (age_h(r.get("resolved_at")) or 1e9) <= 24]
+    fixed = [r for r in gone if r.get("verified")]
+    unverified = [r for r in gone if not r.get("verified")]
     t = o["trust"]
     if o["kind"] == "poc":
         trend = {"metric": "trust score by business date", "points": [{"day": x["business_date"], "value": x["score"]} for x in (t.get("trend") or [])][-5:]}
@@ -187,7 +189,9 @@ def _facts(scope: str | None) -> dict:
             "trust_score": t["score"], "label": t["label"],
             "why_not_100": [r["reason"] for r in t["reasons"]][:8], "recent_trend": trend,
             "open_incidents": [{"severity": i["severity"], "title": i["title"], "summary": i["summary"][:200]} for i in inc["open"][:12]],
-            "new_in_24h": [i["title"] for i in new], "resolved_in_24h": [r["incident_title"] for r in fixed],
+            "new_in_24h": [i["title"] for i in new],
+            "resolved_in_24h": [f"{r['incident_title']} ({r['resolution_label'].lower()})" for r in fixed],
+            "gone_but_not_verified_24h": [f"{r['incident_title']} ({r['resolution_label'].lower()}: {r['resolution_detail']})" for r in unverified],
             "acknowledged": [i["title"] for i in inc["open"] if i.get("acknowledged_by")]}
 
 
@@ -196,6 +200,8 @@ def _plain_briefing(f: dict) -> dict:
     lines.append(f"{len(f['open_incidents'])} open incident(s)" + (f", {len(f['new_in_24h'])} new in the last 24 h." if f["new_in_24h"] else "."))
     if f["resolved_in_24h"]:
         lines.append(f"Resolved in the last 24 h: {', '.join(f['resolved_in_24h'][:3])}.")
+    if f.get("gone_but_not_verified_24h"):
+        lines.append(f"{len(f['gone_but_not_verified_24h'])} incident(s) stopped showing without a verified fix (see Verify).")
     return {"headline": lines[0], "summary": " ".join(lines[1:]), "watch": [i["title"] for i in f["open_incidents"][:3]]}
 
 
@@ -205,7 +211,9 @@ def briefing(scope: str | None, refresh: bool = False, cached_only: bool = False
     if llm.provider() == "none":
         return {"available": False, "facts": f, **_plain_briefing(f), "reason": "No AI model is configured: this is the plain summary."}
     system = ("You are DataTrust AI writing the morning briefing for one data source. " + GROUND +
-              "new_in_24h / resolved_in_24h mean first seen / resolved in the last 24 hours. If measured is false, say plainly "
+              "new_in_24h / resolved_in_24h mean first seen / resolved (verified fix) in the last 24 hours. "
+              "gone_but_not_verified_24h stopped showing WITHOUT a verified fix (a rule changed or no reason found): never call them fixed. "
+              "If measured is false, say plainly "
               "that nothing is monitored yet and that the next step is to add data checks (database) or connect runs (factory). "
               "recent_trend.metric names what the trend measures; do not call it the trust score unless it says so. " +
               "Return JSON {\"headline\": one sentence with the state, \"summary\": 2-4 sentences (what broke, what got fixed), "

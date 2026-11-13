@@ -12,16 +12,20 @@ How each kind is scored
 
 Incident ids are unique across sources: POC ids are unchanged (RECON-..., DQ-...), checks are "db<id>:CHECK-<n>",
 ADF issues keep their "adf:<id>:..." ids. Incidents get a lifecycle in app.incident_state:
-first seen -> (acknowledged) -> resolved (no longer in the data), so Verify can show what the data proves fixed.
+first seen -> (acknowledged) -> resolved, with a recorded reason (web/resolution.py): only a fix, a successful rerun or a
+passing re-check counts as verified; a changed rule or an unexplained disappearance does not.
 """
 from __future__ import annotations
 
 import re
 from datetime import datetime, timedelta, timezone
 
+from psycopg.types.json import Jsonb
+
 import appdb
 import config
 import data_service as ds
+import resolution
 
 CHECK_PENALTY = {"CRITICAL": 40, "HIGH": 25, "MEDIUM": 10, "LOW": 4}
 ERROR_PENALTY, WARN_PENALTY = 5, 2
@@ -43,6 +47,12 @@ CREATE TABLE IF NOT EXISTS app.incident_state (
     acknowledged_at TIMESTAMPTZ
 );
 CREATE INDEX IF NOT EXISTS incident_state_by_scope ON app.incident_state (scope, resolved_at);
+ALTER TABLE app.incident_state ADD COLUMN IF NOT EXISTS meta JSONB;             -- what it is about (rule, table, run ...)
+ALTER TABLE app.incident_state ADD COLUMN IF NOT EXISTS marks JSONB;            -- where the POC's logs stood when it opened
+ALTER TABLE app.incident_state ADD COLUMN IF NOT EXISTS resolution TEXT;        -- why it is gone (web/resolution.py)
+ALTER TABLE app.incident_state ADD COLUMN IF NOT EXISTS resolution_detail TEXT;
+ALTER TABLE app.incident_state ADD COLUMN IF NOT EXISTS superseded_by TEXT;     -- the newer incident it continues as
+ALTER TABLE app.incident_state ADD COLUMN IF NOT EXISTS supersedes TEXT;
 """
 
 
@@ -151,11 +161,12 @@ def incidents(scope: str | None) -> dict:
     s = resolve(scope)
     found = _incidents(s)
     _approvals(found)
-    _track(s["key"], found)
+    _track(s, found)
     state = _state(s["key"])
     for i in found:
         st = state.get(i["id"]) or {}
         i["first_seen"], i["acknowledged_by"], i["acknowledged_at"] = st.get("first_seen"), st.get("acknowledged_by"), st.get("acknowledged_at")
+        i["supersedes"] = st.get("supersedes")
     order = {"CRITICAL": 0, "HIGH": 1, "MEDIUM": 2, "LOW": 3}
     found.sort(key=lambda i: (order.get(i["severity"], 4), i["id"]))
     return {"scope": s, "open": found, "resolved": _resolved(s["key"], {i["id"] for i in found})}
@@ -182,7 +193,9 @@ def all_incidents() -> list:
     out = []
     for s in list_scopes():
         try:
-            for i in _incidents(s):
+            found = _incidents(s)
+            _track(s, found)                                          # so a resolved alert can say why
+            for i in found:
                 out.append({**i, "scope": s["key"], "scope_name": s["name"]})
         except Exception:                                             # noqa: BLE001  one unreachable source must not stop alerts
             continue
@@ -203,22 +216,42 @@ def _approvals(found: list) -> None:
             i["approval"] = by.get(i["id"])
 
 
-def _track(scope_key: str, found: list) -> None:
-    """Lifecycle: new ids are first seen now; ids that were open and are gone are resolved now (the data no longer shows them)."""
+def _track(s: dict, found: list) -> None:
+    """Lifecycle: new ids are first seen now; ids that were open and are gone are resolved now, each with the reason
+    resolution.classify finds. One that continues in a newer run is linked to it and keeps its 'open since'."""
+    scope_key = s["key"]
     try:
         with appdb.connect() as conn:
+            known = {r["incident_id"]: r for r in conn.execute(
+                "SELECT incident_id, resolved_at, marks FROM app.incident_state WHERE incident_id = ANY(%s)", ([i["id"] for i in found],)).fetchall()}
+            # only needed for incidents that open now (or were open before DataTrust recorded marks)
+            opening = any(i["id"] not in known or known[i["id"]]["resolved_at"] or known[i["id"]]["marks"] is None for i in found)
+            mk = resolution.marks(s) if opening else {}
             for i in found:
-                conn.execute("""INSERT INTO app.incident_state (incident_id, scope, title, severity) VALUES (%s, %s, %s, %s)
+                conn.execute("""INSERT INTO app.incident_state (incident_id, scope, title, severity, meta, marks) VALUES (%s, %s, %s, %s, %s, %s)
                                 ON CONFLICT (incident_id) DO UPDATE SET last_seen = now(), title = EXCLUDED.title,
-                                    severity = EXCLUDED.severity, scope = EXCLUDED.scope,
+                                    severity = EXCLUDED.severity, scope = EXCLUDED.scope, meta = EXCLUDED.meta,
                                     first_seen = CASE WHEN app.incident_state.resolved_at IS NOT NULL THEN now() ELSE app.incident_state.first_seen END,
+                                    marks = CASE WHEN app.incident_state.resolved_at IS NOT NULL OR app.incident_state.marks IS NULL
+                                                 THEN EXCLUDED.marks ELSE app.incident_state.marks END,
                                     acknowledged_by = CASE WHEN app.incident_state.resolved_at IS NOT NULL THEN NULL ELSE app.incident_state.acknowledged_by END,
                                     acknowledged_at = CASE WHEN app.incident_state.resolved_at IS NOT NULL THEN NULL ELSE app.incident_state.acknowledged_at END,
-                                    resolved_at = NULL""", (i["id"], scope_key, i["title"][:300], i["severity"]))
-            conn.execute("""UPDATE app.incident_state SET resolved_at = now()
-                            WHERE scope = %s AND resolved_at IS NULL AND NOT (incident_id = ANY(%s))""",
-                         (scope_key, [i["id"] for i in found]))
+                                    resolved_at = NULL, resolution = NULL, resolution_detail = NULL, superseded_by = NULL""",
+                             (i["id"], scope_key, i["title"][:300], i["severity"], Jsonb(resolution.meta(i)), Jsonb(mk)))
+            gone = conn.execute("""SELECT incident_id, first_seen, meta, marks FROM app.incident_state
+                                   WHERE scope = %s AND resolved_at IS NULL AND NOT (incident_id = ANY(%s))""",
+                                (scope_key, [i["id"] for i in found])).fetchall()
             conn.commit()
+            for g in gone:
+                reason, detail, newer = resolution.classify(g, found)
+                done = conn.execute("""UPDATE app.incident_state SET resolved_at = now(), resolution = %s, resolution_detail = %s,
+                                              superseded_by = %s
+                                       WHERE incident_id = %s AND resolved_at IS NULL""",
+                                    (reason, detail, newer, g["incident_id"])).rowcount
+                if done and newer:                                    # the same problem in a newer run: open since the first one
+                    conn.execute("""UPDATE app.incident_state SET first_seen = LEAST(first_seen, %s), supersedes = %s
+                                    WHERE incident_id = %s""", (g["first_seen"], g["incident_id"], newer))
+                conn.commit()
     except Exception as e:                                            # noqa: BLE001  the page still works without the lifecycle
         print(f"!! incident lifecycle not updated: {e}")
 
@@ -230,20 +263,27 @@ def _state(scope_key: str) -> dict:
 
 
 def _resolved(scope_key: str, open_ids: set) -> list:
-    """Verified resolved: approved fixes whose incident is gone, plus anything that disappeared from the data in the last 7 days."""
-    out = {}
+    """Everything that stopped showing in the last 7 days, each with why (verified or not). Ones that continue in a newer
+    run are left out: they are still open under their new id."""
+    out = []
     if appdb.table_exists("app.incident_state"):
-        for r in appdb.rows("""SELECT s.incident_id, s.title, s.severity, s.first_seen, s.resolved_at, a.actions, a.approved_by, a.approved_at
+        for r in appdb.rows("""SELECT s.incident_id, s.title, s.severity, s.first_seen, s.resolved_at, s.resolution, s.resolution_detail,
+                                      a.actions, a.approved_by, a.approved_at
                                FROM app.incident_state s
                                LEFT JOIN LATERAL (SELECT actions, approved_by, approved_at FROM app.remediation_log l
                                                   WHERE l.incident_id = s.incident_id ORDER BY approved_at DESC LIMIT 1) a ON true
                                WHERE s.scope = %s AND s.resolved_at > now() - interval '7 days'
+                                 AND s.resolution IS DISTINCT FROM 'superseded'
                                ORDER BY s.resolved_at DESC""", (scope_key,)):
-            if r["incident_id"] not in open_ids:
-                out[r["incident_id"]] = {"incident_id": r["incident_id"], "incident_title": r["title"], "severity": r["severity"],
-                                         "actions": r["actions"] or "No longer present in the data", "approved_by": r["approved_by"],
-                                         "approved_at": r["approved_at"], "first_seen": r["first_seen"], "resolved_at": r["resolved_at"]}
-    return list(out.values())
+            if r["incident_id"] in open_ids:
+                continue
+            name, verified = resolution.label(r["resolution"])
+            out.append({"incident_id": r["incident_id"], "incident_title": r["title"], "severity": r["severity"],
+                        "actions": r["actions"], "approved_by": r["approved_by"], "approved_at": r["approved_at"],
+                        "first_seen": r["first_seen"], "resolved_at": r["resolved_at"], "resolution": r["resolution"],
+                        "resolution_label": name, "verified": verified,
+                        "resolution_detail": r["resolution_detail"] or "Resolved before DataTrust recorded reasons."})
+    return out
 
 
 def acknowledge(incident_id: str, by: str) -> None:

@@ -121,6 +121,23 @@ def text_message(text: str) -> dict:
     return {"text": text}
 
 
+def resolved_text(incident_id: str, title: str) -> str:
+    """The 'gone' message says why (app.incident_state.resolution): only a real fix is announced as resolved."""
+    import resolution
+    st = appdb.one("SELECT resolution, resolution_detail, superseded_by FROM app.incident_state WHERE incident_id = %s",
+                   (incident_id,)) if appdb.table_exists("app.incident_state") else {}
+    reason = st.get("resolution")
+    link = f"{public_url()}/#verify"
+    if reason == "superseded":
+        return f"🔁 *Still failing in a newer run:* {title}\n{st.get('resolution_detail') or ''} {public_url()}/#detect"
+    if not reason:
+        return f"✅ *No longer reported:* {title}\nNo longer present in the latest data. {link}"
+    name, verified = resolution.label(reason)
+    if verified:
+        return f"✅ *Resolved, {name.lower()}:* {title}\n{st.get('resolution_detail') or ''} {link}"
+    return f"⚠️ *No longer reported, not verified ({name.lower()}):* {title}\n{st.get('resolution_detail') or ''} {link}"
+
+
 # ---------------------------------------------------------------- the check
 def _ensure(conn):
     conn.execute("CREATE SCHEMA IF NOT EXISTS app")
@@ -205,7 +222,7 @@ def check_once() -> dict:
             if not claimed:
                 continue
             try:
-                send(text_message(f"✅ *Resolved:* {row['title']}\nNo longer present in the latest data. {public_url()}/#verify"), thread=iid)
+                send(text_message(resolved_text(iid, row["title"])), thread=iid)
                 sent_resolved.append(iid)
             except Exception as e:
                 conn.execute("UPDATE app.alert_log SET resolved_alerted_at = NULL WHERE incident_id = %s", (iid,))

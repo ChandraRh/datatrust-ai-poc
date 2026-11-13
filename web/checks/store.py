@@ -52,6 +52,10 @@ CREATE TABLE IF NOT EXISTS monitor.results (
     triggered_by TEXT
 );
 CREATE INDEX IF NOT EXISTS results_by_check ON monitor.results (check_id, run_at DESC);
+-- when a person changed what the rule measures (updated_at also moves when DataTrust learns a baseline):
+-- an incident that disappears after either is not counted as fixed (web/resolution.py)
+ALTER TABLE monitor.checks ADD COLUMN IF NOT EXISTS edited_at TIMESTAMPTZ;
+ALTER TABLE monitor.checks ADD COLUMN IF NOT EXISTS baseline_accepted_at TIMESTAMPTZ;
 """
 
 
@@ -163,7 +167,7 @@ def update_check(check_id: int, body: dict) -> None:
         conn.execute("""UPDATE monitor.checks SET name = %(name)s, check_type = %(check_type)s, connection_id = %(connection_id)s,
                                database = %(database)s, schema_name = %(schema_name)s, table_name = %(table_name)s, config = %(config)s,
                                severity = %(severity)s, schedule_minutes = %(schedule_minutes)s, enabled = %(enabled)s,
-                               description = %(description)s, updated_at = now(), run_requested_at = now(),
+                               description = %(description)s, updated_at = now(), edited_at = now(), run_requested_at = now(),
                                state = CASE WHEN %(keep)s THEN state ELSE '{}'::jsonb END
                         WHERE check_id = %(id)s""", {**v, "config": J(v["config"]), "keep": keep_state, "id": check_id})
         conn.commit()
@@ -175,9 +179,12 @@ def delete_check(check_id: int) -> None:
         conn.commit()
 
 
-def set_state(check_id: int, state: dict) -> None:
+def set_state(check_id: int, state: dict, accepted: bool = False) -> None:
+    """accepted: a person accepted the current schema as the new baseline (not DataTrust learning it)."""
     with appdb.connect() as conn:
-        conn.execute("UPDATE monitor.checks SET state = %s, updated_at = now() WHERE check_id = %s", (J(state), check_id))
+        conn.execute("""UPDATE monitor.checks SET state = %s, updated_at = now(),
+                               baseline_accepted_at = CASE WHEN %s THEN now() ELSE baseline_accepted_at END
+                        WHERE check_id = %s""", (J(state), accepted, check_id))
         conn.commit()
 
 

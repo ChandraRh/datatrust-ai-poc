@@ -80,7 +80,21 @@ A source with nothing measured yet shows "No data yet" rather than a perfect sco
 The Data quality pages follow the source too: for the POC they are its own rule engine (Rejected records, DQ Rule
 Studio); for a database they list the rows its failing checks found and its checks as rules; for a factory they show
 the rows ADF skipped while copying and each Copy step's data settings with DataTrust's checks of every copy (`web/quality.py`). Incidents have a lifecycle in
-`app.incident_state`: first seen, acknowledged (button on Detect), resolved when the source's data no longer shows them.
+`app.incident_state`: first seen, acknowledged (button on Detect), and gone, always with a recorded reason (`web/resolution.py`):
+
+| Reason | When | Verify shows it as |
+|---|---|---|
+| Fixed by DataTrust | auto-fix or re-insert corrected the rows (`audit.dq_corrections`) | verified resolved |
+| Fixed by a pipeline rerun | a newer POC batch (or ADF run) succeeded and the same, unchanged rule finds nothing | verified resolved |
+| Re-checked: passes | the data check ran again after the incident opened and passed | verified resolved |
+| Accepted | a schema change was acknowledged, or a schema check's new columns were accepted | verified resolved |
+| Rule changed | the rule was edited, switched off or deleted after the incident opened | not verified |
+| Not verified | it disappeared and none of the above was recorded (e.g. data cleared or reloaded) | not verified |
+| Still failing in a newer run | the same failure appears under a newer run's id | not resolved: the new incident keeps the original "open since" |
+
+When an incident opens, DataTrust notes where the POC's logs stand (latest batch, last correction id, last rule-change id) and later
+compares ids, not clocks, so different time zones in the two databases cannot give a wrong reason. Google Chat and the daily briefing
+use the same reasons: only verified fixes are announced as resolved.
 Google Chat alerts cover every source and name it on each card. Links: `#observe=db:3`, `#detect=adf:3`.
 
 ## AI features (LLM_PROVIDER)

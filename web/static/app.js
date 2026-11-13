@@ -494,8 +494,9 @@ function incidentRow(i) {
   const appr = i.approval ? `<span class="chip warn">remediation approved by ${esc(i.approval.approved_by)}</span>` : "";
   const ack = i.acknowledged_by ? `<span class="chip grey">acknowledged by ${esc(i.acknowledged_by)}</span>` : "";
   const age = since(i.first_seen);
+  const again = i.supersedes ? `<span class="chip grey" title="Continues ${esc(i.supersedes)}">also failed in an earlier run</span>` : "";
   return `<div class="incident"><span class="sev ${i.severity}">${i.severity}</span>
-    <div class="body"><div class="t">${esc(i.title)} ${appr} ${ack}</div><div class="small muted">${esc(i.summary)}${age ? ` · ${age}` : ""}</div></div>
+    <div class="body"><div class="t">${esc(i.title)} ${appr} ${ack} ${again}</div><div class="small muted">${esc(i.summary)}${age ? ` · ${age}` : ""}</div></div>
     <div class="inc-acts">${i.acknowledged_by ? "" : `<button class="btn light" data-ack="${esc(i.id)}">Acknowledge</button>`}
     <button class="btn light" data-contact="${esc(i.title + " — " + i.summary)}">Contact owner</button>
     ${recordsButton(i)}<button class="btn light" onclick="go('investigate','${esc(i.id)}')">Investigate</button></div></div>`;
@@ -905,13 +906,22 @@ async function renderVerify() {
   const { open, resolved } = state.incidents;
   const t = state.overview.trust, p = state.overview.pipeline;
   const waiting = open.filter((i) => i.approval);
+  const verified = resolved.filter((r) => r.verified), unverified = resolved.filter((r) => !r.verified);
+  const when = (t) => (t ? esc(String(t).slice(0, 16)) : "");
+  const item = (r, ok) => `<div class="check"><span class="${ok ? "" : "grey"}">${ok ? "✓" : "?"}</span> <b>${esc(r.incident_title)}</b>
+      <span class="chip ${ok ? "ok" : "warn"}">${esc(r.resolution_label)}</span>
+      <div class="small">${esc(r.resolution_detail)}</div>
+      <div class="small muted">${r.first_seen ? `Open ${when(r.first_seen)} → ` : ""}gone ${when(r.resolved_at)}${r.approved_by ? ` · fix approved by ${esc(r.approved_by)}` : ""}${r.actions ? ` · ${esc(r.actions)}` : ""}</div></div>`;
   $("verifyBody").innerHTML = `
-    ${resolved.length ? `<div class="banner ok"><h2>INCIDENT(S) RESOLVED</h2>${resolved.map((r) => `✓ ${esc(r.incident_title)}${r.approved_by ? ` (approved by ${esc(r.approved_by)})` : ""}: no longer present in the latest data${r.resolved_at ? ` (since ${esc(String(r.resolved_at).slice(0, 16))})` : ""}.`).join("<br>")}</div>` : ""}
+    ${verified.length ? `<div class="banner ok"><h2>${verified.length} INCIDENT(S) VERIFIED RESOLVED</h2>${verified.map((r) => `✓ ${esc(r.incident_title)}: ${esc(r.resolution_label.toLowerCase())}.`).join("<br>")}</div>` : ""}
+    ${unverified.length ? `<div class="banner warn"><h2>${unverified.length} STOPPED SHOWING WITHOUT A VERIFIED FIX</h2>The data no longer shows them, but nothing proves they were fixed: check each one below.</div>` : ""}
     <div class="grid g-2">
       <div class="card"><h3>Remediation log</h3>
-        ${waiting.map((i) => `<div class="check"><span class="warn">⏳</span> <b>${esc(i.title)}</b><div class="small muted">Approved by ${esc(i.approval.approved_by)} at ${esc(i.approval.approved_at)}. Still present in the data: fix the source and re-run the pipeline.</div></div>`).join("")}
-        ${resolved.map((r) => `<div class="check"><span class="ok">✓</span> <b>${esc(r.incident_title)}</b><div class="small muted">${esc(r.actions)}</div></div>`).join("")}
+        ${waiting.map((i) => `<div class="check"><span class="grey">⏳</span> <b>${esc(i.title)}</b><div class="small muted">Approved by ${esc(i.approval.approved_by)} at ${esc(i.approval.approved_at)}. Still present in the data: fix the source and re-run the pipeline.</div></div>`).join("")}
+        ${verified.length ? `<h4 class="verify-h">Verified resolved</h4>${verified.map((r) => item(r, true)).join("")}` : ""}
+        ${unverified.length ? `<h4 class="verify-h">Not verified</h4>${unverified.map((r) => item(r, false)).join("")}` : ""}
         ${!waiting.length && !resolved.length ? "<p class='muted'>Nothing approved or resolved in the last 7 days. Approve a fix on page 5; it shows as resolved once the data no longer has the problem.</p>" : ""}
+        <p class="small muted">Verified means DataTrust saw why: it corrected the rows, a newer pipeline run succeeded with the same rule, the check ran again and passed, or a schema change was accepted. When a rule was changed or switched off, or nothing was recorded, the incident is listed as not verified.</p>
       </div>
       <div class="card center"><div id="gauge3"></div><div class="gauge-label"><span class="${t.score == null ? "muted" : tone(t.score)}">${esc(t.label)}</span></div>
         <div class="small muted">${esc((state.overview.scope || {}).name || "")} · open incidents ${open.length}${p ? ` · latest run ${esc(p.batch.batch_id || "–")}: ${p.layers.map((l) => l.layer + " " + l.status).join(", ")}` : ""}</div></div>

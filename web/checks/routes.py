@@ -109,6 +109,6 @@ def accept_schema(check_id: int, user: dict = Depends(admin_user)):
     if chk["check_type"] != "schema":
         raise HTTPException(400, "only schema checks have an accepted schema")
     cols = guard(engine.columns, chk["connection_id"], chk["database"], chk["schema_name"], chk["table_name"])
-    store.set_state(check_id, {"columns": {c["name"]: c["type"] for c in cols}})
+    store.set_state(check_id, {"columns": {c["name"]: c["type"] for c in cols}}, accepted=True)
     estate_store.audit(user["username"], "SCHEMA_ACCEPTED", f"{chk['schema_name']}.{chk['table_name']}", f"{len(cols)} columns")
     return engine.run_and_save(check_id, user["username"])
