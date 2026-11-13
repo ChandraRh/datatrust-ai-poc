@@ -275,7 +275,8 @@ def _overview_poc(s: dict) -> dict:
     if extra:
         trust["label"] = label_for(trust["score"]) if trust["label"] != "At risk" else "At risk"
     return {"kind": "poc", "scope": s, "overview": ds.overview(), "trust": trust, "pipeline": ds.pipeline_status(),
-            "as_of": ds.as_of_date().isoformat(), "checks": _check_summary(s["id"], True)}
+            "as_of": ds.as_of_date().isoformat(), "checks": _check_summary(s["id"], True),
+            "settlement": ds.settlement_recon()}                     # per date: gateway vs captured, for the revenue chart
 
 
 def _check_summary(connection_id: int, skip_dedupe: bool) -> dict:
@@ -373,6 +374,14 @@ def _overview_adf(s: dict) -> dict:
             d["n"] += r["n"]
             d["ok"] += r["n"] if r["status"] == "Succeeded" else 0
     trend = [{"day": d, "score": round(100 * v["ok"] / v["n"], 1)} for d, v in sorted(by_day.items()) if v["n"]]
+    # runs per day for the last 14 days, every day present (a quiet day is a zero, not a gap in the axis)
+    today = datetime.now(timezone.utc).date()
+    runs_by_day = []
+    for n in range(13, -1, -1):
+        d = (today - timedelta(days=n)).isoformat()
+        rows = [r for r in o.get("by_day") or [] if r["day"] == d]
+        runs_by_day.append({"day": d, **{st: sum(r["n"] for r in rows if r["status"] == st) for st in ("Succeeded", "Failed", "Cancelled")},
+                            "Other": sum(r["n"] for r in rows if r["status"] not in ("Succeeded", "Failed", "Cancelled"))})
     kpis = [{"label": "Pipelines", "value": k["pipelines"]},
             {"label": "Runs, 24 h", "value": k["runs_24h"], "sub": f"{k['failed_24h']} failed"},
             {"label": "Success rate, 7 d", "value": f"{k['success_rate_7d']}%" if k.get("success_rate_7d") is not None else "–"},
@@ -385,7 +394,7 @@ def _overview_adf(s: dict) -> dict:
     last = (o["sources"][0] if o["sources"] else {}).get("last_sync_finished")
     return {"kind": "generic", "scope": s, "trust": {"score": score, "label": label_for(score), "reasons": reasons, "basis": "pipeline runs",
             "rules": {"healthy_from": HEALTHY, "attention_from": ATTENTION}},
-            "kpis": kpis, "dimensions": dims, "trend": trend, "trend_label": "Run success rate by day (%)",
+            "kpis": kpis, "dimensions": dims, "trend": trend, "trend_label": "Run success rate by day (%)", "runs_by_day": runs_by_day,
             "items_title": "Pipelines", "items": items, "last_activity": last,
             "empty": None if pipes else "No pipelines read from this factory yet: check Connect ADF."}
 

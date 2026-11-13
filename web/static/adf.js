@@ -146,12 +146,17 @@
         bar.bind();
         const el = $e("body-estate-adf-overview");
         bindLinks(el);
-        const days = [...new Set(ov.by_day.map((d) => d.day))];
+        // every one of the last 14 days on the axis: a day without runs is a zero, not a missing column
+        const days = Array.from({ length: 14 }, (_, i) => new Date(Date.now() - (13 - i) * 864e5).toISOString().slice(0, 10));
         const series = [["Succeeded", "#11805A"], ["Failed", "#C42B2B"], ["Cancelled", "#94A3B8"], ["InProgress", "#EF802C"]];
-        chart("adfDays", { type: "bar", data: { labels: days.map((d) => d.slice(5)), datasets: series.map(([s, c]) => ({ label: LABEL[s] || s, backgroundColor: c,
+        const fmt = (d) => new Date(d + "T00:00:00").toLocaleDateString(undefined, { day: "numeric", month: "short" });
+        chart("adfDays", { type: "bar", data: { labels: days.map(fmt), datasets: series.map(([s, c]) => ({ label: LABEL[s] || s, backgroundColor: c,
+          maxBarThickness: 24, borderColor: "#fff", borderWidth: { top: 2 }, borderSkipped: "bottom",
           data: days.map((d) => (ov.by_day.find((x) => x.day === d && x.status === s) || {}).n || 0) })).filter((d) => d.data.some(Boolean)) },
-          options: { maintainAspectRatio: false, scales: { x: { stacked: true, grid: { display: false } }, y: { stacked: true, beginAtZero: true, ticks: { precision: 0 } } },
-            plugins: { legend: { position: "bottom", labels: { boxWidth: 10 } } } } });
+          options: { maintainAspectRatio: false, interaction: { mode: "index", intersect: false },
+            scales: { x: { stacked: true, grid: { display: false }, ticks: { maxRotation: 0, autoSkipPadding: 12 } },
+              y: { stacked: true, beginAtZero: true, ticks: { precision: 0 }, grid: { color: "#EDF1F5" } } },
+            plugins: { legend: { position: "bottom", labels: { boxWidth: 10, boxHeight: 10, usePointStyle: true, pointStyle: "rectRounded" } } } } });
       },
     };
   }

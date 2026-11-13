@@ -141,9 +141,11 @@
           ${c.description ? `<p class="muted" style="margin:0 0 10px">${esc(c.description)}</p>` : ""}
           <div class="ck-facts">${facts.map(([l, v]) => `<div><span class="l">${l}</span><b>${v}</b></div>`).join("")}<div class="wide"><span class="l">Rule</span><b>${rule}</b></div></div></div>
         ${last ? `<div class="card"><h3>Latest result <span class="small muted">${esc(when(last.run_at))} · ${esc(last.triggered_by || "")}</span></h3>${resultBox(c, last)}</div>` : `<div class="card"><p class="muted">Not run yet.</p></div>`}
+        ${trendCard(c, results)}
         <div class="card"><h3>History</h3>${results.length ? `<div class="tablewrap ck-table"><table><thead><tr><th>Run</th><th>Status</th><th class="num">Measured</th><th>Result</th><th>By</th></tr></thead><tbody>
           ${results.map((r) => `<tr><td class="small nowrap">${esc(when(r.run_at))}</td><td>${chip(r.status)}</td><td class="num">${n0(r.observed)}</td><td class="small ck-msg">${esc(r.message || "")}</td><td class="small">${esc(r.triggered_by || "")}</td></tr>`).join("")}</tbody></table></div>` : "<p class='muted'>No runs yet.</p>"}</div>`,
       bind() {
+        drawTrend(c, results);
         $e("ckBack").onclick = () => { C.open = null; renderEstate("estate-checks"); };
         $e("ckRun").onclick = async () => { $e("ckRun").disabled = true; try { await send(`/${id}/run`, "POST"); renderEstate("estate-checks"); } catch (x) { toast(x.message); $e("ckRun").disabled = false; } };
         if (!isAdmin()) return;
@@ -157,6 +159,51 @@
         };
       },
     };
+  }
+
+  // ------------------------------------------------------------------ the measured value over time, against the check's own limit
+  const UNIT = { freshness: "hours since the newest row", volume: "rows", null_rate: "% empty", uniqueness: "duplicate keys",
+    reconciliation: "keys that differ", custom_sql: "value returned" };
+  const plotted = (c, results) => results.filter((r) => r.observed != null && r.status !== "ERROR").reverse();
+  function trendCard(c, results) {
+    if (c.check_type === "schema" || plotted(c, results).length < 2 || !window.Chart) return "";
+    return `<div class="card"><h3>Measured over time <span class="small muted">${esc(UNIT[c.check_type] || "value")}, last ${plotted(c, results).length} runs</span></h3>
+      <div class="chartbox"><canvas id="ckTrend"></canvas></div><div class="chart-legend" id="ckTrendLegend"></div></div>`;
+  }
+  function limits(c, results) {
+    const cfg = c.config || {}, out = [];
+    if (c.check_type === "freshness") out.push({ y: Number(cfg.max_age_hours || 24), label: `Limit ${cfg.max_age_hours || 24} h` });
+    if (c.check_type === "null_rate" && Number(cfg.max_null_pct)) out.push({ y: Number(cfg.max_null_pct), label: `Limit ${cfg.max_null_pct}%` });
+    if (c.check_type === "volume") {
+      if (Number(cfg.min_rows) > 1) out.push({ y: Number(cfg.min_rows), label: `Minimum ${n0(cfg.min_rows)}` });
+      const usual = ((results[0] || {}).details || {}).usual;
+      if (usual) out.push({ y: usual * (1 - (Number(cfg.max_drop_pct) || 50) / 100), label: `Fails below ${n0(Math.round(usual * (1 - (Number(cfg.max_drop_pct) || 50) / 100)))}` });
+    }
+    if (c.check_type === "custom_sql" && cfg.mode === "value" && cfg.threshold != null) out.push({ y: Number(cfg.threshold), label: `Expected ${cfg.op || "="} ${cfg.threshold}` });
+    return out;
+  }
+  function drawTrend(c, results) {
+    const canvas = $e("ckTrend");
+    if (!canvas) return;
+    if (C.chart) C.chart.destroy();
+    const rs = plotted(c, results);
+    const color = { PASS: "#11805A", WARN: "#EF802C", FAIL: "#C42B2B" };
+    C.chart = new Chart(canvas, {
+      type: "line",
+      data: { labels: rs.map((r) => new Date(String(r.run_at).replace(" ", "T").replace(/(\.\d{3})\d+/, "$1")).toLocaleString(undefined, { day: "numeric", month: "short", hour: "2-digit", minute: "2-digit" })),
+        datasets: [{ label: UNIT[c.check_type] || "value", data: rs.map((r) => r.observed), borderColor: "#0672A1", backgroundColor: "rgba(6,114,161,.10)",
+          borderWidth: 2, fill: true, tension: 0.15, pointRadius: 4, pointHoverRadius: 6, pointBorderColor: "#fff", pointBorderWidth: 2,
+          pointBackgroundColor: rs.map((r) => color[r.status] || "#94A3B8") }] },
+      options: { responsive: true, maintainAspectRatio: false, interaction: { mode: "index", intersect: false },
+        plugins: { legend: { display: false }, dtThresholds: { lines: limits(c, results) },
+          tooltip: { callbacks: { label: (x) => `${n0(x.parsed.y)} ${UNIT[c.check_type] || ""}`, afterLabel: (x) => `${LABEL[rs[x.dataIndex].status] || rs[x.dataIndex].status}: ${rs[x.dataIndex].message || ""}` } } },
+        scales: { x: { grid: { display: false }, ticks: { maxRotation: 0, autoSkipPadding: 16 } },
+          y: { beginAtZero: true, grid: { color: "#EDF1F5" }, suggestedMax: Math.max(0, ...limits(c, results).map((l) => l.y * 1.15)),
+            ticks: { precision: c.check_type === "null_rate" || c.check_type === "freshness" ? undefined : 0 } } } },
+    });
+    const seen = [...new Set(rs.map((r) => r.status))];
+    $e("ckTrendLegend").innerHTML = seen.map((s) => `<span><i style="background:${color[s] || "#94A3B8"};border-radius:50%"></i>${esc(LABEL[s] || s)}</span>`).join("")
+      + (limits(c, results).length ? `<span><i class="line" style="background:#94A3B8"></i>the check's limit</span>` : "");
   }
 
   // ------------------------------------------------------------------ add / edit

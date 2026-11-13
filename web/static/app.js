@@ -153,20 +153,70 @@ function gauge(el, score, label) {
     <text x="95" y="128" text-anchor="middle" font-size="12.5" fill="#64748B">/ 100</text></svg>`;
 }
 
+// ---- charts: thin marks (2px lines, <=24px bars with a 4px rounded data end), hairline grid, labelled reference lines
+const CH = { brand: "#0672A1", ok: "#11805A", bad: "#C42B2B", grey: "#94A3B8", ink2: "#3A4A5E", line: "#EDF1F5" };
+if (window.Chart && !Chart.registry.plugins.get("dtThresholds")) {
+  Chart.register({                                              // horizontal reference lines, e.g. Healthy 90 / At risk below 75
+    id: "dtThresholds",
+    afterDatasetsDraw(chart, _args, opts) {
+      const lines = (opts && opts.lines) || [];
+      const y = chart.scales.y, area = chart.chartArea, c = chart.ctx;
+      if (!y || !lines.length) return;
+      c.save();
+      lines.forEach((l) => {
+        const py = y.getPixelForValue(l.y);
+        if (py < area.top - 1 || py > area.bottom + 1) return;
+        c.strokeStyle = l.color || "#94A3B8"; c.lineWidth = 1;
+        c.beginPath(); c.moveTo(area.left, py); c.lineTo(area.right, py); c.stroke();
+        c.font = "600 11px Inter, 'Segoe UI', system-ui, sans-serif"; c.fillStyle = CH.ink2; c.textAlign = "right"; c.textBaseline = "bottom";
+        const w = c.measureText(l.label).width + 8;
+        c.fillStyle = "rgba(255,255,255,.85)"; c.fillRect(area.right - w, py - 15, w, 14);
+        c.fillStyle = CH.ink2; c.fillText(l.label, area.right - 4, py - 2);
+      });
+      c.restore();
+    },
+  });
+}
+const TRUST_LINES = [{ y: 90, label: "Healthy from 90" }, { y: 75, label: "At risk below 75" }];
+function chartBase(opts = {}) {
+  return { responsive: true, maintainAspectRatio: false, interaction: { mode: "index", intersect: false },
+    plugins: { legend: { display: !!opts.legend, position: "bottom", labels: { boxWidth: 10, boxHeight: 10, usePointStyle: true, pointStyle: "rectRounded" } },
+      dtThresholds: { lines: opts.thresholds || [] },
+      tooltip: { callbacks: { label: opts.tipLabel || ((c) => `${c.dataset.label}: ${opts.money ? inr(c.parsed.y) : num(c.parsed.y)}`),
+        afterBody: opts.tipAfter ? (items) => opts.tipAfter(items[0].dataIndex) : undefined } } },
+    scales: { x: { stacked: !!opts.stacked, grid: { display: false }, ticks: { maxRotation: 0, autoSkipPadding: 12 } },
+      y: { stacked: !!opts.stacked, min: opts.min, max: opts.max, beginAtZero: opts.min == null, grid: { color: CH.line },
+        ticks: { precision: opts.money ? undefined : 0, callback: (v) => (opts.money ? inrShort(v) : num(v)) } } } };
+}
+function shortDay(d) {                                          // 2026-10-27 -> 27 Oct (axis); the tooltip shows the full date
+  const x = new Date(String(d).slice(0, 10) + "T00:00:00");
+  return isNaN(x) ? d : x.toLocaleDateString(undefined, { day: "numeric", month: "short" });
+}
 function drawChart(id, type, labels, values, label, opts = {}) {
   if (!window.Chart) return;
   if (state.charts[id]) state.charts[id].destroy();
   const ctx = typeof id === "string" ? $(id) : id;
   if (!ctx) return;
-  const pointColors = opts.pointColors || "#0672A1";
-  state.charts[id] = new Chart(ctx, {
-    type,
-    data: { labels, datasets: [{ label, data: values, borderColor: "#0672A1", backgroundColor: type === "bar" ? "#107CB1" : "rgba(6,114,161,.08)", borderRadius: type === "bar" ? 4 : 0, borderWidth: 2,
-      pointBackgroundColor: pointColors, pointBorderColor: pointColors, pointRadius: type === "line" ? 4 : 0, tension: 0.15, fill: type === "line" }] },
-    options: { responsive: true, maintainAspectRatio: false, plugins: { legend: { display: false },
-      tooltip: { callbacks: { label: (c) => (opts.money ? inr(c.parsed.y) : num(c.parsed.y)) } } },
-      scales: { y: { min: opts.min, max: opts.max, ticks: { callback: (v) => (opts.money ? inrShort(v) : v) } } } },
-  });
+  const colors = opts.colors || opts.pointColors || CH.brand;
+  const ds = type === "bar"
+    ? { label, data: values, backgroundColor: colors, maxBarThickness: 24, borderRadius: { topLeft: 4, topRight: 4 }, borderSkipped: "bottom" }
+    : { label, data: values, borderColor: CH.brand, backgroundColor: "rgba(6,114,161,.10)", borderWidth: 2, tension: 0.15, fill: true,
+        pointRadius: 4, pointHoverRadius: 6, pointBackgroundColor: colors, pointBorderColor: "#fff", pointBorderWidth: 2 };
+  const shown = opts.dates ? labels.map(shortDay) : labels;
+  const base = chartBase(opts);
+  if (opts.dates) base.plugins.tooltip.callbacks.title = (items) => labels[items[0].dataIndex];
+  state.charts[id] = new Chart(ctx, { type, data: { labels: shown, datasets: [ds] }, options: base });
+}
+function drawStacked(id, labels, series, opts = {}) {
+  // series: [{label, color, data}] bottom to top; a 2px white top edge separates the blocks (no outline around marks)
+  if (!window.Chart) return;
+  if (state.charts[id]) state.charts[id].destroy();
+  const ctx = $(id);
+  if (!ctx) return;
+  const base = chartBase({ ...opts, stacked: true, legend: true });
+  base.plugins.tooltip.callbacks.title = (items) => labels[items[0].dataIndex];
+  state.charts[id] = new Chart(ctx, { type: "bar", options: base, data: { labels: labels.map(shortDay), datasets: series.map((s) => ({
+    label: s.label, data: s.data, backgroundColor: s.color, maxBarThickness: 24, borderColor: "#fff", borderWidth: { top: 2 }, borderSkipped: "bottom" })) } });
 }
 
 // ------------------------------------------------------------------ navigation
@@ -315,7 +365,15 @@ function renderObserve() {
   gauge("gauge", t.score);
   $("gaugeLabel").innerHTML = `<span class="${tone(t.score)}">${t.label}</span>`;
   drawChart("trendChart", "line", t.trend.map((x) => x.business_date), t.trend.map((x) => x.score), "Trust score",
-    { min: 50, max: 100, pointColors: t.trend.map((x) => color[tone(x.score)]) });
+    { min: 50, max: 100, dates: true, thresholds: TRUST_LINES, pointColors: t.trend.map((x) => color[tone(x.score)]),
+      tipLabel: (c) => `Trust score ${num(c.parsed.y)}`,
+      tipAfter: (i) => {                                       // why that day lost points
+        const d = t.trend[i], why = [];
+        if (d.recon_status === "MISMATCH") why.push("settlement does not match (−15)");
+        if (d.recon_status === "NO SETTLEMENT") why.push("no settlement file for this date");
+        if (d.rejected) why.push(`${num(d.rejected)} row(s) rejected`);
+        return why.length ? why : ["nothing lowered it"];
+      } });
   const assets = o.assets.reduce((s, a) => s + a.n, 0);
   const kpis = [
     ["Data assets", assets, ""], ["Gross revenue", inrShort(o.totals.gross), ""], ["Open incidents", o.incidents.open, o.incidents.high ? "bad" : o.incidents.open ? "warn" : ""],
@@ -343,7 +401,27 @@ function renderObserve() {
     <div class="track"><div class="fill" style="width:${v || 0}%;background:${color[tone(v)]}"></div></div></div>`).join("") +
     `<div class="small muted">Last successful run: ${d.freshness_hours ?? "–"} h ago</div>`;
   $("reasons").innerHTML = t.reasons.length ? "<p><b>Why not 100:</b> " + t.reasons.map((r) => `−${r.points} ${esc(r.reason)}`).join(" · ") + "</p>" : "";
-  drawChart("revChart", "bar", o.daily.map((x) => x.business_date), o.daily.map((x) => x.gross_revenue), "Gross revenue", { money: true });
+  // captured revenue per date, coloured by whether the payment gateway's settlement agrees (the trust question behind the money)
+  const recon = Object.fromEntries((state.overview.settlement || []).map((r) => [r.business_date, r]));
+  const cls = (d) => (!recon[d] ? "none" : recon[d].recon_status === "MISMATCH" ? "bad" : "ok");
+  const REV = { ok: [CH.brand, "Settlement matches"], bad: [CH.bad, "Settlement mismatch"], none: [CH.grey, "No settlement file"] };
+  const days = o.daily.map((x) => x.business_date);
+  drawChart("revChart", "bar", days, o.daily.map((x) => x.gross_revenue), "Captured revenue",
+    { money: true, dates: true, colors: days.map((d) => REV[cls(d)][0]),
+      tipAfter: (i) => {
+        const r = recon[days[i]];
+        if (!r) return ["No settlement file for this date: the gateway total cannot be compared"];
+        return r.recon_status === "MISMATCH"
+          ? [`Gateway settled ${inr(r.settled_amount)} (${num(r.settled_payments)} payments)`, `Short by ${inr(r.amount_difference)} (${num(r.payment_difference)} payments)`]
+          : ["Matches the gateway settlement"];
+      } });
+  const bad = days.filter((d) => cls(d) === "bad");
+  const gap = bad.reduce((s, d) => s + Number(recon[d].amount_difference || 0), 0);
+  $("revSub").textContent = bad.length
+    ? `${bad.length} date(s) where the gateway settled more than reached silver: ${inr(gap)} short in total.`
+    : "Every date with a settlement file matches the gateway.";
+  $("revLegend").innerHTML = Object.entries(REV).filter(([k]) => days.some((d) => cls(d) === k))
+    .map(([, [c, l]]) => `<span><i style="background:${c}"></i>${l}</span>`).join("");
   const sch = Object.fromEntries(o.assets.map((a) => [a.schema, a.n]));
   const st = (s) => (s === "SUCCESS" ? "ok" : s ? "bad" : "grey");
   const lay = Object.fromEntries(p.layers.map((l) => [l.layer, l.status]));
@@ -369,10 +447,18 @@ function renderObserveGeneric() {
   $("freshnessNotice").classList.add("hidden");
   gauge("gauge", t.score);
   $("gaugeLabel").innerHTML = `<span class="${t.score == null ? "muted" : tone(t.score)}">${esc(t.label)}</span>`;
-  $("trendTitle").textContent = o.trend_label || "Trust score by day";
-  if (o.trend && o.trend.length) {
+  $("trendTitle").textContent = o.runs_by_day ? "Pipeline runs per day, last 14 days" : o.trend_label || "Trust score by day";
+  if (o.runs_by_day && o.runs_by_day.some((d) => d.Succeeded + d.Failed + d.Cancelled + d.Other)) {
+    // a factory: how many runs, and how many failed, every day (a quiet day shows as zero, not as a gap)
+    const R = o.runs_by_day, labels = R.map((d) => d.day);
+    const series = [["Succeeded", CH.ok], ["Failed", CH.bad], ["Cancelled", CH.grey], ["Other", "#EF802C"]]
+      .filter(([k]) => R.some((d) => d[k]))
+      .map(([k, c]) => ({ label: k === "Other" ? "Running / queued" : k, color: c, data: R.map((d) => d[k]) }));
+    drawStacked("trendChart", labels, series, { tipAfter: (i) => [`${num(R[i].Succeeded + R[i].Failed + R[i].Cancelled + R[i].Other)} run(s) in total`] });
+  } else if (o.trend && o.trend.length) {
     drawChart("trendChart", "line", o.trend.map((x) => x.day), o.trend.map((x) => x.score), o.trend_label || "Score",
-      { min: 0, max: 100, pointColors: o.trend.map((x) => color[tone(x.score)]) });
+      { min: 0, max: 100, dates: true, thresholds: s.kind === "adf" ? [] : TRUST_LINES, pointColors: o.trend.map((x) => color[tone(x.score)]),
+        tipLabel: (c) => `${s.kind === "adf" ? "Success rate" : "Trust score"} ${num(c.parsed.y)}${s.kind === "adf" ? "%" : ""}` });
   } else {
     if (state.charts.trendChart) { state.charts.trendChart.destroy(); delete state.charts.trendChart; }
     $("trendChart").parentElement.classList.add("hidden");

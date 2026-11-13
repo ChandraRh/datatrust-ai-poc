@@ -98,7 +98,8 @@
     <div class="kpis" id="obsKpis"></div>
     <div class="grid g-2">
       <div class="card"><h3>Data quality</h3><div id="dims"></div><div id="reasons" class="small muted"></div></div>
-      <div class="card" id="revCard"><h3>Revenue by business date (gold.daily_revenue)</h3><div class="chartbox"><canvas id="revChart"></canvas></div></div>
+      <div class="card" id="revCard"><h3>Captured revenue by business date</h3>
+        <p class="small muted chart-sub" id="revSub"></p><div class="chartbox"><canvas id="revChart"></canvas></div><div id="revLegend" class="chart-legend"></div></div>
       <div class="card hidden" id="itemsCard"><h3 id="itemsTitle">What is watched</h3><div id="itemsBody" class="estate"></div></div>
     </div>
     <div class="card" id="estateCard"><h3>Connected estate</h3><div id="estate" class="estate"></div></div>
@@ -306,8 +307,8 @@
 <script src="/static/app.js"></script>
 <script src="/static/estate.js"></script>   <!-- Data Estate module -->
 <script src="/static/dq.js"></script>   <!-- Data quality: Rejected records + DQ Rule Studio -->
-<script src="/static/adf.js"></script>
-<script src="/static/checks.js"></script>   <!-- Data checks pages -->   <!-- Azure Data Factory connector pages -->
+<script src="/static/adf.js"></script>   <!-- Azure Data Factory connector pages -->
+<script src="/static/checks.js"></script>   <!-- Data checks pages -->
 <script src="/static/connect.js"></script>   <!-- Connect: people + Contact owner -->
 </body>
 </html>
