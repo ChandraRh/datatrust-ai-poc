@@ -57,10 +57,25 @@ class Dialect:
         return (f"SELECT column_name, data_type, is_nullable FROM information_schema.columns "
                 f"WHERE table_schema = {self.param} AND table_name = {self.param} ORDER BY ordinal_position")
 
+    SYSTEM_SCHEMAS = ("information_schema",)
+
+    def tables_sql(self) -> str:
+        """Every column of every base table outside the system schemas (one query for the whole database)."""
+        skip = ", ".join(f"'{s}'" for s in self.SYSTEM_SCHEMAS)
+        return ("SELECT c.table_schema, c.table_name, c.column_name, c.data_type FROM information_schema.columns c "
+                "JOIN information_schema.tables t ON t.table_schema = c.table_schema AND t.table_name = c.table_name "
+                f"WHERE t.table_type = 'BASE TABLE' AND lower(c.table_schema) NOT IN ({skip}) "
+                "ORDER BY c.table_schema, c.table_name, c.ordinal_position")
+
+    def since(self, column: str, hours: int) -> str:
+        """A row filter: column within the last N hours (the database's own clock)."""
+        raise NotImplementedError
+
 
 class Postgres(Dialect):
     name = "postgresql"
     param = "%s"
+    SYSTEM_SCHEMAS = ("information_schema", "pg_catalog", "pg_toast")
 
     def ident(self, name: str) -> str:
         return '"' + str(name).replace('"', '""') + '"'
@@ -68,13 +83,21 @@ class Postgres(Dialect):
     def limit(self, select: str, n: int) -> str:
         return f"SELECT * FROM ({select}) AS dt_q LIMIT {int(n)}"
 
+    def since(self, column: str, hours: int) -> str:
+        return f"{self.ident(column)} >= now() - interval '{int(hours)} hours'"
+
 
 class SqlServer(Dialect):
     name = "sqlserver"
     param = "?"
+    SYSTEM_SCHEMAS = ("information_schema", "sys", "guest", "db_owner", "db_accessadmin", "db_securityadmin", "db_ddladmin",
+                      "db_backupoperator", "db_datareader", "db_datawriter", "db_denydatareader", "db_denydatawriter")
 
     def ident(self, name: str) -> str:
         return "[" + str(name).replace("]", "]]") + "]"
+
+    def since(self, column: str, hours: int) -> str:
+        return f"{self.ident(column)} >= DATEADD(hour, -{int(hours)}, SYSDATETIME())"
 
     def limit(self, select: str, n: int) -> str:
         if re.match(r"(?is)^with\b", select):                 # a CTE cannot sit in a derived table: rows are cut after fetch

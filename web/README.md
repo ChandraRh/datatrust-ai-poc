@@ -65,6 +65,29 @@ that is always rolled back, and user SQL must be one SELECT. On first start a fe
 database, including the payment-gateway reconciliation. Run the scheduler separately with `CHECKS_IN_WEB=false` and
 `python web/checks/runner.py`. SQL Server sources need `pip install pyodbc` and Microsoft ODBC Driver 18.
 
+## Coverage and Start monitoring
+**Data quality → Coverage** follows the selected source (`web/checks/coverage.py`, `web/static/coverage.js`):
+
+* **A database** lists every table (outside the system schemas) with the kinds of rule it has and their state; the trust
+  score shows what it rests on ("based on 40 of 55 tables"). **Start monitoring** measures each chosen table once, read-only,
+  and adds three starter rules (origin `auto`) that run on the next scheduler round:
+
+  | Rule | Added when | Limit |
+  |---|---|---|
+  | fresh | the table has a date / time column with recent values | 26 h when rows arrive daily (36 h for a date column), 8 days when the newest row is 1–7 days old |
+  | volume | the table has rows | rows of the last 24 h when ≥ 20 arrived in the last day (each load's size), else the whole row count; fails at 50 % below the usual (median of earlier runs) |
+  | schema | always | today's columns become the accepted schema |
+
+  A rule that would fail on day one for a reason that is not a problem is not added, and the page says why: an empty table,
+  a table whose newest row is older than 7 days (static, or already stopped), a table without a date column. Rules a table
+  already has are kept, never duplicated.
+* **An ADF factory** lists the tables its Copy steps write into (also tables named at run time by a Lookup, read from recent
+  runs) in a connected database. **Monitor this table** adds the same starter rules, so the table is also watched between
+  loads: a load that never happened, a load that was too small, a table changed or emptied after the load. The factory's
+  own after-run target checks (ADF runs) stay as they are.
+
+API: `GET /api/estate/checks/coverage?scope=…`, `POST /api/estate/checks/coverage/start` (admin, up to 25 tables per call).
+
 ## One source at a time
 Pick a **Source** at the top of the page: every connection (PostgreSQL, SQL Server) and every connected Data Factory.
 Observe, Detect, Investigate, Explain, Impact, Verify and the trust score then show **only that source**; nothing is

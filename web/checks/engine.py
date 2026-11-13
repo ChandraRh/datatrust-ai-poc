@@ -102,26 +102,30 @@ def _freshness(chk, d, t):
 
 def _volume(chk, d, t):
     c = chk["config"]
-    sql = f"SELECT COUNT(*) AS n FROM {t}{d.where(c.get('where'))}"
+    # window_column + window_hours: count only rows of the last N hours (the size of each load) instead of the whole table
+    window = d.since(c["window_column"], int(c.get("window_hours") or 24)) if c.get("window_column") else ""
+    where = " AND ".join(f"({w})" for w in (window, (c.get("where") or "").strip()) if w)
+    sql = f"SELECT COUNT(*) AS n FROM {t}{d.where(where)}"
     n = int(query(chk["connection_id"], chk["database"], sql)[0]["n"])
     min_rows = int(c.get("min_rows") if c.get("min_rows") not in (None, "") else 1)
     drop = float(c.get("max_drop_pct") or 50)
     growth = float(c["max_growth_pct"]) if c.get("max_growth_pct") not in (None, "") else None
     usual = store.usual_values(chk["check_id"]) if chk.get("check_id") else []
     median = statistics.median(usual) if len(usual) >= 3 else None
-    expected = f"at least {min_rows:,} rows" + (f", not below {100 - drop:g}% of usual ({median:,.0f})" if median else "")
+    rows = f"rows with {c['window_column']} in the last {int(c.get('window_hours') or 24)} h" if window else "rows"
+    expected = f"at least {min_rows:,} {rows}" + (f", not below {100 - drop:g}% of usual ({median:,.0f})" if median else "")
     details = {"rows": n, "usual": median, "history_points": len(usual)}
     if n < min_rows:
         return dict(status="FAIL", observed=n, expected=expected, details=details, sql=sql,
-                    message=f"{n:,} rows, fewer than the minimum of {min_rows:,}.")
+                    message=f"{n:,} {rows}, fewer than the minimum of {min_rows:,}.")
     if median and n < median * (1 - drop / 100):
         return dict(status="FAIL", observed=n, expected=expected, details=details, sql=sql,
-                    message=f"{n:,} rows: {100 * (1 - n / median):.0f}% fewer than usual ({median:,.0f}).")
+                    message=f"{n:,} {rows}: {100 * (1 - n / median):.0f}% fewer than usual ({median:,.0f}).")
     if median and growth is not None and n > median * (1 + growth / 100):
         return dict(status="WARN", observed=n, expected=expected, details=details, sql=sql,
-                    message=f"{n:,} rows: {100 * (n / median - 1):.0f}% more than usual ({median:,.0f}).")
+                    message=f"{n:,} {rows}: {100 * (n / median - 1):.0f}% more than usual ({median:,.0f}).")
     note = "" if median else " (the usual volume is learned after 3 runs)"
-    return dict(status="PASS", observed=n, expected=expected, details=details, sql=sql, message=f"{n:,} rows{note}.")
+    return dict(status="PASS", observed=n, expected=expected, details=details, sql=sql, message=f"{n:,} {rows}{note}.")
 
 
 def _null_rate(chk, d, t):

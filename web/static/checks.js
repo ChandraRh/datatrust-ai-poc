@@ -123,10 +123,10 @@
     const last = results[0];
     const facts = [["Type", (TYPES[c.check_type] || [c.check_type])[0]], ["Checks", where(c)], ["Severity if it fails", `<span class="chip ${SEV[c.severity]}">${esc(c.severity)}</span>`],
       ["Schedule", c.enabled ? esc((SCHEDULES.find((x) => x[0] === c.schedule_minutes) || [0, `every ${c.schedule_minutes} min`])[1]) : "paused"],
-      ["Added by", `${esc(c.created_by || "–")}${c.origin === "starter" ? " (starter check)" : ""}`], ["Last run", esc(when(c.last_run_at))]];
+      ["Added by", `${esc(c.created_by || "–")}${c.origin === "starter" ? " (starter check)" : c.origin === "auto" ? " (Start monitoring)" : ""}`], ["Last run", esc(when(c.last_run_at))]];
     const cfg = c.config || {};
     const rule = c.check_type === "freshness" ? `newest <code>${esc(cfg.column)}</code> at most ${esc(cfg.max_age_hours || 24)} h old`
-      : c.check_type === "volume" ? `at least ${esc(cfg.min_rows ?? 1)} rows; fail if ${esc(cfg.max_drop_pct || 50)}% below usual${cfg.max_growth_pct ? `; warn if ${esc(cfg.max_growth_pct)}% above` : ""}`
+      : c.check_type === "volume" ? `at least ${esc(cfg.min_rows ?? 1)} rows${cfg.window_column ? ` with <code>${esc(cfg.window_column)}</code> in the last ${esc(cfg.window_hours || 24)} h` : ""}; fail if ${esc(cfg.max_drop_pct || 50)}% below usual${cfg.max_growth_pct ? `; warn if ${esc(cfg.max_growth_pct)}% above` : ""}`
       : c.check_type === "null_rate" ? `<code>${esc(cfg.column)}</code> at most ${esc(cfg.max_null_pct || 0)}% empty`
       : c.check_type === "uniqueness" ? `<code>${esc((cfg.columns || []).join(" + "))}</code> unique`
       : c.check_type === "schema" ? `${Object.keys((c.state || {}).columns || {}).length} accepted columns`
@@ -268,7 +268,9 @@
       if (cols.error) specific += `<div class="error-box small">${esc(cols.error)}</div>`;
       if (ready && t === "freshness") specific += sel("cCol", "Date / time column", colOpts(c.column, "Choose…"), "e.g. loaded_at, updated_at, business_date") + inp("cAge", "Max age (hours)", c.max_age_hours ?? 24, "24", "", "number");
       if (ready && t === "volume") specific += inp("cMin", "Minimum rows", c.min_rows ?? 1, "1", "", "number") + inp("cDrop", "Fail if below usual by (%)", c.max_drop_pct ?? 50, "50", "usual = median of recent runs", "number")
-        + inp("cGrow", "Warn if above usual by (%)", c.max_growth_pct ?? "", "optional", "", "number");
+        + inp("cGrow", "Warn if above usual by (%)", c.max_growth_pct ?? "", "optional", "", "number")
+        + sel("cWinCol", "Count only recent rows by", colOpts(c.window_column, "the whole table"), "a date / time column: counts what each load brings")
+        + inp("cWinH", "Recent = the last (hours)", c.window_hours ?? 24, "24", "", "number");
       if (ready && t === "null_rate") specific += sel("cCol", "Column", colOpts(c.column, "Choose…")) + inp("cNull", "Max empty (%)", c.max_null_pct ?? 0, "0", "", "number");
       if (ready && t === "uniqueness") specific += `<label class="field"><span>Key column(s)</span><select id="cCols" multiple size="5">${(cols.error ? [] : cols).map((x) => `<option value="${esc(x.name)}" ${(c.columns || []).includes(x.name) ? "selected" : ""}>${esc(x.name)}</option>`).join("")}</select><span class="small muted">Ctrl+click for a key of several columns</span></label>`;
       if (ready && ["volume", "null_rate", "uniqueness", "freshness"].includes(t)) specific += inp("cWhere", "Only rows where (optional)", c.where || "", "e.g. business_date >= current_date - 7", "a SQL condition");
@@ -367,6 +369,7 @@
     if (v("cMin") !== undefined) c.min_rows = num("cMin");
     if (v("cDrop") !== undefined) c.max_drop_pct = num("cDrop");
     if (v("cGrow") !== undefined) c.max_growth_pct = num("cGrow");
+    if (v("cWinCol") !== undefined) { c.window_column = v("cWinCol") || undefined; c.window_hours = c.window_column ? num("cWinH") || 24 : undefined; }
     if (v("cNull") !== undefined) c.max_null_pct = num("cNull");
     if ($e("cCols")) c.columns = [...$e("cCols").selectedOptions].map((o) => o.value);
     if (v("cWhere") !== undefined) c.where = v("cWhere");

@@ -444,11 +444,12 @@ function renderObserveGeneric() {
   $("obsTitle").textContent = `1. Observe: ${s.name || "this source"} ${OBS_TITLE[t.label] || t.label}`;
   $("obsSub").textContent = s.kind === "adf"
     ? `Azure Data Factory ${s.name}: scored from its pipeline runs, failures, freshness and source / target checks.`
-    : `${s.type} connection ${s.name}: scored from its data checks.`;
+    : `${s.type} connection ${s.name}: scored from its ${t.basis || "data checks"}.`;
   $("obsCoverage").textContent = o.last_activity ? `Last ${s.kind === "adf" ? "sync" : "check run"} ${String(o.last_activity).slice(0, 16)}.` : "";
   $("freshnessNotice").classList.add("hidden");
   gauge("gauge", t.score);
-  $("gaugeLabel").innerHTML = `<span class="${t.score == null ? "muted" : tone(t.score)}">${esc(t.label)}</span>`;
+  const cov = t.coverage && t.coverage.tables ? `<div class="small muted">based on ${t.coverage.monitored} of ${t.coverage.tables} tables</div>` : "";
+  $("gaugeLabel").innerHTML = `<span class="${t.score == null ? "muted" : tone(t.score)}">${esc(t.label)}</span>${cov}`;
   $("trendTitle").textContent = o.runs_by_day ? "Pipeline runs per day, last 14 days" : o.trend_label || "Trust score by day";
   if (o.runs_by_day && o.runs_by_day.some((d) => d.Succeeded + d.Failed + d.Cancelled + d.Other)) {
     // a factory: how many runs, and how many failed, every day (a quiet day shows as zero, not as a gap)
@@ -467,7 +468,7 @@ function renderObserveGeneric() {
     $("trendEmpty").textContent = "No history yet: the chart fills in as checks and runs are recorded.";
     $("trendEmpty").classList.remove("hidden");
   }
-  $("obsKpis").innerHTML = o.kpis.map((k) => `<div class="kpi ${k.tone && Number(k.value) ? k.tone : ""}"><div class="l">${esc(k.label)}</div>
+  $("obsKpis").innerHTML = o.kpis.map((k) => `<div class="kpi ${k.tone && (typeof k.value === "string" || Number(k.value)) ? k.tone : ""}"><div class="l">${esc(k.label)}</div>
     <div class="v">${typeof k.value === "number" ? num(k.value) : esc(k.value)}</div>${k.sub ? `<div class="small muted">${esc(k.sub)}</div>` : ""}</div>`).join("");
   $("dims").innerHTML = o.dimensions.length
     ? o.dimensions.map((d) => `<div class="bar"><div class="t"><span>${esc(d.label)}</span><b>${d.value}%</b></div>
@@ -480,7 +481,7 @@ function renderObserveGeneric() {
     ? o.items.map((i) => { const [c, l] = STATUS_CHIP[i.status] || ["grey", "Not run"];
         return `<div class="item"><div>${esc(i.name)} <span class="small muted">${esc(i.detail || "")}</span></div><span class="chip ${c}">${esc(i.label || l)}</span></div>`; }).join("")
     : `<p class="muted small">${esc(o.empty || "Nothing yet.")}</p>`
-      + (s.kind === "db" ? `<button class="btn btn-sm" onclick="document.querySelector('#tabs [data-page=estate-checks-new]').click()">+ Add a rule</button>` : "");
+      + (s.kind === "db" ? `<button class="btn btn-sm" onclick="document.querySelector('#tabs [data-page=estate-dq-coverage]').click()">Start monitoring</button>` : "");
 }
 
 // ------------------------------------------------------------------ 2. detect
@@ -1066,7 +1067,8 @@ async function openFromLink() {
   }
   if (m[2] && /^(db|adf):\d+$/.test(m[2])) {                     // #observe=db:3 / #detect=adf:3: a page of a given source
     if (m[2] !== state.scope) await setScope(m[2]);
-    go(m[1]);
+    const tab = document.querySelector(`#tabs button[data-page="${m[1]}"]`);
+    if (m[1].startsWith("estate-") && tab) tab.click(); else go(m[1]);   // estate pages draw on a menu click (estate.js)
     history.replaceState(null, "", location.pathname);
     return;
   }

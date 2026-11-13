@@ -60,6 +60,35 @@ def suggest(body: SuggestBody, user: dict = Depends(admin_user)):
     return guard(ai.suggest_checks, body.connection_id, body.database or None, body.schema_name, body.table_name)
 
 
+class TableRef(BaseModel):
+    schema_name: str
+    table_name: str
+
+
+class StartBody(BaseModel):
+    connection_id: int
+    tables: list[TableRef]
+
+
+@router.get("/coverage")
+def coverage_of(scope: Optional[str] = None, user: dict = Depends(current_user)):
+    """Which tables of the selected source are watched (database), or which tables a factory loads (ADF)."""
+    from . import coverage
+    return guard(coverage.coverage, scope)
+
+
+@router.post("/coverage/start")
+def start_monitoring(body: StartBody, user: dict = Depends(admin_user)):
+    """Starter checks (freshness, volume, schema) for the chosen tables; they run on the next scheduler round."""
+    from . import coverage
+    r = guard(coverage.start, body.connection_id, [{"schema": t.schema_name, "table": t.table_name} for t in body.tables],
+              user["username"])
+    if r["added"]:
+        estate_store.audit(user["username"], "MONITORING_STARTED", r["connection"],
+                           f"{r['added']} starter rule(s) on {sum(1 for x in r['results'] if x['added'])} table(s)")
+    return r
+
+
 @router.get("/{check_id}")
 def detail(check_id: int, user: dict = Depends(current_user)):
     return {"check": guard(store.get_check, check_id), "results": store.history(check_id)}

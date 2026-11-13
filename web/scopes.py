@@ -338,24 +338,30 @@ def _overview_db(s: dict) -> dict:
             ok = sum(c["last_status"] == "PASS" for c in mine)
             dims.append({"label": f"{label} ({ok} of {len(mine)} checks pass)", "value": round(100 * ok / len(mine), 1)})
     tables = sorted({f"{c['schema_name']}.{c['table_name']}" for c in checks if c.get("table_name")})
+    from checks import coverage
+    in_db = coverage.table_count(s["id"])                         # cached; None when the database cannot be read
+    watched = len({t for t in tables})
+    cov = {"monitored": watched, "tables": in_db, "pct": round(100 * watched / in_db) if in_db else None}
     last = max((c["last_run_at"] for c in checks if c["last_run_at"]), default=None)
     n_open = sum(1 for c in ran if c["last_status"] != "PASS")
     kpis = [{"label": "Rules", "value": len(checks), "sub": f"{len(ran)} run"},
             {"label": "Failing", "value": sum(c["last_status"] == "FAIL" for c in ran), "tone": "bad"},
             {"label": "Could not run", "value": sum(c["last_status"] == "ERROR" for c in ran), "tone": "bad"},
             {"label": "Warnings", "value": sum(c["last_status"] == "WARN" for c in ran), "tone": "warn"},
-            {"label": "Tables watched", "value": len(tables)},
+            {"label": "Tables watched", "value": len(tables) if not in_db else f"{watched} of {in_db}",
+             "sub": f"{cov['pct']}% coverage" if cov["pct"] is not None else "", "tone": "warn" if in_db and watched < in_db else None},
             {"label": "Open incidents", "value": n_open, "tone": "bad"}]
     items = [{"name": t, "detail": ", ".join(CATEGORY[c["check_type"]] for c in checks if f"{c['schema_name']}.{c['table_name']}" == t),
               "status": _worst([c["last_status"] for c in checks if f"{c['schema_name']}.{c['table_name']}" == t])} for t in tables]
     items += [{"name": c["name"], "detail": CATEGORY[c["check_type"]], "status": c["last_status"]}
               for c in checks if not c.get("table_name")]
-    return {"kind": "generic", "scope": s, "trust": {"score": score, "label": label_for(score), "reasons": reasons, "basis": "data checks",
-            "rules": {"healthy_from": HEALTHY, "attention_from": ATTENTION}},
+    basis = f"data checks on {watched} of {in_db} tables" if in_db else "data checks"
+    return {"kind": "generic", "scope": s, "trust": {"score": score, "label": label_for(score), "reasons": reasons, "basis": basis,
+            "coverage": cov, "rules": {"healthy_from": HEALTHY, "attention_from": ATTENTION}},
             "kpis": kpis, "dimensions": dims, "trend": _check_trend(s["id"]), "trend_label": "Trust score by day (from data check results)",
             "items_title": "What is watched", "items": items, "last_activity": last,
-            "empty": None if checks else "No rules on this connection yet. Add one in DQ Rule Studio → Add rule: freshness, volume, "
-                                         "empty values, keys, schema, your own SQL or a reconciliation."}
+            "empty": None if checks else "Nothing is watched on this connection yet. Open Data quality → Coverage and press Start "
+                                         "monitoring: DataTrust adds freshness, volume and schema rules to the tables you choose."}
 
 
 def _worst(statuses: list) -> str | None:

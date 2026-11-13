@@ -106,7 +106,10 @@ def _adf_rows(s: dict) -> dict:
 # ============================================================================ what decides "good data" (Rule Studio)
 RULE_TEXT = {
     "freshness": lambda c: f"newest {c['config'].get('column')} at most {c['config'].get('max_age_hours', 24)} h old",
-    "volume": lambda c: f"at least {c['config'].get('min_rows', 1)} rows, not {c['config'].get('max_drop_pct', 50)}% below usual",
+    "volume": lambda c: (f"at least {c['config'].get('min_rows', 1)} rows"
+                         + (f" with {c['config']['window_column']} in the last {c['config'].get('window_hours', 24)} h"
+                            if c["config"].get("window_column") else "")
+                         + f", not {c['config'].get('max_drop_pct', 50)}% below usual"),
     "null_rate": lambda c: f"{c['config'].get('column')} at most {c['config'].get('max_null_pct', 0)}% empty",
     "uniqueness": lambda c: f"{' + '.join(c['config'].get('columns') or [])} is unique",
     "schema": lambda c: "columns are not removed, renamed or retyped",
