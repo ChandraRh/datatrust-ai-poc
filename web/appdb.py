@@ -5,7 +5,7 @@ DataTrust's own database (config APP_PG_*): everything the product itself keeps.
     telemetry.*   what connectors collect (ADF runs, steps, checks, sync log)
     app.*         approvals (remediation_log) and alerts sent (alert_log)
 
-The systems DataTrust monitors (the POC database, pg-sales-hv, ...) are only ever read through connections.
+The systems DataTrust monitors (the POC database, a customer database, ...) are only ever read through connections.
 
     prepare()     create the database if needed and, once, move DataTrust's tables out of the POC database
 """

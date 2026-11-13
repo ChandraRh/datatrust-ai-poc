@@ -10,7 +10,7 @@ Factory: ADLS CSV -> Azure PostgreSQL.
 from datetime import datetime, timedelta, timezone
 
 SUB = "00000000-1111-2222-3333-444444444444"
-CFG = {"subscription_id": SUB, "resource_group": "rg-data", "factory_name": "adf-sales-dev", "auth_mode": "default",
+CFG = {"subscription_id": SUB, "resource_group": "rg-data", "factory_name": "adf-demo-factory", "auth_mode": "default",
        "lookback_days": 30}
 
 NOW = datetime.now(timezone.utc).replace(microsecond=0)

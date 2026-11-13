@@ -195,7 +195,7 @@ class ClientTests(unittest.TestCase):
         self.assertEqual([r["runId"] for r in out], ["a", "b"])
         self.assertEqual(self.session.requests[1][2]["continuationToken"], "next")
         url = self.session.requests[0][1]
-        self.assertIn(f"/subscriptions/{fx.SUB}/resourceGroups/rg-data/providers/Microsoft.DataFactory/factories/adf-sales-dev/queryPipelineRuns", url)
+        self.assertIn(f"/subscriptions/{fx.SUB}/resourceGroups/rg-data/providers/Microsoft.DataFactory/factories/adf-demo-factory/queryPipelineRuns", url)
         self.assertIn("api-version=2018-06-01", url)
         self.assertEqual(self.session.requests[0][3]["Authorization"], "Bearer tok")
 
