@@ -40,6 +40,7 @@ async function setScope(key) {
   state.version = null;
   if ($("scopePick")) $("scopePick").value = key;
   await checkVersion(true);
+  if (state.page.startsWith("estate-dq-") && window.renderEstate) return renderEstate(state.page);   // these pages follow the source too
   if (state.page.startsWith("estate-")) toast(`Observe to Verify now show ${($("scopePick").selectedOptions[0] || {}).textContent || key}`);
 }
 

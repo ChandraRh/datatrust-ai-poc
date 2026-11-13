@@ -665,3 +665,7 @@ tr.clickable { cursor: pointer; } tr.clickable:hover td { background: var(--bran
 .chart-legend span { display: inline-flex; align-items: center; gap: 6px; }
 .chart-legend i { width: 10px; height: 10px; border-radius: 3px; display: inline-block; }
 .chart-legend i.line { height: 2px; border-radius: 1px; width: 14px; }
+
+/* ---------------------------------------------------------------- data quality pages per source */
+.dq-source { margin-bottom: 14px; padding: 9px 14px; }
+.dq-advice { margin: 8px 0 4px; padding-left: 18px; display: grid; gap: 4px; color: var(--ink-2, #3A4A5E); }

@@ -383,8 +383,131 @@
     };
   }
 
+  // ================================================================ ANY OTHER SOURCE (follows the Source picker)
+  // The POC pipeline has its own rule engine (above). A database's "rules" are its data checks and its "rejected records"
+  // are the rows those checks found; a factory's are its Copy steps' data settings and the rows ADF skipped.
+  const ST = { PASS: ["ok", "Pass"], WARN: ["warn", "Warning"], FAIL: ["bad", "Fail"], ERROR: ["bad", "Error"], UNKNOWN: ["grey", "Could not check"] };
+  const stChip = (s) => { const [c, l] = ST[s] || ["grey", s ? s : "Not run"]; return `<span class="chip ${c}">${esc(l)}</span>`; };
+  const sevChip = (s) => `<span class="chip ${{ CRITICAL: "bad", HIGH: "bad", MEDIUM: "warn", LOW: "grey" }[s] || "grey"}">${esc(s)}</span>`;
+  const gotoPage = (p) => document.querySelector(`#tabs button[data-page="${p}"]`).click();
+  const openCheck = (id) => { window.CHECKS.open(id); gotoPage("estate-checks"); };
+  function sourceNote(s, what) {
+    return `<div class="banner ok small dq-source"><b>${esc(s.name)}</b> (${esc(s.type)}) · ${what} Change the source with <b>Source</b> at the top.</div>`;
+  }
+  function downloadCsv(name, rows) {
+    if (!rows.length) return;
+    const cols = [...new Set(rows.flatMap((r) => Object.keys(r)))];
+    const csv = [cols, ...rows.map((r) => cols.map((c) => (typeof r[c] === "object" && r[c] !== null ? JSON.stringify(r[c]) : r[c])))]
+      .map((row) => row.map(csvCell).join(",")).join("\r\n");
+    const a = Object.assign(document.createElement("a"), { href: URL.createObjectURL(new Blob(["﻿", csv], { type: "text/csv;charset=utf-8" })),
+      download: `${name.replace(/[^\w.-]+/g, "_").slice(0, 60)}.csv` });
+    document.body.appendChild(a); a.click(); a.remove();
+  }
+
+  async function rowsOther() {
+    const d = await api("/api/quality/rows?" + sq());
+    const s = d.scope;
+    if (d.kind === "adf") {
+      return {
+        html: sourceNote(s, "Rows ADF could not load, and what DataTrust's own checks of each copy found.") + `
+          <div class="kpis" style="grid-template-columns:repeat(3,1fr)">
+            <div class="kpi ${d.total_skipped ? "warn" : ""}"><div class="l">Rows skipped, 30 days</div><div class="v">${num(d.total_skipped)}</div><div class="small muted">by Copy fault tolerance</div></div>
+            <div class="kpi ${d.findings.length ? "warn" : ""}"><div class="l">Copy checks not passing</div><div class="v">${num(d.findings.length)}</div><div class="small muted">of ${num(d.checked)} kinds checked</div></div>
+            <div class="kpi"><div class="l">Copy runs with skipped rows</div><div class="v">${num(d.skipped.length)}</div><div class="small muted">last 30 days</div></div></div>
+          <div class="card"><h3>Rows ADF skipped</h3>${d.skipped.length ? `<div class="tablewrap"><table><thead><tr><th>When</th><th>Pipeline · step</th><th class="num">Read</th><th class="num">Written</th><th class="num">Skipped</th><th>Which rows and why</th></tr></thead><tbody>
+            ${d.skipped.map((r) => `<tr><td class="nowrap small">${esc(when(r.run_start))}</td><td class="small"><a href="#" data-run="${esc(r.run_id)}">${esc(r.pipeline_name)}</a> · ${esc(r.activity_name)}</td>
+              <td class="num">${num(r.rows_read)}</td><td class="num">${num(r.rows_written)}</td><td class="num"><b>${num(r.rows_skipped)}</b></td><td class="small">${esc(r.detail || r.observed || "Turn on the skipped-rows log to see them")}</td></tr>`).join("")}
+            </tbody></table></div>` : `<p class="muted">No rows were skipped in the last 30 days. ${d.findings.length ? "" : "Every check DataTrust ran on the copies passed."}</p>`}</div>
+          <div class="card"><h3>What DataTrust's checks of the copies found</h3>${d.findings.length ? d.findings.map((f) => `<div class="check">
+              <span class="${ST[f.status] ? ST[f.status][0] : "grey"}">${f.status === "FAIL" ? "!" : "–"}</span>
+              <span><b>${esc(f.label)}</b> ${stChip(f.status)} <span class="small muted">${esc(f.pipeline_name)} · ${esc(f.activity_name)} · ${esc(when(f.checked_at))}</span>
+              <br><span class="small">${esc(f.detail || "")}</span>${f.asset ? `<br><code class="small">${esc(f.asset)}</code>` : ""}
+              ${f.hint ? `<div class="small muted">${esc(f.hint)}</div>` : ""}</span>
+              <div class="src"><a href="#" data-run="${esc(f.run_id)}">open the run</a></div></div>`).join("") : "<p class='muted'>Nothing to report.</p>"}</div>`,
+        bind() {
+          document.querySelectorAll("#body-estate-dq-rejected [data-run]").forEach((a) => (a.onclick = (e) => { e.preventDefault(); window.ADF.open(a.dataset.run); gotoPage("estate-adf-runs"); }));
+        },
+      };
+    }
+    const groups = d.groups || [];
+    return {
+      html: sourceNote(s, "The rows its failing data checks found. Rows are samples the checks stored, or a 20-row read-only query.") +
+        (groups.length ? groups.map((g, i) => `<div class="card"><div class="draft-head"><h3 style="margin:0">${esc(g.check)}</h3> ${stChip(g.status)} ${sevChip(g.severity)}
+            <span class="grow"></span><button class="btn light btn-sm" data-csv="${i}">Export CSV</button><button class="btn light btn-sm" data-check="${g.check_id}">Open the check</button></div>
+            <p class="small muted">${esc(g.target)} · ${esc(g.message || "")} · found ${esc(when(g.found_at))}</p>${objTable(g.rows)}</div>`).join("")
+        : `<div class="card"><p class="muted">${esc(d.empty || "No failing rows.")}</p>${(d.table_level || []).length ? "" : `<button class="btn btn-sm" id="dqAddCheck">+ Add a data check</button>`}</div>`) +
+        ((d.table_level || []).length ? `<div class="card"><h3>Failing checks about a whole table</h3><p class="small muted">These are about the table (age, volume, columns), so there are no rows to list.</p>
+          ${d.table_level.map((t) => `<div class="check"><span class="${(ST[t.status] || ["grey"])[0]}">!</span><span><b>${esc(t.check)}</b> ${stChip(t.status)} ${sevChip(t.severity)}<br>
+            <span class="small">${esc(t.target)} · ${esc(t.message || "")}</span></span><div class="src"><a href="#" data-check="${t.check_id}">open the check</a></div></div>`).join("")}</div>` : ""),
+      bind() {
+        const el = $e("body-estate-dq-rejected");
+        el.querySelectorAll("[data-csv]").forEach((b) => (b.onclick = () => downloadCsv(`${s.name}-${groups[b.dataset.csv].check}`, groups[b.dataset.csv].rows)));
+        el.querySelectorAll("[data-check]").forEach((b) => (b.onclick = (e) => { e.preventDefault(); openCheck(Number(b.dataset.check)); }));
+        if ($e("dqAddCheck")) $e("dqAddCheck").onclick = () => gotoPage("estate-checks-new");
+      },
+    };
+  }
+
+  async function rulesOther() {
+    const d = await api("/api/quality/rules?" + sq());
+    const s = d.scope;
+    if (d.kind === "adf") {
+      const on = (v, yes, no) => `<span class="chip ${v ? "ok" : "grey"}">${v ? yes : no}</span>`;
+      return {
+        html: sourceNote(s, "A factory has no DataTrust rules of its own: what decides good data is each Copy step's settings, plus the checks DataTrust runs on every copy.") +
+          (d.steps.length ? d.steps.map((st) => `<div class="card"><div class="draft-head"><h3 style="margin:0">${esc(st.activity)}</h3><span class="small muted">in ${esc(st.pipeline)}</span></div>
+            <div class="pacts">${on(st.skip_incompatible_rows, "Skips bad rows", "Stops on a bad row")} ${on(st.skip_log, "Skipped-rows log on", "No skipped-rows log")}
+              ${st.mapping_at_runtime ? `<span class="chip warn">Column mapping set at run time</span>` : st.mapped_columns ? `<span class="chip grey">${num(st.mapped_columns)} mapped columns</span>` : `<span class="chip grey">Columns matched by name</span>`}</div>
+            ${st.advice.length ? `<ul class="small dq-advice">${st.advice.map((a) => `<li>${esc(a)}</li>`).join("")}</ul>` : ""}
+            <h4>Checked on every copy by DataTrust</h4>${st.checks.length ? `<div class="tablewrap"><table><thead><tr><th>Check</th><th>Latest result</th><th>Detail</th></tr></thead><tbody>
+              ${st.checks.map((c) => `<tr><td>${esc(c.label)}</td><td>${stChip(c.status)}</td><td class="small">${esc(c.detail || "")}</td></tr>`).join("")}</tbody></table></div>`
+              : "<p class='muted small'>No copy has run since the factory was connected.</p>"}</div>`).join("")
+          : `<div class="card"><p class="muted">${esc(d.empty)}</p></div>`),
+        bind() {},
+      };
+    }
+    const admin = isAdmin();
+    return {
+      html: sourceNote(s, "Its rules are its data checks: what each one requires, where, and whether the data meets it now.") +
+        `<div class="card"><div class="draft-head"><h3 style="margin:0">Rules by table</h3><span class="grow"></span>
+          ${admin ? `<button class="btn btn-sm" id="dqAddRule">+ Add or suggest rules</button>` : ""}</div>
+          ${d.scorecard.length ? `<div class="tablewrap"><table><thead><tr><th>Applies to</th><th class="num">Rules</th><th class="num">Passing</th><th class="num">Failing</th><th class="num">Warnings</th><th class="num">Errors</th></tr></thead><tbody>
+            ${d.scorecard.map((r) => `<tr><td><code>${esc(r.applies_to)}</code></td><td class="num">${r.rules}</td><td class="num">${r.passing}</td><td class="num ${r.failing ? "bad" : ""}">${r.failing}</td>
+              <td class="num">${r.warnings}</td><td class="num ${r.errors ? "bad" : ""}">${r.errors}</td></tr>`).join("")}</tbody></table></div>`
+            : `<p class="muted">No rules yet. Pick a table on <b>Add check</b>: <b>Suggest checks</b> measures it and proposes rules that fit it.</p>`}</div>
+        ${d.rules.length ? `<div class="card"><h3>Every rule</h3><div class="tablewrap" style="max-height:none"><table><thead><tr><th>Rule</th><th>Applies to</th><th>Severity</th><th>Now</th><th></th></tr></thead><tbody>
+          ${d.rules.map((r) => `<tr><td><b>${esc(r.name)}</b><div class="small muted">${esc(r.rule)}</div>${r.sql ? `<pre class="code small">${esc(r.sql)}</pre>` : ""}</td>
+            <td class="small"><code>${esc(r.applies_to)}</code></td><td>${sevChip(r.severity)}</td><td>${stChip(r.status)}<div class="small muted">${esc(r.message || "")}</div></td>
+            <td class="nowrap"><button class="btn light btn-sm" data-check="${r.check_id}">Open</button>${admin ? ` <button class="btn light btn-sm" data-edit="${r.check_id}">Edit</button>` : ""}</td></tr>`).join("")}
+          </tbody></table></div></div>` : ""}`,
+      bind() {
+        const el = $e("body-estate-dq-rules");
+        el.querySelectorAll("[data-check]").forEach((b) => (b.onclick = () => openCheck(Number(b.dataset.check))));
+        el.querySelectorAll("[data-edit]").forEach((b) => (b.onclick = () => window.CHECKS.edit(b.dataset.edit)));
+        if ($e("dqAddRule")) $e("dqAddRule").onclick = () => gotoPage("estate-checks-new");
+      },
+    };
+  }
+
   window.DQ = {
-    page: (page) => (page === "estate-dq-rules" ? pageRules() : pageRejected()),
+    async page(page) {
+      await ensureCore();                                        // which source is selected (app.js)
+      const kind = isPoc() ? "poc" : (state.overview.scope || {}).kind;
+      $e("dqRejSub").textContent = {
+        poc: "Every row the quality rules held back: on which date, from which table and why. Fix it and re-insert it after an admin approves.",
+        db: "The rows this database's failing data checks point at: duplicate keys, rows that break a rule, empty values, keys that differ.",
+        adf: "Rows this factory's Copy steps could not load, and what DataTrust's own checks of each copy found." }[kind];
+      $e("dqRulesSub").textContent = {
+        poc: "The checks every row must pass on its way into silver. Write one in plain words, test it on today's data, then switch it on, no code change or deployment needed.",
+        db: "What this database's data must meet: its data checks, by table. Add rules on Add check, where Suggest checks proposes rules that fit a table.",
+        adf: "What decides good data in this factory: each Copy step's data settings, and the checks DataTrust runs on every copy." }[kind];
+      if (!isPoc()) return page === "estate-dq-rules" ? rulesOther() : rowsOther();
+      const body = await (page === "estate-dq-rules" ? pageRules() : pageRejected());
+      body.html = sourceNote(state.overview.scope, page === "estate-dq-rules"
+        ? "The POC pipeline's own rules: its silver layer applies them on every run."
+        : "Rows the POC pipeline's rules held back from silver.") + body.html;
+      return body;
+    },
     open(date, entity, rule) {                                 // from Detect / Investigate / a link
       this.showRejected({ date_from: date || "", date_to: date || "", entity: entity || "", rule: rule || "" });
       document.querySelector('#tabs button[data-page="estate-dq-rejected"]').click();

@@ -76,7 +76,10 @@ blended across sources.
 | Any other database | its data checks: 100 − 40 / 25 / 10 / 4 per failing CRITICAL / HIGH / MEDIUM / LOW check, − 5 per check that could not run, − 2 per warning | its failing checks |
 | An Azure Data Factory | the average of its pipeline scores (ADF connector) | its ADF issues |
 
-A source with nothing measured yet shows "No data yet" rather than a perfect score. Incidents have a lifecycle in
+A source with nothing measured yet shows "No data yet" rather than a perfect score.
+The Data quality pages follow the source too: for the POC they are its own rule engine (Rejected records, DQ Rule
+Studio); for a database they list the rows its failing checks found and its checks as rules; for a factory they show
+the rows ADF skipped while copying and each Copy step's data settings with DataTrust's checks of every copy (`web/quality.py`). Incidents have a lifecycle in
 `app.incident_state`: first seen, acknowledged (button on Detect), resolved when the source's data no longer shows them.
 Google Chat alerts cover every source and name it on each card. Links: `#observe=db:3`, `#detect=adf:3`.
 

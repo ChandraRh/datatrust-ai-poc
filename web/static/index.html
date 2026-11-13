@@ -219,14 +219,14 @@
   <!-- DATA QUALITY: Rejected records (every held-back row, by date and cause; fix & re-insert with approval) -->
   <section id="page-estate-dq-rejected" class="page hidden">
     <h1>Rejected records</h1>
-    <p class="sub">Every row the quality rules held back: on which date, from which table and why. Fix it and re-insert it after an admin approves.</p>
+    <p class="sub" id="dqRejSub">Every row the quality rules held back: on which date, from which table and why. Fix it and re-insert it after an admin approves.</p>
     <div id="body-estate-dq-rejected"></div>
   </section>
 
   <!-- DATA QUALITY: DQ Rule Studio (rules as data, tested before they are saved) -->
   <section id="page-estate-dq-rules" class="page hidden">
     <h1>DQ Rule Studio</h1>
-    <p class="sub">The checks every row must pass on its way into silver. Write one in plain words, test it on today's data, then switch it on, no code change or deployment needed.</p>
+    <p class="sub" id="dqRulesSub">The checks every row must pass on its way into silver. Write one in plain words, test it on today's data, then switch it on, no code change or deployment needed.</p>
     <div id="body-estate-dq-rules"></div>
   </section>
 

@@ -194,6 +194,20 @@ def incidents(scope: Optional[str] = None):
     return _scoped(scopes.incidents, scope)
 
 
+@app.get("/api/quality/rows")
+def quality_rows(scope: Optional[str] = None):
+    """Rejected records for any source other than the POC: the rows its quality findings point at."""
+    import quality
+    return _scoped(quality.rows, scope)
+
+
+@app.get("/api/quality/rules")
+def quality_rules(scope: Optional[str] = None):
+    """Rule Studio for any source other than the POC: its checks as rules, or a factory's Copy data settings."""
+    import quality
+    return _scoped(quality.rules, scope)
+
+
 @app.post("/api/incidents/{incident_id}/ack")
 def acknowledge(incident_id: str, user: dict = Depends(estate_routes.current_user)):
     _scoped(scopes.acknowledge, incident_id, user["username"])

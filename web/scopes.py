@@ -403,9 +403,9 @@ def _overview_adf(s: dict) -> dict:
 def _pretty(text: str) -> str:
     """ADF expressions that only resolve at run time, written readably: {p_batch_id}, {target_schema from LK_Get_File_Config}."""
     t = re.sub(r"@\{(.+?)\}", r"@\1", str(text or ""))
-    t = re.sub(r"@pipeline\(\)\.parameters\.(\w+)", r"{\1}", t)
-    t = re.sub(r"@activity\('([^']+)'\)\.output\.firstRow\.(\w+)", r"{\2 from \1}", t)
-    t = re.sub(r"@activity\('([^']+)'\)[\w.()[\]']*", r"{output of \1}", t)
+    t = re.sub(r"@?pipeline\(\)\.parameters\.(\w+)", r"{\1}", t)                  # also inside a function: @json(activity(...))
+    t = re.sub(r"@?activity\('([^']+)'\)\.output\.firstRow\.(\w+)", r"{\2 from \1}", t)
+    t = re.sub(r"@?activity\('([^']+)'\)[\w.()[\]']*", r"{output of \1}", t)
     t = re.sub(r"@item\(\)\.(\w+)", r"{each \1}", t)
     return t
 
