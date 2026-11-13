@@ -883,7 +883,7 @@ async function renderPipeline() {
 // ------------------------------------------------------------------ ask
 const EXAMPLES = ["What is the total revenue?", "Revenue last 7 days by day", "Revenue this month by payment method",
   "Revenue last month", "Revenue last quarter", "Revenue by region", "Is any data missing from source to target?",
-  "Why is 2026-10-08 a mismatch?", "Which rows were rejected?", "What is the trust score?",
+  "Why is 2026-10-27 a mismatch?", "Which rows were rejected?", "What is the trust score?",
   "Did the last pipeline run succeed?", "Top 5 customers this month", "Show history of customer C00781"];
 const EXAMPLES_DB = ["Which data checks are failing, and why?", "What is the worst open incident?", "Which tables are watched?",
   "What tables are in this database?", "How many rows were loaded today?", "What should I check first?"];

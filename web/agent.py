@@ -26,7 +26,7 @@ MONTHS.update({m.lower(): i for i, m in enumerate(calendar.month_abbr) if m})
 EXAMPLES = ["What is the total revenue?", "Revenue last 7 days by day", "Revenue this month by payment method",
             "Revenue on 2026-10-05", "Revenue last month", "Revenue last quarter", "Revenue by region",
             "Is any data missing from source to target?", "Show settlement reconciliation",
-            "Why is 2026-10-08 a mismatch?", "Which rows were rejected?", "Were there duplicates?",
+            "Why is 2026-10-27 a mismatch?", "Which rows were rejected?", "Were there duplicates?",
             "What is the trust score?", "Did the last pipeline run succeed?", "Top 5 customers this month",
             "Show history of customer C00781"]
 
