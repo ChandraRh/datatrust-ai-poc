@@ -49,7 +49,7 @@ CREATE INDEX IF NOT EXISTS incident_state_by_scope ON app.incident_state (scope,
 def ensure_tables() -> None:
     with appdb.connect() as conn:
         conn.execute(STATE_DDL)
-        # the two starter checks that repeat the POC pipeline's own findings: shown on Data checks, not counted twice
+        # the two starter checks that repeat the POC pipeline's own findings: shown in DQ Rule Studio, not counted twice
         conn.execute("""UPDATE monitor.checks SET config = config || '{"dedupe": "poc"}'::jsonb
                         WHERE origin = 'starter' AND NOT config ? 'dedupe'
                           AND name IN ('Gateway settlement matches captured payments', 'No rows held back by quality rules')""")
@@ -300,7 +300,7 @@ def _overview_db(s: dict) -> dict:
     tables = sorted({f"{c['schema_name']}.{c['table_name']}" for c in checks if c.get("table_name")})
     last = max((c["last_run_at"] for c in checks if c["last_run_at"]), default=None)
     n_open = sum(1 for c in ran if c["last_status"] != "PASS")
-    kpis = [{"label": "Data checks", "value": len(checks), "sub": f"{len(ran)} run"},
+    kpis = [{"label": "Rules", "value": len(checks), "sub": f"{len(ran)} run"},
             {"label": "Failing", "value": sum(c["last_status"] == "FAIL" for c in ran), "tone": "bad"},
             {"label": "Could not run", "value": sum(c["last_status"] == "ERROR" for c in ran), "tone": "bad"},
             {"label": "Warnings", "value": sum(c["last_status"] == "WARN" for c in ran), "tone": "warn"},
@@ -314,7 +314,7 @@ def _overview_db(s: dict) -> dict:
             "rules": {"healthy_from": HEALTHY, "attention_from": ATTENTION}},
             "kpis": kpis, "dimensions": dims, "trend": _check_trend(s["id"]), "trend_label": "Trust score by day (from data check results)",
             "items_title": "What is watched", "items": items, "last_activity": last,
-            "empty": None if checks else "No data checks on this connection yet. Add one on Data checks → Add check: freshness, volume, "
+            "empty": None if checks else "No rules on this connection yet. Add one in DQ Rule Studio → Add rule: freshness, volume, "
                                          "empty values, keys, schema, your own SQL or a reconciliation."}
 
 

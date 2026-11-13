@@ -117,21 +117,31 @@ RULE_TEXT = {
 
 
 def rules(scope: str | None) -> dict:
+    """DQ Rule Studio: one place per source. The POC also lists its data checks under its pipeline rules."""
     s = scopes.resolve(scope)
-    if s["poc"]:
-        return {"kind": "poc", "scope": s}
-    if s["kind"] == "db":
-        cs = scopes._checks_of(s["id"], skip_dedupe=False)
-        out = [{"check_id": c["check_id"], "rule": RULE_TEXT[c["check_type"]](c), "name": c["name"], "type": c["check_type"],
-                "applies_to": scopes._target(c), "severity": c["severity"], "status": c["last_status"], "message": c["message"],
-                "last_run_at": c["last_run_at"], "sql": (c["config"] or {}).get("sql")} for c in cs]
-        tables = {}
-        for r in out:
-            tables.setdefault(r["applies_to"], []).append(r["status"])
-        return {"kind": "db", "scope": s, "rules": out,
-                "scorecard": [{"applies_to": t, "rules": len(v), "passing": v.count("PASS"), "failing": v.count("FAIL"),
-                               "warnings": v.count("WARN"), "errors": v.count("ERROR")} for t, v in sorted(tables.items())]}
-    return {"kind": "adf", "scope": s, **_adf_rules(s)}
+    if s["kind"] == "adf":
+        return {"kind": "adf", "scope": s, **_adf_rules(s)}
+    return {"kind": "poc" if s["poc"] else "db", "scope": s, **_db_rules(s)}
+
+
+def _db_rules(s: dict) -> dict:
+    cs = scopes._checks_of(s["id"], skip_dedupe=False)
+    hist = {}
+    if cs:
+        for r in appdb.rows("""SELECT check_id, status FROM (SELECT check_id, status, run_at,
+                                      row_number() OVER (PARTITION BY check_id ORDER BY run_at DESC) AS n
+                               FROM monitor.results WHERE check_id = ANY(%s)) x WHERE n <= 20 ORDER BY check_id, run_at""",
+                            ([c["check_id"] for c in cs],)):
+            hist.setdefault(r["check_id"], []).append(r["status"])
+    out = [{"check_id": c["check_id"], "rule": RULE_TEXT[c["check_type"]](c), "name": c["name"], "type": c["check_type"],
+            "applies_to": scopes._target(c), "severity": c["severity"], "status": c["last_status"], "message": c["message"],
+            "last_run_at": c["last_run_at"], "sql": (c["config"] or {}).get("sql"), "history": hist.get(c["check_id"], []),
+            "repeats_pipeline": (c["config"] or {}).get("dedupe") == "poc"} for c in cs]
+    tables = {}
+    for r in out:
+        tables.setdefault(r["applies_to"], []).append(r["status"])
+    return {"rules": out, "scorecard": [{"applies_to": t, "rules": len(v), "passing": v.count("PASS"), "failing": v.count("FAIL"),
+                                         "warnings": v.count("WARN"), "errors": v.count("ERROR")} for t, v in sorted(tables.items())]}
 
 
 def _adf_rules(s: dict) -> dict:

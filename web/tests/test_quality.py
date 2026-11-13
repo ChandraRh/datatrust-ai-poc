@@ -27,16 +27,20 @@ class QualityTests(unittest.TestCase):
 
     def test_database_rules_are_its_checks(self):
         cs = [chk(1, "null_rate", "FAIL", config={"column": "email", "max_null_pct": 1}), chk(2, "schema", "PASS")]
-        with patch.object(quality.scopes, "resolve", return_value=DB), patch.object(quality.scopes, "_checks_of", return_value=cs):
+        with patch.object(quality.scopes, "resolve", return_value=DB), patch.object(quality.scopes, "_checks_of", return_value=cs),                 patch.object(quality.appdb, "rows", return_value=[{"check_id": 1, "status": "PASS"}, {"check_id": 1, "status": "FAIL"}]):
             r = quality.rules("db:5")
         self.assertEqual(r["rules"][0]["rule"], "email at most 1% empty")
+        self.assertEqual(r["rules"][0]["history"], ["PASS", "FAIL"])                  # last runs, oldest first
         self.assertEqual(r["scorecard"], [{"applies_to": "sales.orders", "rules": 2, "passing": 1, "failing": 1, "warnings": 0, "errors": 0}])
 
-    def test_poc_keeps_its_own_pages(self):
+    def test_poc_keeps_its_own_pages_and_lists_its_checks(self):
         poc = {**DB, "poc": True}
-        with patch.object(quality.scopes, "resolve", return_value=poc):
+        cs = [chk(1, "volume", "PASS", config={"min_rows": 1, "dedupe": "poc"})]
+        with patch.object(quality.scopes, "resolve", return_value=poc), patch.object(quality.scopes, "_checks_of", return_value=cs),                 patch.object(quality.appdb, "rows", return_value=[]):
             self.assertEqual(quality.rows("db:1")["kind"], "poc")
-            self.assertEqual(quality.rules("db:1")["kind"], "poc")
+            r = quality.rules("db:1")
+        self.assertEqual(r["kind"], "poc")
+        self.assertTrue(r["rules"][0]["repeats_pipeline"])
 
     def test_factory_copy_settings_become_advice(self):
         pipe = {"properties": {"activities": [{"name": "CP", "type": "Copy", "typeProperties": {

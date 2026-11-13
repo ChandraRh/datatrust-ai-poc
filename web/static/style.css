@@ -669,3 +669,4 @@ tr.clickable { cursor: pointer; } tr.clickable:hover td { background: var(--bran
 /* ---------------------------------------------------------------- data quality pages per source */
 .dq-source { margin-bottom: 14px; padding: 9px 14px; }
 .dq-advice { margin: 8px 0 4px; padding-left: 18px; display: grid; gap: 4px; color: var(--ink-2, #3A4A5E); }
+.dq-h2 { font-size: 18px; margin: 26px 0 4px; }

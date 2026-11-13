@@ -1,6 +1,7 @@
-// Data checks pages (sidebar group "Data checks"): the list with history, one check's evidence, and the add / edit form.
+// Rule pages, opened from DQ Rule Studio (dq.js): one rule (data check) with its evidence and history, and the add / edit form.
 // Rendered by estate.js after login (pages estate-checks, estate-checks-new). Uses app.js (esc, num, toast) and estate.js (eapi, est, $e).
 (function () {
+  const toRules = () => document.querySelector('#tabs [data-page="estate-dq-rules"]').click();   // home of every rule
   const C = { open: null, editing: null, filter: { conn: "", status: "" }, cache: {}, f: null, preview: null };
   const api = (p, o) => eapi("/checks" + p, o);
   const send = (p, method, data) => api(p, { method, body: JSON.stringify(data || {}) });
@@ -132,7 +133,7 @@
       : c.check_type === "custom_sql" ? ((cfg.mode || "no_rows") === "no_rows" ? "the query returns no rows" : `the query's value ${esc(cfg.op)} ${esc(cfg.threshold)}`)
       : `per ${esc(cfg.match === "left" ? "key of the left query" : "key on either side")}, values equal${cfg.tolerance ? ` within ${esc(cfg.tolerance)}` : ""}`;
     return {
-      html: `<div class="draft-head"><button class="btn light btn-sm" id="ckBack">← All checks</button><span class="grow"></span>
+      html: `<div class="draft-head"><button class="btn light btn-sm" id="ckBack">← DQ Rule Studio</button><span class="grow"></span>
           <button class="btn light btn-sm" id="ckRun">Run now</button>
           ${isAdmin() ? `<button class="btn light btn-sm" id="ckEdit">Edit</button><button class="btn light btn-sm" id="ckPause">${c.enabled ? "Pause" : "Resume"}</button>
             ${c.check_type === "schema" && last && ["WARN", "FAIL"].includes(last.status) ? `<button class="btn btn-sm" id="ckAccept">Accept current schema</button>` : ""}
@@ -146,7 +147,7 @@
           ${results.map((r) => `<tr><td class="small nowrap">${esc(when(r.run_at))}</td><td>${chip(r.status)}</td><td class="num">${n0(r.observed)}</td><td class="small ck-msg">${esc(r.message || "")}</td><td class="small">${esc(r.triggered_by || "")}</td></tr>`).join("")}</tbody></table></div>` : "<p class='muted'>No runs yet.</p>"}</div>`,
       bind() {
         drawTrend(c, results);
-        $e("ckBack").onclick = () => { C.open = null; renderEstate("estate-checks"); };
+        $e("ckBack").onclick = () => { C.open = null; toRules(); };
         $e("ckRun").onclick = async () => { $e("ckRun").disabled = true; try { await send(`/${id}/run`, "POST"); renderEstate("estate-checks"); } catch (x) { toast(x.message); $e("ckRun").disabled = false; } };
         if (!isAdmin()) return;
         $e("ckEdit").onclick = () => goForm(c);
@@ -155,7 +156,7 @@
         $e("ckDel").onclick = () => {
           $e("ckDelBox").innerHTML = `<span class="small">Remove this check and its history? <button class="btn btn-sm" id="ckDelYes">Remove</button> <button class="btn light btn-sm" id="ckDelNo">Keep</button></span>`;
           $e("ckDelNo").onclick = () => renderEstate("estate-checks");
-          $e("ckDelYes").onclick = async () => { await api(`/${id}`, { method: "DELETE" }); toast("Removed"); C.open = null; renderEstate("estate-checks"); };
+          $e("ckDelYes").onclick = async () => { await api(`/${id}`, { method: "DELETE" }); toast("Removed"); C.open = null; toRules(); };
         };
       },
     };
@@ -214,7 +215,9 @@
     C.preview = null;
     document.querySelector('#tabs [data-page="estate-checks-new"]').click();
   }
-  const blank = () => ({ name: "", check_type: "freshness", connection_id: "", database: "", schema_name: "", table_name: "", severity: "MEDIUM",
+  const blank = () => ({ name: "", check_type: "freshness", database: "",
+    connection_id: /^db:\d+$/.test(state.scope || "") ? state.scope.slice(3) : "",       // start on the selected source
+    schema_name: "", table_name: "", severity: "MEDIUM",
     schedule_minutes: 60, enabled: true, description: "", config: { left: { label: "source" }, right: { label: "target" }, match: "both" } });
 
   async function cached(key, fn) { if (!(key in C.cache)) C.cache[key] = await fn().catch((e) => ({ error: e.message })); return C.cache[key]; }
@@ -285,7 +288,7 @@
       specific += sel("cMatch", "Compare", `<option value="both" ${c.match !== "left" ? "selected" : ""}>keys from both queries (a key missing on either side fails)</option><option value="left" ${c.match === "left" ? "selected" : ""}>only keys of the first query</option>`)
         + inp("cTol", "Tolerance", c.tolerance ?? 0, "0", "allowed difference, e.g. 0.01 for money", "number");
     }
-    const html = `<div class="card" id="ckForm"><h3>${C.editing ? "Edit check" : "Add a check"}</h3>
+    const html = `<div class="card" id="ckForm"><h3>${C.editing ? "Edit rule" : "Add a rule"}</h3>
         <p class="small muted">Checks only read. Pick what to watch; <b>Preview</b> runs it once without saving, so you see exactly what it would report.</p>
         <div class="form-grid adf-form">
           ${sel("fType", "Type", Object.entries(TYPES).map(([k, [l]]) => `<option value="${k}" ${t === k ? "selected" : ""}>${l}</option>`).join(""), esc(TYPES[t][1]))}
@@ -295,7 +298,7 @@
           ${specific}
           ${inp("fDesc", "Why it matters (optional)", f.description, "shown on the check and in incidents")}
         </div>
-        <div class="pacts"><button class="btn light" id="ckPreview">Preview</button><button class="btn" id="ckSave">${C.editing ? "Save changes" : "Add check"}</button>
+        <div class="pacts"><button class="btn light" id="ckPreview">Preview</button><button class="btn" id="ckSave">${C.editing ? "Save changes" : "Add rule"}</button>
           <button class="btn light" id="ckCancel">Cancel</button>
           ${C.editing ? `<label class="small"><input type="checkbox" id="fEnabled" ${f.enabled ? "checked" : ""}> active</label>` : ""}</div>
         <div id="ckOut">${C.preview ? resultBox({ check_type: t }, C.preview) : ""}</div></div>`;
@@ -316,7 +319,7 @@
       <div class="ck-suggest">${d.suggestions.map((s, i) => `<label><input type="checkbox" data-sugg="${i}" checked>
         <span><b>${esc(s.name)}</b> <span class="chip ${SEV[s.severity]}">${esc(s.severity)}</span> <span class="small muted">${esc((TYPES[s.check_type] || [s.check_type])[0])}</span>
         <br><span class="small">${esc(s.why || "")}</span>${s.config && s.config.sql ? `<pre class="code small">${esc(s.config.sql)}</pre>` : ""}</span></label>`).join("")}</div>
-      <div class="pacts"><button class="btn" id="ckSuggestAdd">Add selected checks</button><span class="small muted">Each one runs once right away; review the results on Data checks.</span></div>`;
+      <div class="pacts"><button class="btn" id="ckSuggestAdd">Add selected rules</button><span class="small muted">Each one runs once right away; the results appear in DQ Rule Studio.</span></div>`;
   }
   function bindSuggest(tableKey) {
     if (!tableKey || !$e("ckSuggest")) return;
@@ -344,7 +347,7 @@
         }
         toast(`${ok} check(s) added${errs.length ? `, ${errs.length} failed` : ""}`);
         if (errs.length) $e("ckSuggestBody").insertAdjacentHTML("beforeend", errBox(errs.join(" · ")));
-        if (ok) { C.f = null; C.suggest = null; C.open = null; document.querySelector('#tabs [data-page="estate-checks"]').click(); }
+        if (ok) { C.f = null; C.suggest = null; C.open = null; toRules(); }
         else $e("ckSuggestAdd").disabled = false;
       };
     }
@@ -417,7 +420,10 @@
         document.querySelector('#tabs [data-page="estate-checks"]').click();
       } catch (x) { out.innerHTML = errBox(x); }
     };
-    $e("ckCancel").onclick = () => { C.f = null; C.preview = null; C.open = C.editing; C.editing = null; document.querySelector('#tabs [data-page="estate-checks"]').click(); };
+    $e("ckCancel").onclick = () => {                             // editing: back to the rule; adding: back to Rule Studio
+      C.f = null; C.preview = null; C.open = C.editing; const wasEditing = C.editing; C.editing = null;
+      if (wasEditing) document.querySelector('#tabs [data-page="estate-checks"]').click(); else toRules();
+    };
   }
 
   window.CHECKS = {

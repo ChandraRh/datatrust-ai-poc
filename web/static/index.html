@@ -51,7 +51,8 @@
   <div class="nav-group"><div class="nav-title">Operations</div>
     <button data-page="pipeline" title="Pipeline log"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 6h16M4 12h16M4 18h10"/></svg><span class="label">Pipeline log</span></button>
   </div>
-  <div class="nav-group"><div class="nav-title">Data checks</div>
+  <!-- the rule pages (checks.js) are opened from DQ Rule Studio; their menu entries stay hidden so links and alerts keep working -->
+  <div class="nav-group hidden" aria-hidden="true"><div class="nav-title">Rules</div>
     <button data-page="estate-checks" title="Data checks"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M9 11l2.5 2.5L16 9"/><rect x="3.5" y="3.5" width="17" height="17" rx="3"/></svg><span class="label">Data checks</span></button>
     <button data-page="estate-checks-new" title="Add check"><svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="8.5"/><path d="M12 8v8M8 12h8"/></svg><span class="label">Add check</span></button>
   </div>
@@ -230,15 +231,15 @@
     <div id="body-estate-dq-rules"></div>
   </section>
 
-  <!-- DATA CHECKS (checks.js): checks on any connected database, their history, add / edit -->
+  <!-- RULES (checks.js): one rule (data check) with its history, and add / edit; opened from DQ Rule Studio -->
   <section id="page-estate-checks" class="page hidden">
-    <h1>Data checks</h1>
-    <p class="sub">Scheduled, read-only checks on any connected PostgreSQL or SQL Server database: freshness, volume, empty values, unique keys, schema changes, your own SQL, and reconciliations between two queries.</p>
+    <h1>DQ rule</h1>
+    <p class="sub">A scheduled, read-only rule on a connected PostgreSQL or SQL Server database: what it requires, what it measured each time, and the rows or values behind a failure.</p>
     <div id="body-estate-checks"></div>
   </section>
   <section id="page-estate-checks-new" class="page hidden">
-    <h1>Add a data check</h1>
-    <p class="sub">Choose a table or write a query. Preview runs it once so you see what it would report before saving.</p>
+    <h1>Add a rule</h1>
+    <p class="sub">Choose a table or write a query. Preview runs it once so you see what it would report before saving; Suggest checks proposes rules that fit a table.</p>
     <div id="body-estate-checks-new"></div>
   </section>
 

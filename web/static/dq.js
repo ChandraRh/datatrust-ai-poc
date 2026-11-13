@@ -435,7 +435,7 @@
         (groups.length ? groups.map((g, i) => `<div class="card"><div class="draft-head"><h3 style="margin:0">${esc(g.check)}</h3> ${stChip(g.status)} ${sevChip(g.severity)}
             <span class="grow"></span><button class="btn light btn-sm" data-csv="${i}">Export CSV</button><button class="btn light btn-sm" data-check="${g.check_id}">Open the check</button></div>
             <p class="small muted">${esc(g.target)} · ${esc(g.message || "")} · found ${esc(when(g.found_at))}</p>${objTable(g.rows)}</div>`).join("")
-        : `<div class="card"><p class="muted">${esc(d.empty || "No failing rows.")}</p>${(d.table_level || []).length ? "" : `<button class="btn btn-sm" id="dqAddCheck">+ Add a data check</button>`}</div>`) +
+        : `<div class="card"><p class="muted">${esc(d.empty || "No failing rows.")}</p>${(d.table_level || []).length ? "" : `<button class="btn btn-sm" id="dqAddCheck">+ Add a rule</button>`}</div>`) +
         ((d.table_level || []).length ? `<div class="card"><h3>Failing checks about a whole table</h3><p class="small muted">These are about the table (age, volume, columns), so there are no rows to list.</p>
           ${d.table_level.map((t) => `<div class="check"><span class="${(ST[t.status] || ["grey"])[0]}">!</span><span><b>${esc(t.check)}</b> ${stChip(t.status)} ${sevChip(t.severity)}<br>
             <span class="small">${esc(t.target)} · ${esc(t.message || "")}</span></span><div class="src"><a href="#" data-check="${t.check_id}">open the check</a></div></div>`).join("")}</div>` : ""),
@@ -466,24 +466,41 @@
         bind() {},
       };
     }
+    const sec = rulesSection(d);
+    return { html: sourceNote(s, "Its rules: what each one requires, where, and whether the data meets it now.") + sec.html, bind: sec.bind };
+  }
+
+  // the rules (data checks) of one database connection: scorecard by table, every rule with its last 20 runs, run / open / edit / add
+  const DOT = { PASS: "ok", WARN: "warn", FAIL: "bad", ERROR: "bad" };
+  function rulesSection(d, title) {
     const admin = isAdmin();
-    return {
-      html: sourceNote(s, "Its rules are its data checks: what each one requires, where, and whether the data meets it now.") +
-        `<div class="card"><div class="draft-head"><h3 style="margin:0">Rules by table</h3><span class="grow"></span>
-          ${admin ? `<button class="btn btn-sm" id="dqAddRule">+ Add or suggest rules</button>` : ""}</div>
+    const html = `<div id="dqChecksSec"><div class="card"><div class="draft-head"><h3 style="margin:0">${esc(title || "Rules by table")}</h3><span class="grow"></span>
+          ${admin ? `<button class="btn btn-sm" id="dqAddRule">+ Add rule</button>` : ""}</div>
           ${d.scorecard.length ? `<div class="tablewrap"><table><thead><tr><th>Applies to</th><th class="num">Rules</th><th class="num">Passing</th><th class="num">Failing</th><th class="num">Warnings</th><th class="num">Errors</th></tr></thead><tbody>
             ${d.scorecard.map((r) => `<tr><td><code>${esc(r.applies_to)}</code></td><td class="num">${r.rules}</td><td class="num">${r.passing}</td><td class="num ${r.failing ? "bad" : ""}">${r.failing}</td>
               <td class="num">${r.warnings}</td><td class="num ${r.errors ? "bad" : ""}">${r.errors}</td></tr>`).join("")}</tbody></table></div>`
-            : `<p class="muted">No rules yet. Pick a table on <b>Add check</b>: <b>Suggest checks</b> measures it and proposes rules that fit it.</p>`}</div>
-        ${d.rules.length ? `<div class="card"><h3>Every rule</h3><div class="tablewrap" style="max-height:none"><table><thead><tr><th>Rule</th><th>Applies to</th><th>Severity</th><th>Now</th><th></th></tr></thead><tbody>
-          ${d.rules.map((r) => `<tr><td><b>${esc(r.name)}</b><div class="small muted">${esc(r.rule)}</div>${r.sql ? `<pre class="code small">${esc(r.sql)}</pre>` : ""}</td>
+            : `<p class="muted">No rules yet. <b>Add rule</b>: pick a table, then <b>Suggest checks</b> measures it and proposes rules that fit it.</p>`}</div>
+        ${d.rules.length ? `<div class="card"><h3>Every rule</h3><div class="tablewrap" style="max-height:none"><table><thead><tr><th>Rule</th><th>Applies to</th><th>Severity</th><th>Now</th><th>Last runs</th><th></th></tr></thead><tbody>
+          ${d.rules.map((r) => `<tr><td><b>${esc(r.name)}</b><div class="small muted">${esc(r.rule)}</div>${r.repeats_pipeline ? `<div class="small muted">Repeats a pipeline finding, so it does not lower the score twice.</div>` : ""}
+              ${r.sql ? `<pre class="code small">${esc(r.sql)}</pre>` : ""}</td>
             <td class="small"><code>${esc(r.applies_to)}</code></td><td>${sevChip(r.severity)}</td><td>${stChip(r.status)}<div class="small muted">${esc(r.message || "")}</div></td>
-            <td class="nowrap"><button class="btn light btn-sm" data-check="${r.check_id}">Open</button>${admin ? ` <button class="btn light btn-sm" data-edit="${r.check_id}">Edit</button>` : ""}</td></tr>`).join("")}
-          </tbody></table></div></div>` : ""}`,
+            <td><span class="ck-dots">${(r.history || []).map((h) => `<i class="${DOT[h] || "grey"}" title="${esc(h)}"></i>`).join("")}</span></td>
+            <td class="nowrap"><button class="btn light btn-sm" data-run="${r.check_id}">Run now</button> <button class="btn light btn-sm" data-check="${r.check_id}">Open</button>${admin ? ` <button class="btn light btn-sm" data-edit="${r.check_id}">Edit</button>` : ""}</td></tr>`).join("")}
+          </tbody></table></div></div>` : ""}</div>`;
+    return {
+      html,
       bind() {
-        const el = $e("body-estate-dq-rules");
+        const el = $e("dqChecksSec");                           // only this section: the POC's own rules above use data-edit too
         el.querySelectorAll("[data-check]").forEach((b) => (b.onclick = () => openCheck(Number(b.dataset.check))));
         el.querySelectorAll("[data-edit]").forEach((b) => (b.onclick = () => window.CHECKS.edit(b.dataset.edit)));
+        el.querySelectorAll("[data-run]").forEach((b) => (b.onclick = async () => {
+          b.disabled = true; b.textContent = "Running…";
+          try {
+            const r = await eapi(`/checks/${b.dataset.run}/run`, { method: "POST" });
+            toast(`${(ST[r.status] || [, r.status])[1]}: ${r.message}`);
+            renderEstate("estate-dq-rules");
+          } catch (x) { toast(x.message); b.disabled = false; b.textContent = "Run now"; }
+        }));
         if ($e("dqAddRule")) $e("dqAddRule").onclick = () => gotoPage("estate-checks-new");
       },
     };
@@ -499,10 +516,17 @@
         adf: "Rows this factory's Copy steps could not load, and what DataTrust's own checks of each copy found." }[kind];
       $e("dqRulesSub").textContent = {
         poc: "The checks every row must pass on its way into silver. Write one in plain words, test it on today's data, then switch it on, no code change or deployment needed.",
-        db: "What this database's data must meet: its data checks, by table. Add rules on Add check, where Suggest checks proposes rules that fit a table.",
+        db: "What this database's data must meet, by table. Run, open or edit any rule here; Add rule proposes rules that fit a table.",
         adf: "What decides good data in this factory: each Copy step's data settings, and the checks DataTrust runs on every copy." }[kind];
       if (!isPoc()) return page === "estate-dq-rules" ? rulesOther() : rowsOther();
       const body = await (page === "estate-dq-rules" ? pageRules() : pageRejected());
+      if (page === "estate-dq-rules") {                          // the POC's data checks live here too (one place for rules)
+        const d = await api("/api/quality/rules?" + sq());
+        const sec = rulesSection(d, "By table");
+        const own = body.bind;
+        body.html += `<h2 class="dq-h2">Data checks on this database</h2><p class="small muted">Scheduled checks on the POC database's tables, in addition to the pipeline rules above.</p>` + sec.html;
+        body.bind = () => { own && own(); sec.bind(); };
+      }
       body.html = sourceNote(state.overview.scope, page === "estate-dq-rules"
         ? "The POC pipeline's own rules: its silver layer applies them on every run."
         : "Rows the POC pipeline's rules held back from silver.") + body.html;

@@ -56,7 +56,7 @@ diagnosed cause and the checks DataTrust runs on the ADLS source files and Postg
 process with `ADF_COLLECTOR_IN_WEB=false` and `python web/adf/collector.py`.
 
 ## Data checks
-**Data checks** watches any table or query in a connected PostgreSQL or SQL Server database (Data estate →
+**Data checks** (managed as rules in **DQ Rule Studio** → Add rule; each rule opens its own page with history) watch any table or query in a connected PostgreSQL or SQL Server database (Data estate →
 Connections): freshness, row volume against the usual, empty values, unique keys, schema changes, your own read-only
 SQL, and reconciliations between two queries (also across databases, e.g. source totals vs target totals). Each check
 runs on its own schedule; results and their evidence (duplicate keys, differing rows, the SQL that ran) are kept in
@@ -89,7 +89,7 @@ Google Chat alerts cover every source and name it on each card. Links: `#observe
 | Investigate | Root cause in plain words, confidence, the facts it rests on, what the evidence cannot tell | the incident's evidence pack only |
 | Impact | A fix plan and prevention steps; new steps can be ticked into the approval | same |
 | Observe | Today's briefing for the source: state, what broke / got fixed, what to watch; optional daily post to Google Chat (`BRIEFING_CHAT_AT`) | the source's score, incidents and trend |
-| Add check | Suggested checks for a table (also without a model, from the profile) | the table's measured profile (counts, empty %, distinct, ranges) |
+| DQ Rule Studio → Add rule | Suggested rules for a table (also without a model, from the profile) | the table's measured profile (counts, empty %, distinct, ranges) |
 | Ask DataTrust AI | Questions about the selected source (or any other by name) | read-only tools: overview, incidents, checks, ADF runs, catalog, one SELECT |
 
 Rules (`web/llm.py`): the model never gets direct access; it answers from evidence DataTrust measured; any number it writes

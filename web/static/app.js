@@ -224,7 +224,8 @@ function drawStacked(id, labels, series, opts = {}) {
 document.querySelectorAll("#tabs button").forEach((b) => b.addEventListener("click", () => go(b.dataset.page)));
 function go(page, arg) {
   state.page = page;
-  document.querySelectorAll("#tabs button").forEach((b) => b.classList.toggle("active", b.dataset.page === page));
+  const navPage = page.startsWith("estate-checks") ? "estate-dq-rules" : page;   // a rule page belongs to DQ Rule Studio in the menu
+  document.querySelectorAll("#tabs button").forEach((b) => b.classList.toggle("active", b.dataset.page === navPage));
   document.querySelectorAll(".page").forEach((p) => p.classList.add("hidden"));
   $("page-" + page).classList.remove("hidden");
   render(page, arg).catch((e) => showError(e.message));
@@ -479,7 +480,7 @@ function renderObserveGeneric() {
     ? o.items.map((i) => { const [c, l] = STATUS_CHIP[i.status] || ["grey", "Not run"];
         return `<div class="item"><div>${esc(i.name)} <span class="small muted">${esc(i.detail || "")}</span></div><span class="chip ${c}">${esc(i.label || l)}</span></div>`; }).join("")
     : `<p class="muted small">${esc(o.empty || "Nothing yet.")}</p>`
-      + (s.kind === "db" ? `<button class="btn btn-sm" onclick="document.querySelector('#tabs [data-page=estate-checks-new]').click()">+ Add a data check</button>` : "");
+      + (s.kind === "db" ? `<button class="btn btn-sm" onclick="document.querySelector('#tabs [data-page=estate-checks-new]').click()">+ Add a rule</button>` : "");
 }
 
 // ------------------------------------------------------------------ 2. detect
@@ -647,7 +648,7 @@ async function renderInvestigate(id) {
       </div>
       <div class="investigation-actions">
         <button class="btn light btn-sm" id="invBack" type="button">← Detect</button>
-        ${inv.check_id ? `<button class="btn light btn-sm" id="invOpenCheck" type="button">Open the data check</button>` : ""}
+        ${inv.check_id ? `<button class="btn light btn-sm" id="invOpenCheck" type="button">Open the rule</button>` : ""}
         ${inv.run_id ? `<button class="btn light btn-sm" id="invOpenRun" type="button">Open the ADF run</button>` : ""}
         <button class="btn btn-sm" id="invImpact" type="button">See impact &amp; decide →</button>
       </div>
@@ -925,8 +926,8 @@ async function renderPipeline() {
     const s = state.overview.scope || {};
     $("pipeBody").innerHTML = `<div class="card"><h3>${esc(s.name || "This source")} has no POC pipeline log</h3>
       <p class="muted">The pipeline log shows the POC pipeline's own runs. ${s.kind === "adf" ? "For this factory, every run and step is on <b>ADF runs</b>."
-        : "For this database, every check run is on <b>Data checks</b>."}</p>
-      <button class="btn btn-sm" onclick="document.querySelector('#tabs [data-page=${s.kind === "adf" ? "estate-adf-runs" : "estate-checks"}]').click()">Open ${s.kind === "adf" ? "ADF runs" : "Data checks"}</button></div>`;
+        : "For this database, every rule and its runs are in <b>DQ Rule Studio</b>."}</p>
+      <button class="btn btn-sm" onclick="document.querySelector('#tabs [data-page=${s.kind === "adf" ? "estate-adf-runs" : "estate-dq-rules"}]').click()">Open ${s.kind === "adf" ? "ADF runs" : "DQ Rule Studio"}</button></div>`;
     return;
   }
   const p = await api("/api/pipeline");
