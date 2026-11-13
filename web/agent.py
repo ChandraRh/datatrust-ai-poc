@@ -480,10 +480,12 @@ def _table_from(result):
     return None
 
 
-def llm_agent(question: str, history: list) -> dict:
+def llm_agent(question: str, history: list, tools=None, runner=None, system=None) -> dict:
+    """Tool loop for anthropic / ollama (gemini below). tools / runner / system default to the POC tools."""
     import requests
+    tools, runner, system = tools or TOOLS, runner or _safe_tool, system or _system_prompt()
     if os.getenv("LLM_PROVIDER", "none").lower() == "gemini":
-        return _gemini_agent(question, history)
+        return _gemini_agent(question, history, tools, runner, system)
     provider = os.getenv("LLM_PROVIDER", "none").lower()
     used, last_table = [], None
     messages = [m for m in history[-6:] if m.get("role") in ("user", "assistant")] + [{"role": "user", "content": question}]
@@ -494,9 +496,9 @@ def llm_agent(question: str, history: list) -> dict:
                 "x-api-key": os.environ["ANTHROPIC_API_KEY"], "anthropic-version": "2023-06-01",
                 "content-type": "application/json"}, json={
                 "model": os.getenv("ANTHROPIC_MODEL", "claude-sonnet-5-5"), "max_tokens": 1200,
-                "system": _system_prompt(), "messages": messages,
+                "system": system, "messages": messages,
                 "tools": [{"name": n, "description": desc,
-                           "input_schema": {"type": "object", "properties": p, "required": r}} for n, desc, p, r in TOOLS]})
+                           "input_schema": {"type": "object", "properties": p, "required": r}} for n, desc, p, r in tools]})
             resp.raise_for_status()
             body = resp.json()
             calls = [b for b in body["content"] if b["type"] == "tool_use"]
@@ -506,7 +508,7 @@ def llm_agent(question: str, history: list) -> dict:
             messages.append({"role": "assistant", "content": body["content"]})
             results = []
             for c in calls:
-                out = _safe_tool(c["name"], c["input"])
+                out = runner(c["name"], c["input"])
                 used.append(c["name"])
                 last_table = _table_from(out) or last_table
                 results.append({"type": "tool_result", "tool_use_id": c["id"],
@@ -515,9 +517,9 @@ def llm_agent(question: str, history: list) -> dict:
         else:                                                    # ollama (free, local)
             resp = requests.post(os.getenv("OLLAMA_URL", "http://localhost:11434") + "/api/chat", timeout=180, json={
                 "model": os.getenv("OLLAMA_MODEL", "qwen2.5:7b"), "stream": False,
-                "messages": [{"role": "system", "content": _system_prompt()}] + messages,
+                "messages": [{"role": "system", "content": system}] + messages,
                 "tools": [{"type": "function", "function": {"name": n, "description": desc, "parameters":
-                           {"type": "object", "properties": p, "required": r}}} for n, desc, p, r in TOOLS]})
+                           {"type": "object", "properties": p, "required": r}}} for n, desc, p, r in tools]})
             resp.raise_for_status()
             msg = resp.json()["message"]
             calls = msg.get("tool_calls") or []
@@ -527,14 +529,14 @@ def llm_agent(question: str, history: list) -> dict:
             for c in calls:
                 fn = c["function"]
                 args = fn["arguments"] if isinstance(fn["arguments"], dict) else json.loads(fn["arguments"] or "{}")
-                out = _safe_tool(fn["name"], args)
+                out = runner(fn["name"], args)
                 used.append(fn["name"])
                 last_table = _table_from(out) or last_table
                 messages.append({"role": "tool", "content": json.dumps(out, default=str)[:20000]})
     return reply("I needed too many steps for that question. Please ask it more specifically.", last_table, None, used)
 
 
-def _gemini_agent(question: str, history: list) -> dict:
+def _gemini_agent(question: str, history: list, tools, runner, system) -> dict:
     import llm_gemini
     used, last_table = [], None
     contents = [{"role": "model" if m["role"] == "assistant" else "user",
@@ -543,7 +545,7 @@ def _gemini_agent(question: str, history: list) -> dict:
     contents.append({"role": "user", "parts": [{"text": question}]})
 
     decls = []
-    for n, desc, p, r in TOOLS:
+    for n, desc, p, r in tools:
         declaration = {"name": n, "description": desc}
         if p:
             declaration["parameters"] = {"type": "object", "properties": p, "required": r}
@@ -551,7 +553,7 @@ def _gemini_agent(question: str, history: list) -> dict:
 
     for _ in range(6):
         data = llm_gemini.generate({
-            "systemInstruction": {"parts": [{"text": _system_prompt()}]},
+            "systemInstruction": {"parts": [{"text": system}]},
             "contents": contents,
             "tools": [{"functionDeclarations": decls}],
             "generationConfig": {"temperature": 0},
@@ -564,7 +566,7 @@ def _gemini_agent(question: str, history: list) -> dict:
         contents.append(content)
         parts = []
         for call in calls:
-            out = _safe_tool(call["name"], call.get("args") or {})
+            out = runner(call["name"], call.get("args") or {})
             used.append(call["name"])
             last_table = _table_from(out) or last_table
             parts.append({"functionResponse": {

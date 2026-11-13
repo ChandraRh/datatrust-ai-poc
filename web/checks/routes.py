@@ -46,6 +46,20 @@ def columns(connection_id: int, schema: str, table: str, database: Optional[str]
     return guard(engine.columns, connection_id, database or None, schema, table)
 
 
+class SuggestBody(BaseModel):
+    connection_id: int
+    database: Optional[str] = None
+    schema_name: str
+    table_name: str
+
+
+@router.post("/suggest")
+def suggest(body: SuggestBody, user: dict = Depends(admin_user)):
+    """Checks that fit one table, from its measured profile (AI-written when a model is configured). Nothing is saved."""
+    import ai
+    return guard(ai.suggest_checks, body.connection_id, body.database or None, body.schema_name, body.table_name)
+
+
 @router.get("/{check_id}")
 def detail(check_id: int, user: dict = Depends(current_user)):
     return {"check": guard(store.get_check, check_id), "results": store.history(check_id)}

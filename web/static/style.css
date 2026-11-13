@@ -642,3 +642,19 @@ tr.clickable { cursor: pointer; } tr.clickable:hover td { background: var(--bran
 @media (max-width: 900px) { .scope-pick span { display: none; } .scope-pick select { max-width: 170px; } }
 #refreshInfo { white-space: nowrap; }
 @media (max-width: 1500px) { .brand > span:last-child { display: none; } }
+
+/* ---------------------------------------------------------------- AI cards (briefing, explanation, fix plan, suggestions) */
+.ai-card { border-left: 3px solid #7C5CDB; background: linear-gradient(180deg, #FBFAFF 0, #FFFFFF 60px); }
+.ai-card p { margin: 6px 0 10px; }
+.ai-card h4 { margin: 12px 0 4px; font-size: 13px; }
+.ai-card ul, .ai-card ol { margin: 4px 0 8px; padding-left: 20px; display: grid; gap: 3px; }
+.ai-head { display: flex; gap: 10px; align-items: center; flex-wrap: wrap; }
+.ai-badge { display: inline-flex; align-items: center; justify-content: center; font-size: 10.5px; font-weight: 700; letter-spacing: .06em;
+  color: #fff; background: #7C5CDB; border-radius: 5px; padding: 2px 6px; }
+.ai-badge.sm { font-size: 9px; padding: 1px 4px; }
+.brief .brief-cols { display: grid; grid-template-columns: repeat(auto-fit, minmax(260px, 1fr)); gap: 4px 24px; }
+#briefCard .card { margin-bottom: 16px; }
+.ck-suggest { display: grid; gap: 8px; margin-top: 10px; }
+.ck-suggest label { display: grid; grid-template-columns: auto 1fr; gap: 10px; align-items: start; padding: 10px 12px; border: 1px solid var(--line);
+  border-radius: 10px; background: #fff; text-transform: none; letter-spacing: 0; font-weight: 400; font-size: 13.5px; }
+.ck-suggest label b { font-weight: 600; }

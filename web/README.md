@@ -80,6 +80,19 @@ A source with nothing measured yet shows "No data yet" rather than a perfect sco
 `app.incident_state`: first seen, acknowledged (button on Detect), resolved when the source's data no longer shows them.
 Google Chat alerts cover every source and name it on each card. Links: `#observe=db:3`, `#detect=adf:3`.
 
+## AI features (LLM_PROVIDER)
+| Where | What the model does | What it sees |
+|---|---|---|
+| Investigate | Root cause in plain words, confidence, the facts it rests on, what the evidence cannot tell | the incident's evidence pack only |
+| Impact | A fix plan and prevention steps; new steps can be ticked into the approval | same |
+| Observe | Today's briefing for the source: state, what broke / got fixed, what to watch; optional daily post to Google Chat (`BRIEFING_CHAT_AT`) | the source's score, incidents and trend |
+| Add check | Suggested checks for a table (also without a model, from the profile) | the table's measured profile (counts, empty %, distinct, ranges) |
+| Ask DataTrust AI | Questions about the selected source (or any other by name) | read-only tools: overview, incidents, checks, ADF runs, catalog, one SELECT |
+
+Rules (`web/llm.py`): the model never gets direct access; it answers from evidence DataTrust measured; any number it writes
+that is not in the evidence is flagged on the page; answers are cached by evidence (`app.ai_notes`), so pages show a saved
+answer and only a button press spends a model call; without a model every feature falls back to its plain version.
+
 ## Pages
 | Page | What it shows | Where the data comes from |
 |---|---|---|

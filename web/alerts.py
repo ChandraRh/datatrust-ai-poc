@@ -197,7 +197,7 @@ def check_once() -> dict:
                 errors.append(str(e))
 
         for iid, row in known.items():
-            if iid == BASELINE or row["resolved_alerted_at"] or iid in current:
+            if iid == BASELINE or iid.startswith("BRIEFING:") or row["resolved_alerted_at"] or iid in current:
                 continue
             claimed = conn.execute("""UPDATE app.alert_log SET resolved_alerted_at = now()
                                       WHERE incident_id = %s AND resolved_alerted_at IS NULL RETURNING incident_id""", (iid,)).fetchone()
@@ -250,7 +250,52 @@ def _loop():
                          last_error="; ".join(result.get("errors") or []) or None)
         except Exception as e:                                  # never stop the loop (database restart, network ...)
             state.update(last_check=datetime.now().isoformat(timespec="seconds"), last_error=f"{type(e).__name__}: {e}")
+        try:
+            daily_briefing()
+        except Exception as e:                                  # a briefing problem must never stop the alerts
+            state.update(last_error=f"daily briefing: {type(e).__name__}: {e}")
         time.sleep(interval())
+
+
+# ---------------------------------------------------------------- daily briefing (BRIEFING_CHAT_AT=08:30 in .env)
+def briefing_text(b: dict) -> str:
+    src = (b.get("facts") or {}).get("source", {}).get("name", "")
+    lines = [f"*DataTrust AI briefing · {src}*", b.get("headline") or "", b.get("summary") or ""]
+    if b.get("watch"):
+        lines.append("Watch today:" + "".join(f"\n• {w}" for w in b["watch"][:3]))
+    if b.get("good_news"):
+        lines.append("Good news:" + "".join(f"\n• {w}" for w in b["good_news"][:2]))
+    lines.append(public_url())
+    return "\n".join(x for x in lines if x)
+
+
+def daily_briefing() -> list:
+    """Once a day after BRIEFING_CHAT_AT (local time), one briefing per source, posted once even with several instances."""
+    at = _setting("BRIEFING_CHAT_AT")
+    if not re.match(r"^\d{1,2}:\d{2}$", at or ""):
+        return []
+    now = datetime.now()
+    h, m = (int(x) for x in at.split(":"))
+    if (now.hour, now.minute) < (h, m):
+        return []
+    import ai
+    import scopes
+    sent = []
+    with appdb.connect() as conn:
+        for sc in scopes.list_scopes():
+            key = f"BRIEFING:{sc['key']}:{now.date().isoformat()}"
+            if not conn.execute("INSERT INTO app.alert_log (incident_id, title) VALUES (%s, 'daily briefing') "
+                                "ON CONFLICT DO NOTHING RETURNING incident_id", (key,)).fetchone():
+                continue                                         # already posted today (here or by another instance)
+            conn.commit()
+            try:
+                send(text_message(briefing_text(ai.briefing(sc["key"]))))
+                sent.append(sc["key"])
+            except Exception:
+                conn.execute("DELETE FROM app.alert_log WHERE incident_id = %s", (key,))
+                conn.commit()
+                raise
+    return sent
 
 
 def start_background() -> bool:

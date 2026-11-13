@@ -104,6 +104,8 @@ try:                                                    # Data checks on any con
         print(f"Data checks: {n} starter checks added for the POC database")
 
     scopes.ensure_tables()
+    import llm  # noqa: E402  AI answers cache (app.ai_notes)
+    llm.ensure_tables()
     if checks_runner.start_background():
         print(f"Data checks scheduler: on (every {checks_runner.POLL_SECONDS} s)")
 except Exception as e:
@@ -256,11 +258,48 @@ def approve(a: Approval, user: dict = Depends(estate_routes.admin_user)):
 class Question(BaseModel):
     question: str
     history: list = []
+    scope: Optional[str] = None
 
 
 @app.post("/api/ask")
 def ask(q: Question):
-    return agent.ask(q.question, q.history)
+    """Ask DataTrust AI about the selected source (or any other by name); read-only tools, answers from their results."""
+    import ask as ask_module
+    return _scoped(ask_module.ask, q.question, q.history, q.scope)
+
+
+# ---------------------------------------------------------------- AI features (llm.py rules: evidence only, numbers checked)
+@app.get("/api/ai/status")
+def ai_status():
+    import llm
+    return {"provider": llm.provider(), "model": llm.model_name()}
+
+
+@app.get("/api/ai/explain/{incident_id}")
+def ai_explain(incident_id: str, scope: Optional[str] = None, refresh: bool = False, cached_only: bool = False):
+    """Root cause in plain words + a fix plan for one incident, written from its evidence pack (cached_only: no model call)."""
+    import ai
+    return _scoped(ai.explain, incident_id, scope, refresh, cached_only)
+
+
+@app.get("/api/ai/briefing")
+def ai_briefing(scope: Optional[str] = None, refresh: bool = False, cached_only: bool = False):
+    """What broke, what got fixed and what to watch, for the selected source (cached_only: no model call)."""
+    import ai
+    return _scoped(ai.briefing, scope, refresh, cached_only)
+
+
+@app.post("/api/ai/briefing/send")
+def ai_briefing_send(scope: Optional[str] = None, user: dict = Depends(estate_routes.admin_user)):
+    """Post the selected source's briefing to the Google Chat space (alerts webhook)."""
+    import ai
+    import alerts
+    b = _scoped(ai.briefing, scope)
+    try:
+        alerts.send(alerts.text_message(alerts.briefing_text(b)))
+    except Exception as e:
+        raise HTTPException(400, f"Could not post to Google Chat: {e}")
+    return {"ok": True}
 
 
 if __name__ == "__main__":

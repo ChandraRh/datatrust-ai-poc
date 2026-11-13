@@ -252,7 +252,55 @@
           <button class="btn light" id="ckCancel">Cancel</button>
           ${C.editing ? `<label class="small"><input type="checkbox" id="fEnabled" ${f.enabled ? "checked" : ""}> active</label>` : ""}</div>
         <div id="ckOut">${C.preview ? resultBox({ check_type: t }, C.preview) : ""}</div></div>`;
-    return { html, bind: bindForm };
+    const tableKey = f.connection_id && f.schema_name && f.table_name && !C.editing ? `${f.connection_id}|${f.database || ""}|${f.schema_name}|${f.table_name}` : null;
+    const sugg = tableKey ? `<div class="card ai-card" id="ckSuggestCard"><div class="ai-head"><span class="ai-badge">AI</span>
+        <b>Suggested checks for ${esc(f.schema_name)}.${esc(f.table_name)}</b><span class="grow"></span>
+        <button class="btn btn-sm" id="ckSuggest">${C.suggest && C.suggest.key === tableKey ? "Suggest again" : "Suggest checks"}</button></div>
+        <p class="small muted">DataTrust measures the table (row count, empty values, distinct values, ranges per column) and proposes checks that fit it.
+          Nothing is added until you choose.</p><div id="ckSuggestBody">${C.suggest && C.suggest.key === tableKey ? suggestList(C.suggest.data) : ""}</div></div>` : "";
+    return { html: html + sugg, bind: () => { bindForm(); bindSuggest(tableKey); } };
+  }
+
+  // ---- suggested checks for the chosen table (profile-based; written by the AI model when one is configured)
+  function suggestList(d) {
+    if (!d.suggestions.length) return `<p class="muted">No suggestions for this table.</p>`;
+    const p = d.profile || {};
+    return `<p class="small">${n0(p.rows)} rows, ${(p.columns || []).length} columns profiled · ${esc(d.source && d.source.startsWith("ai") ? "proposed by " + d.source.slice(4, -1) : "from the table profile")}</p>
+      <div class="ck-suggest">${d.suggestions.map((s, i) => `<label><input type="checkbox" data-sugg="${i}" checked>
+        <span><b>${esc(s.name)}</b> <span class="chip ${SEV[s.severity]}">${esc(s.severity)}</span> <span class="small muted">${esc((TYPES[s.check_type] || [s.check_type])[0])}</span>
+        <br><span class="small">${esc(s.why || "")}</span>${s.config && s.config.sql ? `<pre class="code small">${esc(s.config.sql)}</pre>` : ""}</span></label>`).join("")}</div>
+      <div class="pacts"><button class="btn" id="ckSuggestAdd">Add selected checks</button><span class="small muted">Each one runs once right away; review the results on Data checks.</span></div>`;
+  }
+  function bindSuggest(tableKey) {
+    if (!tableKey || !$e("ckSuggest")) return;
+    const [cid, db, schema, table] = tableKey.split("|");
+    $e("ckSuggest").onclick = async () => {
+      readForm();
+      $e("ckSuggestBody").innerHTML = "<p class='muted'>Profiling the table and drafting checks… (up to a minute)</p>";
+      try {
+        C.suggest = { key: tableKey, data: await send("/suggest", "POST", { connection_id: Number(cid), database: db || null, schema_name: schema, table_name: table }) };
+        $e("ckSuggestBody").innerHTML = suggestList(C.suggest.data);
+        bindAdd();
+      } catch (x) { $e("ckSuggestBody").innerHTML = errBox(x); }
+    };
+    bindAdd();
+    function bindAdd() {
+      if (!$e("ckSuggestAdd")) return;
+      $e("ckSuggestAdd").onclick = async () => {
+        const picked = [...document.querySelectorAll("[data-sugg]:checked")].map((x) => C.suggest.data.suggestions[Number(x.dataset.sugg)]);
+        if (!picked.length) return toast("Tick at least one check");
+        $e("ckSuggestAdd").disabled = true;
+        let ok = 0; const errs = [];
+        for (const s of picked) {
+          const { why, ...body } = s;
+          try { await send("", "POST", { ...body, description: why || body.description }); ok++; } catch (x) { errs.push(`${s.name}: ${x.message}`); }
+        }
+        toast(`${ok} check(s) added${errs.length ? `, ${errs.length} failed` : ""}`);
+        if (errs.length) $e("ckSuggestBody").insertAdjacentHTML("beforeend", errBox(errs.join(" · ")));
+        if (ok) { C.f = null; C.suggest = null; C.open = null; document.querySelector('#tabs [data-page="estate-checks"]').click(); }
+        else $e("ckSuggestAdd").disabled = false;
+      };
+    }
   }
 
   function readForm() {

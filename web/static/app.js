@@ -271,7 +271,39 @@ function showPocCards(poc) {
   $("trendEmpty").classList.add("hidden");
   $("trendChart").parentElement.classList.remove("hidden");
 }
+// ---- the source's briefing: what broke, what got fixed, what to watch (saved answer shown; a new one only on request)
+async function aiBriefing(generate = false) {
+  const box = $("briefCard");
+  if (!box || !state.overview || state.overview.llm === "none") { if (box) box.innerHTML = ""; return; }
+  const scopeAt = state.scope;
+  if (generate) box.innerHTML = `<div class="card ai-card brief"><div class="ai-head"><span class="ai-badge">AI</span><b>Writing today's briefing…</b></div></div>`;
+  let b;
+  try { b = await api(`/api/ai/briefing?${sq()}${generate ? "&refresh=true" : "&cached_only=true"}`); }
+  catch (e) { box.innerHTML = `<div class="card ai-card brief"><div class="error-box small">${esc(e.message)}</div></div>`; return; }
+  if (scopeAt !== state.scope || state.page !== "observe") return;   // the user moved on meanwhile
+  const admin = typeof est !== "undefined" && est.user && est.user.role === "admin";     // est: estate.js (signed-in user)
+  const list = (xs) => (xs || []).length ? `<ul>${xs.map((x) => `<li>${esc(x)}</li>`).join("")}</ul>` : "";
+  box.innerHTML = `<div class="card ai-card brief"><div class="ai-head"><span class="ai-badge">AI</span><b>Today's briefing</b>
+      <span class="small muted">${b.available ? esc((b.model || "") + (b.generated_at ? " · " + String(b.generated_at).slice(0, 16) : "")) : b.not_generated ? "plain summary · not written by AI yet" : esc(b.reason || "")}</span>
+      <span class="grow"></span><button class="btn light btn-sm" id="briefGo">${b.available ? "Rewrite" : "Write with AI"}</button>
+      ${admin ? `<button class="btn light btn-sm" id="briefSend" title="Post to the Google Chat space of the alerts">Post to Google Chat</button>` : ""}</div>
+    <p><b>${esc(b.headline || "")}</b> ${esc(b.summary || "")}</p>
+    ${b.watch && b.watch.length ? `<div class="brief-cols"><div><h4>Watch today</h4>${list(b.watch)}</div>${b.good_news && b.good_news.length ? `<div><h4>Good news</h4>${list(b.good_news)}</div>` : ""}</div>` : ""}
+    ${b.unverified && b.unverified.length ? `<div class="banner warn small">Check these numbers yourself: ${b.unverified.map(esc).join(", ")}</div>` : ""}</div>`;
+  $("briefGo").onclick = () => aiBriefing(true);
+  if ($("briefSend")) $("briefSend").onclick = async () => {
+    $("briefSend").disabled = true;
+    try {
+      const r = await fetch(`/api/ai/briefing/send?${sq()}`, { method: "POST", credentials: "same-origin" });
+      const body = await r.json().catch(() => ({}));
+      if (!r.ok) throw new Error(body.detail || body.error || r.statusText);
+      toast("Briefing posted to Google Chat");
+    } catch (x) { toast(x.message); $("briefSend").disabled = false; }
+  };
+}
+
 function renderObserve() {
+  aiBriefing();
   if (!isPoc()) return renderObserveGeneric();
   showPocCards(true);
   $("obsSub").textContent = `${state.overview.scope ? state.overview.scope.name + ": " : ""}source files → Bronze → Silver → Gold, monitored after every pipeline run.`;
@@ -561,6 +593,57 @@ async function renderInvestigate(id) {
   if ($("invOpenCheck")) $("invOpenCheck").onclick = () => { CHECKS.open(inv.check_id); document.querySelector('#tabs [data-page="estate-checks"]').click(); };
   if ($("invOpenRun")) $("invOpenRun").onclick = () => { ADF.open(inv.run_id); document.querySelector('#tabs [data-page="estate-adf-runs"]').click(); };
   if (inv.sql) $("invBody").insertAdjacentHTML("beforeend", `<div class="card"><details><summary>SQL the check ran</summary><pre class="code">${esc(inv.sql)}</pre></details></div>`);
+  $("invBody").querySelector(".investigation-root").insertAdjacentHTML("afterend", `<div id="aiExplain"></div>`);
+  aiExplain(id, "aiExplain", "investigate");
+}
+
+// ---- AI explanation (Investigate + Impact): written from the evidence pack; numbers not found in the evidence are flagged
+const AI_CONF = { high: "ok", medium: "warn", low: "bad" };
+async function aiExplain(id, boxId, where, generate = false) {
+  const box = $(boxId);
+  if (!box) return null;
+  const off = state.overview && state.overview.llm === "none";
+  if (off) { box.innerHTML = ""; return null; }
+  if (generate) box.innerHTML = `<div class="card ai-card"><div class="ai-head"><span class="ai-badge">AI</span><b>Reading the evidence…</b></div><p class="muted small">Usually 5 to 20 seconds.</p></div>`;
+  let r;
+  try { r = await api(`/api/ai/explain/${encodeURIComponent(id)}?${sq()}${generate ? "&refresh=" + (generate === "again") : "&cached_only=true"}`); }
+  catch (e) { box.innerHTML = `<div class="card ai-card"><div class="error-box">${esc(e.message)}</div></div>`; return null; }
+  if (!$(boxId)) return r;
+  if (!r.available) {
+    box.innerHTML = `<div class="card ai-card"><div class="ai-head"><span class="ai-badge">AI</span><b>${where === "impact" ? "Draft a fix plan with AI" : "Explain this incident with AI"}</b><span class="grow"></span>
+        <button class="btn btn-sm" id="${boxId}Go">${where === "impact" ? "Draft fix plan" : "Explain with AI"}</button></div>
+      <p class="muted small">${r.not_generated ? "The model reads only this incident's evidence above (checks, rows, SQL, impact) and writes the root cause and fix steps. Numbers it writes are checked against the evidence."
+        : esc(r.reason || "")}</p></div>`;
+    $(boxId + "Go").onclick = () => aiExplain(id, boxId, where, true);
+    return r;
+  }
+  const list = (xs) => (xs || []).length ? `<ul>${xs.map((x) => `<li>${esc(x)}</li>`).join("")}</ul>` : "";
+  const ol = (xs) => (xs || []).length ? `<ol>${xs.map((x) => `<li>${esc(x)}</li>`).join("")}</ol>` : "";
+  box.innerHTML = `<div class="card ai-card">
+      <div class="ai-head"><span class="ai-badge">AI</span><b>${esc(r.headline || "AI explanation")}</b>
+        <span class="chip ${AI_CONF[r.confidence] || "grey"}">${esc(r.confidence || "?")} confidence</span><span class="grow"></span>
+        <button class="btn light btn-sm" id="${boxId}Again" title="Ask the model again">Regenerate</button></div>
+      ${where === "investigate" ? `<p>${esc(r.root_cause || "")}</p>${r.because && r.because.length ? `<h4>Because</h4>${list(r.because)}` : ""}` : ""}
+      ${r.business_impact ? `<p class="small"><b>Impact:</b> ${esc(r.business_impact)}</p>` : ""}
+      ${where === "impact" || !r.because ? `<h4>Fix plan</h4>${ol(r.fix_steps)}` : `<details><summary>Fix plan (${(r.fix_steps || []).length} steps)</summary>${ol(r.fix_steps)}</details>`}
+      ${r.prevent && r.prevent.length ? `<h4>Stop it happening again</h4>${list(r.prevent)}` : ""}
+      ${r.unknowns && r.unknowns.length ? `<p class="small muted"><b>Not shown by the evidence:</b> ${r.unknowns.map(esc).join(" · ")}</p>` : ""}
+      ${r.unverified && r.unverified.length ? `<div class="banner warn small">Check these numbers yourself: ${r.unverified.map(esc).join(", ")} do not appear in the evidence.</div>` : ""}
+      <p class="small muted">Written by ${esc(r.model || "the AI model")} from this incident's evidence only${r.generated_at ? ` · ${esc(String(r.generated_at).slice(0, 16))}` : ""}. Review before acting.</p></div>`;
+  $(boxId + "Again").onclick = () => aiExplain(id, boxId, where, "again");
+  if (where === "impact") {                                     // the AI steps can be added to the approval, unticked by default
+    const acts = document.querySelector("#impBody .actions");
+    if (acts) {
+      acts.querySelectorAll("label.ai-action").forEach((l) => l.remove());
+      const words = (t) => new Set(String(t).toLowerCase().replace(/[^a-z0-9 ]/g, " ").split(/\s+/).filter((w) => w.length > 2));
+      const known = [...acts.querySelectorAll("input:not([value^='AI: '])")].map((i) => words(i.value));
+      const same = (a, b) => { const n = [...a].filter((w) => b.has(w)).length; return n / Math.max(1, Math.min(a.size, b.size)) >= 0.7; };
+      const fresh = (r.fix_steps || []).filter((s) => !known.some((k) => same(words(s), k)));   // only steps that add something
+      acts.insertAdjacentHTML("beforeend", fresh.map((s) =>
+        `<label class="ai-action"><input type="checkbox" value="${esc("AI: " + s)}"> <span class="ai-badge sm">AI</span> ${esc(s)}</label>`).join(""));
+    }
+  }
+  return r;
 }
 
 // ------------------------------------------------------------------ 4. lineage
@@ -650,6 +733,8 @@ async function renderImpact(id) {
         <button class="btn" id="approveBtn" style="width:100%">Approve remediation</button></div>
     </div>
     <div id="autofixBox"></div>`;
+  $("impBody").querySelector(".kpis").insertAdjacentHTML("afterend", `<div id="aiFix"></div>`);
+  aiExplain(id, "aiFix", "impact");
   renderAutofix(id);
   $("approveBtn").onclick = async () => {
     const actions = [...document.querySelectorAll(".actions input:checked")].map((x) => x.value);
@@ -800,12 +885,28 @@ const EXAMPLES = ["What is the total revenue?", "Revenue last 7 days by day", "R
   "Revenue last month", "Revenue last quarter", "Revenue by region", "Is any data missing from source to target?",
   "Why is 2026-10-08 a mismatch?", "Which rows were rejected?", "What is the trust score?",
   "Did the last pipeline run succeed?", "Top 5 customers this month", "Show history of customer C00781"];
-function renderAsk() {
+const EXAMPLES_DB = ["Which data checks are failing, and why?", "What is the worst open incident?", "Which tables are watched?",
+  "What tables are in this database?", "How many rows were loaded today?", "What should I check first?"];
+const EXAMPLES_ADF = ["Did any pipeline fail in the last day, and why?", "Which pipeline is the least reliable?", "How many rows were loaded this week?",
+  "Is any pipeline's data stale?", "What does the newest failed run say?", "What should I check first?"];
+async function renderAsk() {
+  await ensureCore();
   const mode = state.overview ? state.overview.llm : "none";
-  $("askMode").textContent = mode === "none" ? "Mode: built-in agent (free, offline)." : `Mode: ${mode} model with DataTrust tools.`;
-  $("examples").innerHTML = EXAMPLES.map((q) => `<button>${esc(q)}</button>`).join("");
+  const s = (state.overview && state.overview.scope) || {};
+  const ex = isPoc() ? EXAMPLES : s.kind === "adf" ? EXAMPLES_ADF : EXAMPLES_DB;
+  $("askMode").textContent = `Asking about ${s.name || "the selected source"} (change it with Source at the top). ` +
+    (mode === "none" ? "Mode: built-in agent (free, offline)." : `Mode: ${mode} model with read-only DataTrust tools.`);
+  $("examples").innerHTML = ex.map((q) => `<button>${esc(q)}</button>`).join("");
   $("examples").querySelectorAll("button").forEach((b) => (b.onclick = () => askQuestion(b.textContent)));
-  if (!$("chatLog").children.length) addBot({ answer: "Hi! Ask me anything about your revenue, data quality, missing data or pipeline runs. The answers come from the gold layer and refresh after every pipeline run.", suggestions: EXAMPLES.slice(0, 4) });
+  if (state.askScope !== state.scope) {                         // a new source starts a new conversation
+    $("chatLog").innerHTML = "";
+    state.history = [];
+    state.askScope = state.scope;
+  }
+  if (!$("chatLog").children.length) addBot({ answer: isPoc()
+    ? "Hi! Ask me anything about your revenue, data quality, missing data or pipeline runs. The answers come from the gold layer and refresh after every pipeline run."
+    : `Hi! Ask me about **${s.name}**: ${s.kind === "adf" ? "its pipelines, runs, failures and loaded rows" : "its data checks, incidents and tables"}. I only answer from what DataTrust measured or can read, never from guesses.`,
+    suggestions: ex.slice(0, 4) });
 }
 $("askForm").addEventListener("submit", (e) => { e.preventDefault(); const q = $("askInput").value.trim(); if (q) askQuestion(q); });
 
@@ -839,7 +940,7 @@ async function askQuestion(q) {
   $("chatLog").scrollTop = $("chatLog").scrollHeight;
   try {
     const r = await api("/api/ask", { method: "POST", headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ question: q, history: state.history }) });
+      body: JSON.stringify({ question: q, history: state.history, scope: state.scope }) });
     $("typing").remove();
     addBot(r);
     state.history.push({ role: "user", content: q }, { role: "assistant", content: r.answer });
