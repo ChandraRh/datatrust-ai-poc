@@ -56,8 +56,9 @@ def build() -> dict:
 
     add("Here is your DataTrust briefing.")                  # the page adds good morning / afternoon (user's own clock)
 
-    t = ds.trust_score()
-    top = max(t["reasons"], key=lambda r: r["points"]) if t["reasons"] else None
+    import scopes
+    t = scopes.poc_trust()                                   # the same score as Observe (pipeline + data checks)
+    top = t["reasons"][0] if t["reasons"] else None          # the cap when there is one, else what costs the most
     add(f"Trust score is {t['score']} out of 100: {t['label'].lower()}."
         + (f" The biggest factor: {top['reason']}." if top else " Nothing is pulling it down."))
 

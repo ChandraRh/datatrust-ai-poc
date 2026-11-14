@@ -354,6 +354,49 @@ async function aiBriefing(generate = false) {
   };
 }
 
+// The standard trust score (web/trust.py), the same for every source: a mark per subject, the cap, the confidence, the reasons.
+function trustConfidence(t) {
+  const c = t.confidence;
+  return c ? `<div class="small conf conf-${c.level}" title="How much of the source the score rests on">${esc(c.text)}</div>` : "";
+}
+// one subject's checks: problems first, then up to 3 passes, the rest of the passes folded ("12 more pass")
+const CHECK_STATE = { pass: ["ok", "✓", "passes"], partial: ["warn", "!", "partly"], fail: ["bad", "✗", "fails"] };
+function trustChecks(x) {
+  const row = (c) => { const [cls, mark, word] = CHECK_STATE[c.state] || CHECK_STATE.partial;
+    return `<li class="tchk"><span class="tchk-m ${cls}" title="${word}">${mark}</span><span class="tchk-t">${esc(c.text)}${c.state === "partial" ? ` <span class="small muted">(counts ${num(Math.floor(c.ok * 1000) / 10)}%)</span>` : ""}</span>
+      <span class="tchk-meta small muted">${esc(c.severity.toLowerCase())} · ${c.origin === "rule"
+        ? (c.rule_id ? `<a href="#" data-trust-rule="${c.rule_id}" title="Open this rule in DQ Rule Studio">rule</a>` : "rule") : "built-in"}</span></li>`; };
+  const checks = x.checks || [], bad = checks.filter((c) => c.state !== "pass"), good = checks.filter((c) => c.state === "pass");
+  const shown = good.slice(0, Math.max(0, 3 - Math.min(bad.length, 3))), rest = good.slice(shown.length);
+  return `<ul class="tchks">${bad.map(row).join("")}${shown.map(row).join("")}</ul>`
+    + (rest.length ? `<details class="tchk-more small"><summary>${rest.length} more pass</summary><ul class="tchks">${rest.map(row).join("")}</ul></details>` : "");
+}
+function renderTrustBreakdown(t, extra = "") {
+  const subj = t.subjects || [];
+  const bars = subj.map((x) => `<details class="subj"><summary><div class="bar"><div class="t"><span><span class="subj-caret" aria-hidden="true"></span>${esc(x.label)}
+        <span class="small muted">${x.passing} of ${x.signals} check${x.signals > 1 ? "s" : ""} fully pass</span></span><b>${num(x.mark)}</b></div>
+      <div class="track"><div class="fill" style="width:${x.mark}%;background:${color[tone(x.mark)]}"></div></div>
+      ${x.problems && x.problems.length && x.passing < x.signals ? `<div class="small muted subj-problems">${x.problems.map(esc).join(" · ")}</div>` : ""}</div></summary>
+      ${trustChecks(x)}</details>`).join("");
+  const avg = t.average != null && subj.length ? `<p class="small">Average of ${subj.length} subject${subj.length > 1 ? "s" : ""}: <b>${num(t.average)}</b>`
+    + (t.cap ? `, capped at <b>${t.cap.limit}</b> (${esc(t.label)}) while a ${t.cap.severity.toLowerCase()} problem is open: ${esc(t.cap.text)}.` : ".") + "</p>" : "";
+  const not = t.not_measured && t.not_measured.length && subj.length ? `<p class="small muted">Not measured here: ${t.not_measured.map(esc).join(", ")}. They are left out, not counted as 0.</p>` : "";
+  $("dims").innerHTML = (bars || `<p class="muted">Nothing measured yet.</p>`) + avg + not + extra;
+  $("dims").querySelectorAll("[data-trust-rule]").forEach((a) => (a.onclick = (e) => {      // the rule behind a check, in DQ Rule Studio
+    e.preventDefault();
+    if (!window.CHECKS) return;
+    CHECKS.open(Number(a.dataset.trustRule));
+    document.querySelector('#tabs [data-page="estate-checks"]').click();
+  }));
+  $("reasons").innerHTML = (t.reasons && t.reasons.length
+      ? "<p><b>Why not 100:</b> " + t.reasons.slice(0, 8).map((r) => `−${num(r.points)} ${esc(r.reason)}`).join(" · ") + "</p>"
+      : t.score != null ? "<p>Nothing is lowering the score.</p>" : "")
+    + `<details class="small"><summary>How this score is calculated</summary><p>The same way for every source. Each subject gets a mark: the share
+       of its checks that pass, weighted by severity (a warning or a check that could not run counts as half). The score is the average of the
+       subjects that are measured. An open critical problem caps it at 74 (At risk), an open high one at 89 (Needs attention), so a serious problem
+       is never averaged away. Confidence says how much of the source is measured; it is shown beside the score, not mixed into it.</p></details>`;
+}
+
 function renderObserve() {
   aiBriefing();
   if (!isPoc()) return renderObserveGeneric();
@@ -365,13 +408,13 @@ function renderObserve() {
   $("obsTitle").textContent = "1. Observe: " + ({ Healthy: "the estate is healthy", "Needs attention": "the estate needs attention", "At risk": "the estate is at risk" }[t.label] || t.label);
   $("obsCoverage").textContent = cov.first_date ? `Data from ${cov.first_date} to ${cov.last_date} (${cov.days} business dates).` : "";
   gauge("gauge", t.score);
-  $("gaugeLabel").innerHTML = `<span class="${tone(t.score)}">${t.label}</span>`;
+  $("gaugeLabel").innerHTML = `<span class="${tone(t.score)}">${t.label}</span>${trustConfidence(t)}`;
   drawChart("trendChart", "line", t.trend.map((x) => x.business_date), t.trend.map((x) => x.score), "Trust score",
-    { min: 50, max: 100, dates: true, thresholds: TRUST_LINES, pointColors: t.trend.map((x) => color[tone(x.score)]),
+    { min: 0, max: 100, dates: true, thresholds: TRUST_LINES, pointColors: t.trend.map((x) => color[tone(x.score)]),
       tipLabel: (c) => `Trust score ${num(c.parsed.y)}`,
       tipAfter: (i) => {                                       // why that day lost points
         const d = t.trend[i], why = [];
-        if (d.recon_status === "MISMATCH") why.push("settlement does not match (−15)");
+        if (d.recon_status === "MISMATCH") why.push("settlement does not match the gateway (critical: at most 74)");
         if (d.recon_status === "NO SETTLEMENT") why.push("no settlement file for this date");
         if (d.rejected) why.push(`${num(d.rejected)} row(s) rejected`);
         return why.length ? why : ["nothing lowered it"];
@@ -397,12 +440,8 @@ function renderObserve() {
     freshnessNotice.classList.add("hidden");
     freshnessNotice.textContent = "";
   }
-  const bars = [["Completeness (source → silver)", d.completeness], ["Validity (passed rules)", d.validity],
-    ["Uniqueness (no duplicates)", d.uniqueness], ["Reconciliation (settlement match)", d.reconciliation]];
-  $("dims").innerHTML = bars.map(([l, v]) => `<div class="bar"><div class="t"><span>${l}</span><b>${v ?? "–"}%</b></div>
-    <div class="track"><div class="fill" style="width:${v || 0}%;background:${color[tone(v)]}"></div></div></div>`).join("") +
-    `<div class="small muted">Last successful run: ${d.freshness_hours ?? "–"} h ago</div>`;
-  $("reasons").innerHTML = t.reasons.length ? "<p><b>Why not 100:</b> " + t.reasons.map((r) => `−${r.points} ${esc(r.reason)}`).join(" · ") + "</p>" : "";
+  renderTrustBreakdown(t, `<div class="small muted">Rows: ${d.completeness}% reached silver · ${d.validity}% passed the rules · `
+    + `${d.uniqueness}% unique · last successful run ${d.freshness_hours ?? "–"} h ago</div>`);
   // captured revenue per date, coloured by whether the payment gateway's settlement agrees (the trust question behind the money)
   const recon = Object.fromEntries((state.overview.settlement || []).map((r) => [r.business_date, r]));
   const cls = (d) => (!recon[d] ? "none" : recon[d].recon_status === "MISMATCH" ? "bad" : "ok");
@@ -448,8 +487,7 @@ function renderObserveGeneric() {
   $("obsCoverage").textContent = o.last_activity ? `Last ${s.kind === "adf" ? "sync" : "check run"} ${String(o.last_activity).slice(0, 16)}.` : "";
   $("freshnessNotice").classList.add("hidden");
   gauge("gauge", t.score);
-  const cov = t.coverage && t.coverage.tables ? `<div class="small muted">based on ${t.coverage.monitored} of ${t.coverage.tables} tables</div>` : "";
-  $("gaugeLabel").innerHTML = `<span class="${t.score == null ? "muted" : tone(t.score)}">${esc(t.label)}</span>${cov}`;
+  $("gaugeLabel").innerHTML = `<span class="${t.score == null ? "muted" : tone(t.score)}">${esc(t.label)}</span>${trustConfidence(t)}`;
   $("trendTitle").textContent = o.runs_by_day ? "Pipeline runs per day, last 14 days" : o.trend_label || "Trust score by day";
   if (o.runs_by_day && o.runs_by_day.some((d) => d.Succeeded + d.Failed + d.Cancelled + d.Other)) {
     // a factory: how many runs, and how many failed, every day (a quiet day shows as zero, not as a gap)
@@ -460,8 +498,8 @@ function renderObserveGeneric() {
     drawStacked("trendChart", labels, series, { tipAfter: (i) => [`${num(R[i].Succeeded + R[i].Failed + R[i].Cancelled + R[i].Other)} run(s) in total`] });
   } else if (o.trend && o.trend.length) {
     drawChart("trendChart", "line", o.trend.map((x) => x.day), o.trend.map((x) => x.score), o.trend_label || "Score",
-      { min: 0, max: 100, dates: true, thresholds: s.kind === "adf" ? [] : TRUST_LINES, pointColors: o.trend.map((x) => color[tone(x.score)]),
-        tipLabel: (c) => `${s.kind === "adf" ? "Success rate" : "Trust score"} ${num(c.parsed.y)}${s.kind === "adf" ? "%" : ""}` });
+      { min: 0, max: 100, dates: true, thresholds: TRUST_LINES, pointColors: o.trend.map((x) => color[tone(x.score)]),
+        tipLabel: (c) => `Trust score ${num(c.parsed.y)}` });
   } else {
     if (state.charts.trendChart) { state.charts.trendChart.destroy(); delete state.charts.trendChart; }
     $("trendChart").parentElement.classList.add("hidden");
@@ -470,12 +508,7 @@ function renderObserveGeneric() {
   }
   $("obsKpis").innerHTML = o.kpis.map((k) => `<div class="kpi ${k.tone && (typeof k.value === "string" || Number(k.value)) ? k.tone : ""}"><div class="l">${esc(k.label)}</div>
     <div class="v">${typeof k.value === "number" ? num(k.value) : esc(k.value)}</div>${k.sub ? `<div class="small muted">${esc(k.sub)}</div>` : ""}</div>`).join("");
-  $("dims").innerHTML = o.dimensions.length
-    ? o.dimensions.map((d) => `<div class="bar"><div class="t"><span>${esc(d.label)}</span><b>${d.value}%</b></div>
-        <div class="track"><div class="fill" style="width:${d.value}%;background:${color[tone(d.value)]}"></div></div></div>`).join("")
-    : `<p class="muted">Nothing measured yet.</p>`;
-  $("reasons").innerHTML = t.reasons.length ? "<p><b>Why not 100:</b> " + t.reasons.map((r) => `−${r.points} ${esc(r.reason)}`).join(" · ") + "</p>"
-    : t.score != null ? "<p>Nothing is lowering the score.</p>" : "";
+  renderTrustBreakdown(t);
   $("itemsTitle").textContent = o.items_title || "What is watched";
   $("itemsBody").innerHTML = o.items.length
     ? o.items.map((i) => { const [c, l] = STATUS_CHIP[i.status] || ["grey", "Not run"];

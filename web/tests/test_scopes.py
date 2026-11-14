@@ -23,9 +23,12 @@ class ScopeTests(unittest.TestCase):
                 patch.object(scopes, "_check_trend", return_value=[]):
             o = scopes.overview("db:5")
         t = o["trust"]
-        self.assertEqual(t["score"], 100 - 25 - 5 - 2)                 # HIGH fail, error, warning; the pass and the never-run cost nothing
-        self.assertEqual(t["label"], "At risk")                         # 68 is below 75
-        self.assertEqual(len(t["reasons"]), 3)
+        # unique-key rules: HIGH fail (0) + HIGH pass (1) + HIGH error (0.5) -> 50; schema: LOW warning -> 50; never-run says nothing
+        self.assertEqual([(x["label"], x["mark"]) for x in t["subjects"]], [("Uniqueness", 50.0), ("Schema", 50.0)])
+        self.assertEqual(t["score"], 50)                                # the average; under the HIGH cap of 89 already
+        self.assertIsNone(t["cap"])
+        self.assertEqual(t["label"], "At risk")
+        self.assertEqual(len(t["reasons"]), 3)                          # the fail, the error, the warning
         self.assertEqual({k["label"]: k["value"] for k in o["kpis"]}["Failing"], 1)
 
     def test_no_checks_means_no_score_not_a_perfect_one(self):

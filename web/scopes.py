@@ -5,10 +5,10 @@ top of the page. Nothing is blended across sources.
     scope key     "db:<connection_id>"   a PostgreSQL / SQL Server connection (Data estate -> Connections)
                   "adf:<source_id>"      an Azure Data Factory (Connect ADF)
 
-How each kind is scored
-    POC database  its pipeline rules (data_service.trust_score) + its other data checks
-    any database  its data checks (monitor.*): 100 minus a penalty per failing check, by severity
-    ADF factory   its pipelines (adf.insights): the average pipeline score
+How each kind is scored: the same standard formula for all (web/trust.py); each kind only supplies its signals
+    POC database  its pipeline (data_service.trust_signals: settlement, rows lost / rejected, runs, freshness) + its data checks
+    any database  its data checks (monitor.*), each in its subject (freshness, volume, validity, schema, reconciliation)
+    ADF factory   its pipelines' runs, freshness, loaded rows and source / target checks (adf.insights.pipeline_signals)
 
 Incident ids are unique across sources: POC ids are unchanged (RECON-..., DQ-...), checks are "db<id>:CHECK-<n>",
 ADF issues keep their "adf:<id>:..." ids. Incidents get a lifecycle in app.incident_state:
@@ -26,12 +26,14 @@ import appdb
 import config
 import data_service as ds
 import resolution
+import trust
 
-CHECK_PENALTY = {"CRITICAL": 40, "HIGH": 25, "MEDIUM": 10, "LOW": 4}
-ERROR_PENALTY, WARN_PENALTY = 5, 2
-HEALTHY, ATTENTION = ds.HEALTHY, ds.ATTENTION
+HEALTHY, ATTENTION = trust.HEALTHY, trust.ATTENTION
 CATEGORY = {"freshness": "Freshness", "volume": "Volume", "null_rate": "Completeness", "uniqueness": "Uniqueness",
             "schema": "Schema", "custom_sql": "Business rules", "reconciliation": "Reconciliation"}
+# which trust subject each kind of rule measures (web/trust.py)
+CHECK_SUBJECT = {"freshness": "freshness", "volume": "volume", "null_rate": "validity", "uniqueness": "uniqueness",
+                 "schema": "schema", "custom_sql": "validity", "reconciliation": "reconciliation"}
 
 STATE_DDL = """
 CREATE SCHEMA IF NOT EXISTS app;
@@ -66,10 +68,7 @@ def ensure_tables() -> None:
         conn.commit()
 
 
-def label_for(score) -> str:
-    if score is None:
-        return "No data yet"
-    return "Healthy" if score >= HEALTHY else "Needs attention" if score >= ATTENTION else "At risk"
+label_for = trust.label_for
 
 
 # ============================================================================ which sources
@@ -151,9 +150,13 @@ def _check_incident(c, scope_id: int) -> dict | None:
                         "target": _target(c), "n": c["observed"], "status": st, "run_at": c["run_at"]}}
 
 
-def _check_penalty(c) -> float:
-    st = c["last_status"]
-    return CHECK_PENALTY[c["severity"]] if st == "FAIL" else ERROR_PENALTY if st == "ERROR" else WARN_PENALTY if st == "WARN" else 0
+def _check_signal(c, status: str | None = None) -> dict | None:
+    """A data check's result as a trust signal in its subject; a check that never ran says nothing yet."""
+    st = status or c["last_status"]
+    verb = {"FAIL": "failed", "ERROR": "could not run", "WARN": "warning", "PASS": "passes"}.get(st, "")
+    text = f"'{c['name']}' {verb}" + (f": {c['message']}" if c.get("message") and not status else "")
+    return trust.status_signal(CHECK_SUBJECT.get(c["check_type"], "validity"), st, c["severity"], text,
+                               origin="rule", rule_id=c["check_id"])
 
 
 # ============================================================================ incidents of one source
@@ -305,16 +308,17 @@ def overview(scope: str | None) -> dict:
     return _overview_db(s)
 
 
+def poc_trust(connection_id: int | None = None) -> dict:
+    """The POC's trust score: its pipeline signals + its own data checks (those repeating the pipeline's findings are skipped)."""
+    cid = connection_id or _poc_connection_id()
+    extra = [_check_signal(c) for c in _checks_of(cid, skip_dedupe=True)] if cid else []
+    t = ds.trust_score(extra)
+    t["basis"] = "its pipeline and data checks"
+    return t
+
+
 def _overview_poc(s: dict) -> dict:
-    trust = ds.trust_score()
-    extra = [c for c in _checks_of(s["id"], skip_dedupe=True) if _check_penalty(c)]
-    for c in extra:
-        p = _check_penalty(c)
-        trust["reasons"].append({"points": p, "reason": f"data check '{c['name']}' {c['last_status'].lower()}"})
-        trust["score"] = max(0, trust["score"] - p)
-    if extra:
-        trust["label"] = label_for(trust["score"]) if trust["label"] != "At risk" else "At risk"
-    return {"kind": "poc", "scope": s, "overview": ds.overview(), "trust": trust, "pipeline": ds.pipeline_status(),
+    return {"kind": "poc", "scope": s, "overview": ds.overview(), "trust": poc_trust(s["id"]), "pipeline": ds.pipeline_status(),
             "as_of": ds.as_of_date().isoformat(), "checks": _check_summary(s["id"], True),
             "settlement": ds.settlement_recon()}                     # per date: gateway vs captured, for the revenue chart
 
@@ -328,20 +332,13 @@ def _check_summary(connection_id: int, skip_dedupe: bool) -> dict:
 def _overview_db(s: dict) -> dict:
     checks = _checks_of(s["id"], skip_dedupe=False)
     ran = [c for c in checks if c["last_status"]]
-    reasons = [{"points": _check_penalty(c), "reason": f"'{c['name']}' {c['last_status'].lower()}: {c['message'] or ''}".strip()}
-               for c in ran if _check_penalty(c)]
-    score = max(0, round(100 - sum(r["points"] for r in reasons))) if ran else None
-    dims = []
-    for t, label in CATEGORY.items():
-        mine = [c for c in ran if c["check_type"] == t]
-        if mine:
-            ok = sum(c["last_status"] == "PASS" for c in mine)
-            dims.append({"label": f"{label} ({ok} of {len(mine)} checks pass)", "value": round(100 * ok / len(mine), 1)})
     tables = sorted({f"{c['schema_name']}.{c['table_name']}" for c in checks if c.get("table_name")})
     from checks import coverage
     in_db = coverage.table_count(s["id"])                         # cached; None when the database cannot be read
-    watched = len({t for t in tables})
+    watched = len(tables)
     cov = {"monitored": watched, "tables": in_db, "pct": round(100 * watched / in_db) if in_db else None}
+    t = trust.compute([_check_signal(c) for c in ran], trust.confidence(watched, in_db, "tables"))
+    dims = _subject_bars(t)
     last = max((c["last_run_at"] for c in checks if c["last_run_at"]), default=None)
     n_open = sum(1 for c in ran if c["last_status"] != "PASS")
     kpis = [{"label": "Rules", "value": len(checks), "sub": f"{len(ran)} run"},
@@ -355,13 +352,18 @@ def _overview_db(s: dict) -> dict:
               "status": _worst([c["last_status"] for c in checks if f"{c['schema_name']}.{c['table_name']}" == t])} for t in tables]
     items += [{"name": c["name"], "detail": CATEGORY[c["check_type"]], "status": c["last_status"]}
               for c in checks if not c.get("table_name")]
-    basis = f"data checks on {watched} of {in_db} tables" if in_db else "data checks"
-    return {"kind": "generic", "scope": s, "trust": {"score": score, "label": label_for(score), "reasons": reasons, "basis": basis,
-            "coverage": cov, "rules": {"healthy_from": HEALTHY, "attention_from": ATTENTION}},
+    t["basis"] = f"data checks on {watched} of {in_db} tables" if in_db else "data checks"
+    t["coverage"] = cov
+    return {"kind": "generic", "scope": s, "trust": t,
             "kpis": kpis, "dimensions": dims, "trend": _check_trend(s["id"]), "trend_label": "Trust score by day (from data check results)",
             "items_title": "What is watched", "items": items, "last_activity": last,
             "empty": None if checks else "Nothing is watched on this connection yet. Open Data quality → Coverage and press Start "
                                          "monitoring: DataTrust adds freshness, volume and schema rules to the tables you choose."}
+
+
+def _subject_bars(t: dict) -> list:
+    """The subjects' marks as labelled bars (Observe, Ask)."""
+    return [{"label": f"{x['label']} ({x['passing']} of {x['signals']} pass)", "value": x["mark"], "key": x["key"]} for x in t["subjects"]]
 
 
 def _worst(statuses: list) -> str | None:
@@ -372,7 +374,7 @@ def _worst(statuses: list) -> str | None:
 
 
 def _check_trend(connection_id: int, days: int = 14) -> list:
-    """Score per day with the same rule: each check's last result of that day (or the latest before it)."""
+    """Score per day with the same formula: each check's last result of that day (or the latest before it)."""
     checks = {c["check_id"]: c for c in _checks_of(connection_id, skip_dedupe=False)}
     if not checks:
         return []
@@ -388,9 +390,9 @@ def _check_trend(connection_id: int, days: int = 14) -> list:
             idx += 1
         if not latest:
             continue
-        pen = sum(CHECK_PENALTY[checks[cid]["severity"]] if st == "FAIL" else ERROR_PENALTY if st == "ERROR" else WARN_PENALTY if st == "WARN" else 0
-                  for cid, st in latest.items())
-        out.append({"day": day.isoformat(), "score": max(0, 100 - pen)})
+        t = trust.compute([_check_signal(checks[cid], st) for cid, st in latest.items()])
+        if t["score"] is not None:
+            out.append({"day": day.isoformat(), "score": t["score"]})
     return out
 
 
@@ -398,28 +400,20 @@ def _overview_adf(s: dict) -> dict:
     from adf import insights
     o = insights.overview(s["id"])
     k = o["kpis"]
-    issues = insights.issues(s["id"])
-    reasons = [{"points": insights.SEV_PENALTY[i["severity"]], "reason": i["title"]} for i in issues]
-    score = k.get("trust")
+    issues = o["issues"]
+    t = o["trust"]
+    t["basis"] = "its pipelines' runs, freshness, loaded rows and source / target checks"
     pipes = o["pipelines"]
-    healthy = sum(p["health"] == "Healthy" for p in pipes if p["score"] is not None)
-    scored = [p for p in pipes if p["score"] is not None]
-    chk = appdb.one("""SELECT count(*) FILTER (WHERE status = 'PASS') AS ok, count(*) FILTER (WHERE status IN ('PASS','WARN','FAIL')) AS n
-                       FROM telemetry.checks WHERE source_id = %s AND checked_at > now() - interval '7 days'""", (s["id"],))
-    dims = []
-    if k.get("success_rate_7d") is not None:
-        dims.append({"label": f"Run success, 7 days ({k['ok_7d']} of {k['runs_7d']} runs)", "value": k["success_rate_7d"]})
-    if scored:
-        dims.append({"label": f"Healthy pipelines ({healthy} of {len(scored)})", "value": round(100 * healthy / len(scored), 1)})
-    if chk.get("n"):
-        dims.append({"label": f"Source / target checks passing, 7 days ({chk['ok']} of {chk['n']})", "value": round(100 * chk["ok"] / chk["n"], 1)})
+    dims = _subject_bars(t)
     by_day = {}
     for r in o.get("by_day") or []:
         d = by_day.setdefault(r["day"], {"ok": 0, "n": 0})
         if r["status"] in ("Succeeded", "Failed", "Cancelled"):
             d["n"] += r["n"]
             d["ok"] += r["n"] if r["status"] == "Succeeded" else 0
-    trend = [{"day": d, "score": round(100 * v["ok"] / v["n"], 1)} for d, v in sorted(by_day.items()) if v["n"]]
+    # per day the same formula, from what is known per day: the share of runs that succeeded
+    trend = [{"day": d, "score": trust.compute([trust.signal("runs", v["ok"] / v["n"], "HIGH", "runs", failed=False)])["score"]}
+             for d, v in sorted(by_day.items()) if v["n"]]
     # runs per day for the last 14 days, every day present (a quiet day is a zero, not a gap in the axis)
     today = datetime.now(timezone.utc).date()
     runs_by_day = []
@@ -438,9 +432,8 @@ def _overview_adf(s: dict) -> dict:
               "status": {"Healthy": "PASS", "Needs attention": "WARN", "At risk": "FAIL", "Failing": "FAIL"}.get(p["health"]), "label": p["health"]}
              for p in pipes]
     last = (o["sources"][0] if o["sources"] else {}).get("last_sync_finished")
-    return {"kind": "generic", "scope": s, "trust": {"score": score, "label": label_for(score), "reasons": reasons, "basis": "pipeline runs",
-            "rules": {"healthy_from": HEALTHY, "attention_from": ATTENTION}},
-            "kpis": kpis, "dimensions": dims, "trend": trend, "trend_label": "Run success rate by day (%)", "runs_by_day": runs_by_day,
+    return {"kind": "generic", "scope": s, "trust": t,
+            "kpis": kpis, "dimensions": dims, "trend": trend, "trend_label": "Trust score by day (from run results)", "runs_by_day": runs_by_day,
             "items_title": "Pipelines", "items": items, "last_activity": last,
             "empty": None if pipes else "No pipelines read from this factory yet: check Connect ADF."}
 

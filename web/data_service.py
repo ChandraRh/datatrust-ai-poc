@@ -2,7 +2,7 @@
 Everything the DataTrust web page shows, computed live from PostgreSQL (gold views + audit tables).
 Nothing is hard-coded: run the pipeline again and these numbers change.
 
-    trust_score()      0-100 score with the reasons behind it
+    trust_score()      0-100 score with the reasons behind it (the standard formula of trust.py, fed by trust_signals)
     incidents()        open issues found in the data (settlement mismatch, rejected rows, duplicates, failed steps)
     lineage()          source file -> bronze -> silver -> gold, with the rows lost or held back at each hop
     revenue(...)       revenue for any period, optionally by day / method / region / segment
@@ -31,6 +31,7 @@ def _find_project_root() -> Path:
 
 sys.path.insert(0, str(_find_project_root()))                    # project root: config.py, .env
 import config  # noqa: E402
+import trust  # noqa: E402
 
 # entity -> (source file, bronze table, silver table, business key, SCD type)
 ENTITIES = {
@@ -43,12 +44,10 @@ ENTITIES = {
     "categories":     ("categories.csv",     "bronze.categories",     "silver.categories",     "category_id", 1),
 }
 
-# Trust score rules (shown on the page, so the score is explainable)
-PENALTY_SETTLEMENT_MISMATCH = 15        # per business date where settlement != silver (max 45)
-PENALTY_PIPELINE_FAILED = 30            # latest run has a FAILED / CANCELLED / SKIPPED layer
-PENALTY_STALE = 10                      # last successful run older than FRESHNESS_HOURS
-FRESHNESS_HOURS = 24
-HEALTHY, ATTENTION = 90, 75             # >= 90 Healthy, >= 75 Needs attention, below = At risk
+# Trust score: the standard formula of web/trust.py, fed with this pipeline's signals (trust_signals)
+SETTLEMENT_SEVERITY = "CRITICAL"        # money that does not match the gateway: caps the score at 74 (At risk), Detect shows it CRITICAL
+FRESHNESS_HOURS = 24                    # the pipeline must succeed at least this often
+HEALTHY, ATTENTION = trust.HEALTHY, trust.ATTENTION
 
 
 # ============================================================================ database helpers
@@ -299,7 +298,7 @@ def incidents() -> list:
                        AND (upper(trim(raw_record::jsonb->>'status')) = 'CAPTURED'
                             OR rule_name = 'STATUS_VALID')""", {"d": r["business_date"]})   # a status typo was settled too
         found.append({
-            "id": f"RECON-{r['business_date']}", "severity": "HIGH", "type": "SETTLEMENT_MISMATCH",
+            "id": f"RECON-{r['business_date']}", "severity": SETTLEMENT_SEVERITY, "type": "SETTLEMENT_MISMATCH",
             "title": f"Revenue gap on {r['business_date']}: settlement does not match silver",
             "business_date": r["business_date"],
             "summary": (f"Gateway settled {r['settled_payments']:,} payments / {inr(r['settled_amount'])}; "
@@ -525,60 +524,62 @@ def impact(inc: dict) -> dict:
 
 
 # ============================================================================ trust score
-def trust_score() -> dict:
+def trust_signals() -> tuple[list, dict]:
+    """The POC pipeline as standard trust signals (web/trust.py), plus the row percentages shown beside them."""
     lin = lineage()
     recon = lin["settlement"]
-    mismatches = [r for r in recon if r["recon_status"] == "MISMATCH"]
-    total_in = sum(e["bronze_rows"] for e in lin["entities"]) or 1
-    rejected = sum(e["rejected"] for e in lin["entities"])
-    duplicates = sum(e["duplicates"] for e in lin["entities"])
-    lost = sum(max(e["unexplained_loss"], 0) + max(e["source_to_bronze_gap"] or 0, 0) for e in lin["entities"])
     status = pipeline_status()
-    failed_layers = [l for l in status["layers"] if l["status"] != "SUCCESS"]
     last_success = status["last_success"]
-    hours_old = None
-    if last_success:
-        hours_old = (datetime.now() - datetime.fromisoformat(last_success)).total_seconds() / 3600
-
-    reasons = []
-    score = 100.0
-
-    def penalty(points, text):
-        nonlocal score
-        if points > 0:
-            score -= points
-            reasons.append({"points": round(points, 1), "reason": text})
-
-    penalty(min(PENALTY_SETTLEMENT_MISMATCH * len(mismatches), 45),
-            f"{len(mismatches)} business date(s) where settlement does not match silver")
-    penalty(min(10, 100.0 * lost / total_in * 10), f"{lost} row(s) missing between source and silver")
-    penalty(min(10, 100.0 * rejected / total_in * 5), f"{rejected} row(s) rejected by quality rules")
-    penalty(min(5, 100.0 * duplicates / total_in * 5), f"{duplicates} duplicate row(s) in the source")
-    penalty(PENALTY_PIPELINE_FAILED if failed_layers else 0,
-            "latest run: " + ", ".join(f"{l['layer']} {l['status']}" for l in failed_layers))
-    penalty(PENALTY_STALE if hours_old is None or hours_old > FRESHNESS_HOURS else 0,
-            f"no successful run in the last {FRESHNESS_HOURS} h")
-    score = max(0, round(score))
+    hours_old = (datetime.now() - datetime.fromisoformat(last_success)).total_seconds() / 3600 if last_success else None
+    sig = []
+    for r in recon:                                              # one per business date: does the gateway agree with silver?
+        ok = r["recon_status"] == "MATCH"
+        sig.append(trust.signal("reconciliation", 1 if ok else 0, SETTLEMENT_SEVERITY,
+                                f"settlement does not match silver on {r['business_date']}",
+                                ok_text=f"settlement matches silver on {r['business_date']}"))
+    tot = {"in": 0, "lost": 0, "rejected": 0, "duplicates": 0}
+    for e in lin["entities"]:
+        n = max(e["source_rows"] or 0, e["bronze_rows"] or 0)
+        if not n:
+            continue
+        lost = max(e["unexplained_loss"] or 0, 0) + max(e["source_to_bronze_gap"] or 0, 0)
+        name = e["entity"]
+        sig.append(trust.signal("volume", (n - lost) / n, "HIGH", f"{name}: {lost} row(s) missing between source and silver",
+                                failed=lost > 0, ok_text=f"{name}: all {n:,} rows reached silver (or were rejected / de-duplicated on purpose)"))
+        sig.append(trust.signal("validity", (n - e["rejected"]) / n, "MEDIUM", f"{name}: {e['rejected']} row(s) rejected by quality rules",
+                                failed=e["rejected"] > 0, ok_text=f"{name}: no rows rejected by quality rules"))
+        sig.append(trust.signal("uniqueness", (n - e["duplicates"]) / n, "LOW", f"{name}: {e['duplicates']} duplicate row(s) in the source file",
+                                failed=e["duplicates"] > 0, ok_text=f"{name}: no duplicate rows in the source file"))
+        for k, v in (("in", n), ("lost", lost), ("rejected", e["rejected"]), ("duplicates", e["duplicates"])):
+            tot[k] += v
+    for l in status["layers"]:                                   # the latest run, layer by layer (same severities as Detect)
+        sig.append(trust.signal("runs", 1 if l["status"] == "SUCCESS" else 0, "CRITICAL" if l["status"] == "FAILED" else "HIGH",
+                                f"latest run: {l['layer']} {l['status']}"))
     stale = hours_old is None or hours_old > FRESHNESS_HOURS
-    label = ("At risk" if score < ATTENTION else "Needs attention") if stale else (
-        "Healthy" if score >= HEALTHY else "Needs attention" if score >= ATTENTION else "At risk"
-    )
+    sig.append(trust.signal("freshness", 0 if stale else 1, "HIGH", f"no successful pipeline run in the last {FRESHNESS_HOURS} h",
+                            ok_text=f"the pipeline succeeded within the last {FRESHNESS_HOURS} h"))
+    n = tot["in"] or 1
+    matched = sum(r["recon_status"] == "MATCH" for r in recon)
+    dims = {"completeness": round(100.0 * (n - tot["lost"]) / n, 2), "validity": round(100.0 * (n - tot["rejected"]) / n, 2),
+            "uniqueness": round(100.0 * (n - tot["duplicates"]) / n, 2),
+            "reconciliation": round(100.0 * matched / len(recon), 2) if recon else None,
+            "freshness_hours": round(hours_old, 1) if hours_old is not None else None}
+    return sig, dims
 
-    matched = len(recon) - len(mismatches)
-    dims = {
-        "completeness": round(100.0 * (total_in - lost) / total_in, 2),
-        "validity": round(100.0 * (total_in - rejected) / total_in, 2),
-        "uniqueness": round(100.0 * (total_in - duplicates) / total_in, 2),
-        "reconciliation": round(100.0 * matched / len(recon), 2) if recon else None,
-        "freshness_hours": round(hours_old, 1) if hours_old is not None else None,
-    }
-    return {"score": score, "label": label, "reasons": reasons, "dimensions": dims,
-            "rules": {"healthy_from": HEALTHY, "attention_from": ATTENTION,
-                      "freshness_hours": FRESHNESS_HOURS}, "trend": trust_trend()}
+
+def trust_score(extra_signals: list | None = None) -> dict:
+    """The POC's trust score (web/trust.py): its pipeline signals, plus extra ones (its data checks, added by scopes.py)."""
+    sig, dims = trust_signals()
+    t = trust.compute(sig + list(extra_signals or []),
+                      trust.confidence(len(ENTITIES), len(ENTITIES), "pipeline tables"))   # the pipeline measures every table it loads
+    t["dimensions"] = dims
+    t["rules"]["freshness_hours"] = FRESHNESS_HOURS
+    t["trend"] = trust_trend()
+    return t
 
 
 def trust_trend() -> list:
-    """Score per business date with the same rules (settlement mismatch, rejected rows that day)."""
+    """Score per business date with the same formula, from what is known per date: settlement match and rejected rows."""
     out = []
     for r in rows("""
         SELECT d.business_date::text AS business_date,
@@ -587,12 +588,16 @@ def trust_trend() -> list:
                d.total_orders + d.captured_payments + d.failed_payments AS volume
         FROM gold.daily_revenue d LEFT JOIN gold.settlement_reconciliation s USING (business_date)
         ORDER BY 1"""):
-        s = 100.0
-        if r["recon_status"] == "MISMATCH":
-            s -= PENALTY_SETTLEMENT_MISMATCH
-        s -= min(10, 100.0 * r["rejected"] / max(r["volume"], 1) * 5)
-        out.append({"business_date": r["business_date"], "score": round(s, 1), "recon_status": r["recon_status"],
-                    "rejected": r["rejected"]})
+        sig = []
+        if r["recon_status"] in ("MATCH", "MISMATCH"):
+            sig.append(trust.signal("reconciliation", 1 if r["recon_status"] == "MATCH" else 0, SETTLEMENT_SEVERITY, "settlement"))
+        n = r["volume"] + r["rejected"]
+        if n:
+            sig.append(trust.signal("validity", r["volume"] / n, "MEDIUM", "rejected rows", failed=r["rejected"] > 0))
+        t = trust.compute(sig)
+        if t["score"] is not None:
+            out.append({"business_date": r["business_date"], "score": t["score"], "recon_status": r["recon_status"],
+                        "rejected": r["rejected"], "capped": bool(t["cap"])})
     return out
 
 

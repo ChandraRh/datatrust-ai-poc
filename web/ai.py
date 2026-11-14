@@ -187,6 +187,9 @@ def _facts(scope: str | None) -> dict:
             "note": None if measured else ("Nothing is measured on this source yet: it has no data checks (database) or no pipeline "
                                            "runs (factory). This is a setup gap, not a data problem."),
             "trust_score": t["score"], "label": t["label"],
+            "subjects": {x["label"]: x["mark"] for x in t.get("subjects") or []},             # the mark of each measured subject
+            "capped_by": t["cap"]["text"] if t.get("cap") else None,
+            "confidence": (t.get("confidence") or {}).get("text"),
             "why_not_100": [r["reason"] for r in t["reasons"]][:8], "recent_trend": trend,
             "open_incidents": [{"severity": i["severity"], "title": i["title"], "summary": i["summary"][:200]} for i in inc["open"][:12]],
             "new_in_24h": [i["title"] for i in new],

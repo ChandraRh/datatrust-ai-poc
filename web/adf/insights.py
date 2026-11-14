@@ -28,11 +28,19 @@ import statistics
 from datetime import datetime, timezone
 
 import appdb as ds                       # telemetry.* lives in DataTrust's own database
+import trust
 
 from . import diagnose, resolve, store
 
 SEV_ORDER = {"CRITICAL": 0, "HIGH": 1, "MEDIUM": 2, "LOW": 3}
-SEV_PENALTY = {"CRITICAL": 45, "HIGH": 30, "MEDIUM": 12, "LOW": 4}
+# trust subject (web/trust.py) of each kind of issue, and of each after-run source / target check
+ISSUE_SUBJECT = {"RUN_FAILED": "runs", "RUN_CANCELLED": "runs", "LONG_RUNNING": "runs", "SLOW": "runs", "CONNECTOR": "runs",
+                 "TRIGGER_FAILED": "runs", "STALE": "freshness", "TRIGGER_STOPPED": "freshness", "VOLUME": "volume",
+                 "ROWS_SKIPPED": "validity"}
+CHECK_SUBJECT = {"SCHEMA_MATCH": "schema", "TARGET_TABLE": "schema", "SOURCE_ROWS": "volume", "TARGET_ROWS": "volume",
+                 "SOURCE_FILES": "volume"}
+CHECK_LABEL = {"SOURCE_FILES": "source files", "SOURCE_ROWS": "source row count", "TARGET_TABLE": "target table",
+               "TARGET_ROWS": "target row count", "SCHEMA_MATCH": "file vs table columns"}
 FREQ_MINUTES = {"Minute": 1, "Hour": 60, "Day": 1440, "Week": 10080, "Month": 43200}
 FINISHED = ("Succeeded", "Failed", "Cancelled")
 
@@ -157,6 +165,59 @@ def _checks(run_id: str) -> list:
                       WHERE c.run_id = %s ORDER BY k.run_start, k.activity_name, c.side, c.check_type""", (run_id,))
 
 
+def _freshness_limit(triggers: list, cfg: dict) -> tuple:
+    """(trigger interval in minutes, hours after which the pipeline's data counts as stale); both None when unknown."""
+    interval = min((t["interval_minutes"] for t in triggers if t["interval_minutes"] and t["state"] == "Started"), default=None)
+    return interval, ((2 * interval + 30) / 60 if interval else cfg.get("freshness_hours"))
+
+
+def issue_signals(found: list) -> list:
+    """Every open issue is a failing trust signal in its subject (a failed after-run check counts through the check itself)."""
+    return [trust.signal(ISSUE_SUBJECT.get(i["type"], "runs"), 0, i["severity"], i["title"]) for i in found if i["type"] != "CHECK_FAILED"]
+
+
+def pipeline_signals(src: dict, name: str, runs: list, mine: list, defs: dict) -> list:
+    """One pipeline as standard trust signals: its open issues fail, what was measured and is fine passes."""
+    if not runs:
+        return []
+    sig = issue_signals(mine)
+    kinds = {i["type"] for i in mine}
+    finished = [r for r in runs if r["status"] in FINISHED]
+    succeeded = [r for r in finished if r["status"] == "Succeeded"]
+    week = [r for r in finished if (_age_hours(r["run_start"]) or 1e9) <= 168]
+    if week:
+        ok = sum(r["status"] == "Succeeded" for r in week)
+        sig.append(trust.signal("runs", ok / len(week), "HIGH", f"{name}: {len(week) - ok} of {len(week)} runs failed in the last 7 days",
+                                failed=False,                       # history: lowers the mark; only an open failure caps
+                                ok_text=f"{name}: all {len(week)} runs of the last 7 days succeeded"))
+    newest = finished[0] if finished else None
+    if newest and not kinds & {"RUN_FAILED", "RUN_CANCELLED"}:
+        sig.append(trust.signal("runs", 1, "HIGH", f"{name}: latest run succeeded"))
+    _, limit_h = _freshness_limit(_triggers_for(defs, name), src.get("config") or {})
+    if limit_h and "STALE" not in kinds:
+        sig.append(trust.signal("freshness", 1, "HIGH", f"{name}: loaded on time"))
+    if succeeded:
+        # a pass only when the comparison of _pipeline_issues could run: a row count and >= 3 earlier successful loads
+        history = [r["rows_written"] for r in succeeded[1:11] if r["rows_written"] is not None]
+        if "VOLUME" not in kinds and len(history) >= 3 and succeeded[0]["rows_written"] is not None and _median(history):
+            sig.append(trust.signal("volume", 1, "MEDIUM", f"{name}: usual number of rows loaded"))
+        if "ROWS_SKIPPED" not in kinds:
+            sig.append(trust.signal("validity", 1, "MEDIUM", f"{name}: no rows skipped"))
+    if newest:
+        failed_steps = {t["activity_run_id"] for t in _tasks(newest["run_id"]) if t["status"] == "Failed"}
+        for c in _checks(newest["run_id"]):
+            if c["check_type"] == "SKIPPED_ROWS" or c["activity_run_id"] in failed_steps:
+                continue                                             # counted as rows skipped / as that step's failure
+            st = c["status"]
+            sev = "HIGH" if st in ("FAIL", "PASS") else ("MEDIUM" if c["check_type"] in ("SCHEMA_MATCH", "SOURCE_ROWS") else "LOW")
+            what = CHECK_LABEL.get(c["check_type"], c["check_type"])
+            seen = f" (expected {c['expected']}, found {c['observed']})" if c.get("expected") is not None else ""
+            sig.append(trust.status_signal(CHECK_SUBJECT.get(c["check_type"], "volume"), st, sev,
+                                           f"{name}: {what} check {'failed' if st == 'FAIL' else 'found a difference'}{seen}",
+                                           ok_text=f"{name}: {what} as expected{seen}"))
+    return [s for s in sig if s]
+
+
 def _pipeline_issues(src: dict, name: str, runs: list, defs: dict) -> list:
     out = []
     cfg = src.get("config") or {}
@@ -180,8 +241,7 @@ def _pipeline_issues(src: dict, name: str, runs: list, defs: dict) -> list:
                           f"Run started {_short(newest['run_start'])} was cancelled; its data was not (fully) loaded.", newest["run_id"],
                           fixes=["Check who cancelled it in ADF Monitor and re-run if the data is still needed."], system=diagnose.ADF))
     # freshness
-    interval = min((t["interval_minutes"] for t in triggers if t["interval_minutes"] and t["state"] == "Started"), default=None)
-    limit_h = (2 * interval + 30) / 60 if interval else cfg.get("freshness_hours")
+    interval, limit_h = _freshness_limit(triggers, cfg)
     last_ok = succeeded[0] if succeeded else None
     age = _age_hours(last_ok["run_end"] or last_ok["run_start"]) if last_ok else None
     if limit_h and runs and (age is None or age > limit_h):
@@ -244,8 +304,7 @@ def _pipeline_issues(src: dict, name: str, runs: list, defs: dict) -> list:
                 sev = "HIGH" if c["status"] == "FAIL" else ("MEDIUM" if c["check_type"] in ("SCHEMA_MATCH", "SOURCE_ROWS") else "LOW")
                 if c["activity_run_id"] in failed_steps:
                     continue                                 # part of that step's failure, shown as evidence there
-                label = {"SOURCE_FILES": "source files", "SOURCE_ROWS": "source row count", "TARGET_TABLE": "target table",
-                         "TARGET_ROWS": "target row count", "SCHEMA_MATCH": "file vs table columns"}.get(c["check_type"], c["check_type"])
+                label = CHECK_LABEL.get(c["check_type"], c["check_type"])
                 out.append(_issue(sev, "CHECK_FAILED", src, name, f"{name}: {label} check {'failed' if c['status'] == 'FAIL' else 'found a difference'}",
                                   c["detail"] or "", newest["run_id"], evidence=[f"expected {c['expected']}, found {c['observed']}"]
                                   if c["expected"] else [], system=diagnose.SOURCE if c["side"] == "source" else diagnose.TARGET))
@@ -289,15 +348,13 @@ def _recent_runs(source_id: int, per_pipeline: int = 60) -> dict:
     return out
 
 
-def health(pipeline_issues: list, runs: list) -> tuple[str, int]:
+def health(pipeline_issues: list, runs: list, signals: list) -> tuple[str, int]:
+    """A pipeline's score with the standard formula (web/trust.py); "Failing" while it fails to run or deliver."""
     if not runs:
         return "No runs yet", None
-    score = max(0, 100 - sum(SEV_PENALTY[i["severity"]] for i in pipeline_issues))
-    worst = min((SEV_ORDER[i["severity"]] for i in pipeline_issues), default=None)
-    label = ("Failing" if worst is not None and worst <= 1 and any(i["type"] in ("RUN_FAILED", "STALE", "CONNECTOR") for i in pipeline_issues)
-             else "At risk" if worst is not None and worst <= 1 else "Needs attention" if worst is not None and worst <= 2
-             else "Healthy")
-    return label, score
+    t = trust.compute(signals)
+    failing = any(i["type"] in ("RUN_FAILED", "STALE", "CONNECTOR") and SEV_ORDER[i["severity"]] <= 1 for i in pipeline_issues)
+    return ("Failing" if failing else t["label"]), t["score"]
 
 
 # ============================================================================ overview
@@ -305,13 +362,16 @@ def overview(source_id: int | None = None) -> dict:
     srcs = [s for s in sources() if not source_id or s["source_id"] == source_id]
     all_issues = issues(source_id)
     pipelines = []
+    signals = issue_signals([i for i in all_issues if not i["pipeline"]])     # factory-wide: cannot read it, a trigger failed
     for src in srcs:
         defs = _definitions(src["source_id"])
         by_pipe = _recent_runs(src["source_id"])
         for name in sorted(set(defs["pipeline"]) | set(by_pipe)):
             runs = by_pipe.get(name, [])
             mine = [i for i in all_issues if i["source_id"] == src["source_id"] and i["pipeline"] == name]
-            label, score = health(mine, runs)
+            sig = pipeline_signals(src, name, runs, mine, defs)
+            signals += sig
+            label, score = health(mine, runs, sig)
             finished = [r for r in runs if r["status"] in FINISHED]
             ok = [r for r in finished if r["status"] == "Succeeded"]
             p = defs["pipeline"].get(name) or {}
@@ -343,10 +403,11 @@ def overview(source_id: int | None = None) -> dict:
     days = ds.rows("""SELECT to_char(date_trunc('day', run_start), 'YYYY-MM-DD') AS day, status, count(*) AS n
                       FROM telemetry.pipeline_runs WHERE source_id = ANY(%s) AND run_start > now() - interval '14 days'
                       GROUP BY 1, 2 ORDER BY 1""", (ids,))
-    scores = [p["score"] for p in pipelines if p["score"] is not None]
-    return {"sources": srcs, "kpis": {**k, **v, "pipelines": len(pipelines), "issues": len(all_issues),
+    # the factory's score: the same formula over all its pipelines' signals; confidence = pipelines that ran in 30 days
+    t = trust.compute(signals, trust.confidence(sum(1 for p in pipelines if p["runs_30d"]), len(pipelines), "pipelines"))
+    return {"sources": srcs, "trust": t, "kpis": {**k, **v, "pipelines": len(pipelines), "issues": len(all_issues),
                                       "success_rate_7d": round(100 * k["ok_7d"] / k["runs_7d"]) if k.get("runs_7d") else None,
-                                      "trust": round(sum(scores) / len(scores)) if scores else None},
+                                      "trust": t["score"]},
             "pipelines": sorted(pipelines, key=lambda p: (p["score"] if p["score"] is not None else 101, p["name"])),
             "issues": all_issues, "by_day": days}
 
@@ -510,7 +571,7 @@ def pipeline_detail(source_id: int, name: str) -> dict:
         raise ValueError(f"pipeline {name} not found")
     props = (p or {}).get("properties") or {}
     mine = [i for i in issues(source_id) if i["pipeline"] == name]
-    label, score = health(mine, runs_)
+    label, score = health(mine, runs_, pipeline_signals(src, name, runs_, mine, defs))
     return {"name": name, "factory": src["name"], "source_id": source_id, "description": props.get("description"),
             "parameters": props.get("parameters") or {}, "folder": (props.get("folder") or {}).get("name"),
             "activities": resolve.flatten_activities(props.get("activities")), "triggers": _triggers_for(defs, name),

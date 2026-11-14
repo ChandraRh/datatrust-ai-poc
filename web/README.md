@@ -93,11 +93,11 @@ Pick a **Source** at the top of the page: every connection (PostgreSQL, SQL Serv
 Observe, Detect, Investigate, Explain, Impact, Verify and the trust score then show **only that source**; nothing is
 blended across sources.
 
-| Source | Trust score from | Incidents |
+| Source | Trust score signals (same formula for all, see Trust score below) | Incidents |
 |---|---|---|
-| The POC database (the `PG_*` connection) | its pipeline rules (below), minus its other failing data checks | pipeline findings + data checks |
-| Any other database | its data checks: 100 − 40 / 25 / 10 / 4 per failing CRITICAL / HIGH / MEDIUM / LOW check, − 5 per check that could not run, − 2 per warning | its failing checks |
-| An Azure Data Factory | the average of its pipeline scores (ADF connector) | its ADF issues |
+| The POC database (the `PG_*` connection) | its pipeline (settlement per date, rows lost / rejected / duplicated, latest run, freshness) + its other data checks | pipeline findings + data checks |
+| Any other database | its data checks, each in its subject | its failing checks |
+| An Azure Data Factory | its pipelines' runs, freshness, loaded rows, skipped rows and source / target checks | its ADF issues |
 
 A source with nothing measured yet shows "No data yet" rather than a perfect score.
 The Data quality pages follow the source too: for the POC they are its own rule engine (Rejected records, DQ Rule
@@ -145,11 +145,22 @@ answer and only a button press spends a model call; without a model every featur
 | 6. Verify | Approved incidents become RESOLVED only when the next run no longer shows them | audit.remediation_log + live detection |
 | Pipeline log | Steps, batches, errors and warnings | audit.* |
 
-## Trust score (explainable, shown on page 1)
-Starts at 100: −15 per business date where settlement ≠ silver (max −45), −up to 10 for rows lost between
-source and silver, −up to 10 for rejected rows, −up to 5 for duplicates, −30 if the latest run has a
-failed/skipped layer, −10 if no successful run in 24 h. ≥ 90 Healthy, ≥ 75 Needs attention, below At risk.
-The rules are constants at the top of data_service.py.
+## Trust score (one standard formula for every source, `web/trust.py`)
+Every source is turned into **signals**: a rule result, a run, a share of rows. Each belongs to one of seven subjects:
+freshness, volume, validity, uniqueness (duplicate rows, unique-key rules), schema, reconciliation, pipeline runs.
+
+1. Each subject's **mark** (0–100) = the share of its signals that pass, weighted by severity (CRITICAL 4, HIGH 3,
+   MEDIUM 2, LOW 1). A warning or a check that could not run counts as half; a share of rows counts as that share.
+2. The **score** = the average of the subjects that have signals. A subject with none is left out, never counted as 0.
+3. A **cap** keeps a serious open problem from being averaged away: an open CRITICAL problem → at most 74 (At risk),
+   an open HIGH one → at most 89 (Needs attention). A settlement mismatch is CRITICAL (`SETTLEMENT_SEVERITY` in
+   data_service.py), on Detect too.
+4. **Confidence** = how much of the source is measured (tables watched, pipelines with runs): high from 80 %, medium
+   from 30 %, else low. It is shown beside the score, never mixed into it.
+
+≥ 90 Healthy, ≥ 75 Needs attention, below At risk. The daily trend uses the same formula on what is known per day.
+Observe shows each subject's mark, the cap, the confidence and "Why not 100" (the points each problem costs).
+A new kind of source only has to produce signals; the formula does not change.
 
 ## AI agent modes (.env LLM_PROVIDER)
 * `none` (default): built-in agent, free and offline. Understands the questions listed on the Ask page.

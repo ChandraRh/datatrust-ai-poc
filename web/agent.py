@@ -297,13 +297,16 @@ def answer_duplicates(q: str):
 
 
 def answer_trust(q: str):
-    t = ds.trust_score()
+    import scopes
+    t = scopes.poc_trust()
     d = t["dimensions"]
     text = (f"**Trust score: {t['score']} / 100 — {t['label']}**\n\n"
-            f"- Completeness {d['completeness']}% · Validity {d['validity']}% · Uniqueness {d['uniqueness']}% · "
-            f"Reconciliation {d['reconciliation']}% · Last successful run {d['freshness_hours']} h ago\n")
+            + "".join(f"- {x['label']}: {x['mark']} ({x['passing']} of {x['signals']} pass)\n" for x in t["subjects"])
+            + f"- Last successful run {d['freshness_hours']} h ago\n")
+    if t["cap"]:
+        text += f"\nCapped at {t['cap']['limit']} while a {t['cap']['severity'].lower()} problem is open: {t['cap']['text']}.\n"
     if t["reasons"]:
-        text += "\n**Why not 100:**\n" + "\n".join(f"- −{r['points']}: {r['reason']}" for r in t["reasons"])
+        text += "\n**Why not 100:**\n" + "\n".join(f"- −{r['points']}: {r['reason']}" for r in t["reasons"][:8])
     return reply(text, as_table(t["trend"]), {"type": "line", "labels": [x["business_date"] for x in t["trend"]],
                                               "values": [x["score"] for x in t["trend"]], "label": "Trust score"},
                  ["gold.settlement_reconciliation", "silver.rejected_records", "audit.step_log"])
@@ -446,7 +449,8 @@ def run_tool(name: str, args: dict):
     if name == "investigate_incident":
         return ds.investigate(args["incident_id"])
     if name == "get_trust_score":
-        return ds.trust_score()
+        import scopes
+        return scopes.poc_trust()
     if name == "get_pipeline_status":
         s = ds.pipeline_status()
         return {"batch": s["batch"], "layers": s["layers"], "steps": s["steps"], "errors": s["errors"][:10]}
