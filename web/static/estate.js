@@ -147,7 +147,8 @@ async function pageConnections() {
   const list = est.connections.map((c) => `<tr><td>${esc(c.name)}</td><td><span class="chip grey">${esc(typeLabel(c.source_type))}</span></td>
       <td>${c.username ? esc(c.username) : "Windows login"}@${esc(c.host)}${c.source_type === "snowflake" || !c.port ? "" : ":" + c.port}${c.database ? "/" + esc(c.database) : ""}</td>
       <td>${admin ? esc(c.password_env || "") : "•••"}</td><td>${esc(c.created_by || "")}</td>
-      <td>${admin && est.connections.length > 1 ? `<button class="btn light btn-sm" data-del="${c.connection_id}">Remove</button>` : ""}</td></tr>`).join("");
+      <td class="nowrap">${admin ? `<button class="btn light btn-sm" data-edit="${c.connection_id}">Edit</button>` : ""}
+        ${admin && est.connections.length > 1 ? `<button class="btn light btn-sm" data-del="${c.connection_id}">Remove</button>` : ""}</td></tr>`).join("");
   const thisSource = o.limited
     ? `<p>${o.ok ? `<span class="chip ok">connected</span> ${esc(o.version || "")}<br><span class="small muted">as <b>${esc(o.login_user || "")}</b></span>` : `<span class="bad">${esc(o.error)}</span>`}</p>
        <p class="small muted">Browsing ${esc(o.label)} (catalog, changes, access) arrives with its connector, the next build step.</p>`
@@ -155,10 +156,9 @@ async function pageConnections() {
        <div class="tablewrap"><table><thead><tr><th>Database</th><th>Owner</th><th>Size</th><th>Can connect</th><th>Who-changed-what</th></tr></thead><tbody>${rows}</tbody></table></div>
        <p class="small muted">${o.tracking_note ? esc(o.tracking_note) : "Tracking installs schema <code>dt_audit</code> and two event triggers in that database, so every CREATE / ALTER / DROP / GRANT is logged with user and time. Needs a superuser login."}</p>`;
   return {
-    html: `<div class="grid g-2">
+    html: `<div class="card"><h3>Connected sources</h3><div class="tablewrap"><table><thead><tr><th>Name</th><th>Type</th><th>Login</th><th>Password from .env</th><th>Added by</th><th></th></tr></thead><tbody>${list}</tbody></table></div>
+        ${admin ? `<button class="btn" id="wzOpen" style="margin-top:14px">+ Add a source</button>` : ""}</div>
       <div class="card"><h3>This source</h3>${thisSource}</div>
-      <div class="card"><h3>Connected sources</h3><div class="tablewrap"><table><thead><tr><th>Name</th><th>Type</th><th>Login</th><th>Password from .env</th><th>Added by</th><th></th></tr></thead><tbody>${list}</tbody></table></div>
-        ${admin ? `<button class="btn" id="wzOpen" style="margin-top:14px">+ Add a source</button>` : ""}</div></div>
       ${admin ? `<div class="card hidden" id="wizard"></div>` : ""}`,
     bind() {
       document.querySelectorAll("[data-track]").forEach((b) => (b.onclick = async () => {
@@ -169,10 +169,18 @@ async function pageConnections() {
       document.querySelectorAll("[data-del]").forEach((b) => (b.onclick = async () => {
         if (!confirm("Remove this source from the portal? (nothing is changed on the source itself)")) return;
         await eapi(`/connections/${b.dataset.del}`, { method: "DELETE" });
+        if (typeof initScopes === "function") initScopes();            // and leaves the Source picker at the top
         est.connections = []; est.conn = null; est.overview = null; renderEstate("estate-connections");
       }));
       const open = $e("wzOpen");
       if (open) open.onclick = () => { wizardStep1(); $e("wizard").scrollIntoView({ behavior: "smooth" }); };
+      document.querySelectorAll("[data-edit]").forEach((b) => (b.onclick = () => {      // same form, filled in; saved in place
+        const c = est.connections.find((x) => String(x.connection_id) === b.dataset.edit);
+        if (!c) return;
+        $e("wizard").classList.remove("hidden");
+        wizardStep2(c.source_type, c);
+        $e("wizard").scrollIntoView({ behavior: "smooth" });
+      }));
     },
   };
 }
@@ -195,20 +203,29 @@ function wizardStep1() {
   w.querySelectorAll(".tile").forEach((b) => (b.onclick = () => wizardStep2(b.dataset.type)));
   $e("wzCancel").onclick = () => w.classList.add("hidden");
 }
-function wizardStep2(type) {
+function wizardStep2(type, existing = null) {
+  // existing: a connection row -> edit it in place (same id, so its rules, coverage and history stay); the type stays
   const t = est.types[type], w = $e("wizard");
-  const envName = "CONN_" + t.label.toUpperCase().replace(/[^A-Z0-9]+/g, "_") + "_PASSWORD";
-  w.innerHTML = `<h3>Add a ${esc(t.label)} source</h3>${wizardSteps(2)}
+  const envName = existing ? existing.password_env : "CONN_" + t.label.toUpperCase().replace(/[^A-Z0-9]+/g, "_") + "_PASSWORD";
+  const current = (k, dflt) => {
+    if (!existing) return dflt || "";
+    const v = ["host", "port", "database", "username"].includes(k) ? existing[k] : (existing.settings || {})[k];
+    return v == null || (k === "port" && !v) ? "" : String(v);
+  };
+  w.innerHTML = `<h3>${existing ? `Edit ${esc(existing.name)}` : `Add a ${esc(t.label)} source`}</h3>${existing ? "" : wizardSteps(2)}
+    ${existing ? `<p class="small muted">${esc(t.label)} source. Its rules, coverage and history stay with it. To change the password itself, change
+      <code>${esc(existing.password_env)}</code> in <code>.env</code> (no restart needed); the portal only stores the variable's name.</p>` : ""}
     <div class="form-grid">
-      <label>Name shown in the portal<input id="wzName" placeholder="e.g. Finance ${esc(t.label)}"></label>
-      ${t.fields.map((f) => `<label>${esc(f.label)}${f.required ? " *" : ""}<input data-key="${f.key}" value="${esc(f.default || "")}" placeholder="${esc(f.placeholder || "")}"></label>`).join("")}
-      <label>Password variable (.env or cloud secret) *<input id="wzPwEnv" value="${envName}"></label>
+      <label>Name shown in the portal<input id="wzName" value="${esc(existing ? existing.name : "")}" placeholder="e.g. Finance ${esc(t.label)}"></label>
+      ${t.fields.map((f) => `<label>${esc(f.label)}${f.required ? " *" : ""}<input data-key="${f.key}" value="${esc(current(f.key, f.default))}" placeholder="${esc(f.placeholder || "")}"></label>`).join("")}
+      <label>Password variable (.env or cloud secret) *<input id="wzPwEnv" value="${esc(envName)}"></label>
     </div>
     <p class="small muted">Laptop: put the password in <code>.env</code> as <code>${envName}=...</code> (no restart needed). Cloud: DevOps adds it as a secret
       environment variable with that name. The portal stores only the variable name, never the password.
       Driver: <code>${esc(t.driver)}</code></p>
     <div id="wzResult"></div>
-    <button class="btn light" id="wzBack">Back</button> <button class="btn" id="wzTest">Test connection</button> <button class="btn" id="wzSave" disabled>Save source</button>`;
+    <button class="btn light" id="wzBack">${existing ? "Cancel" : "Back"}</button> <button class="btn" id="wzTest">Test connection</button>
+    <button class="btn" id="wzSave" ${existing ? "" : "disabled"}>${existing ? "Save changes" : "Save source"}</button>`;
   const collect = () => {
     const body = { source_type: type, name: $e("wzName").value.trim() || t.label, password_env: $e("wzPwEnv").value.trim(), settings: {} };
     w.querySelectorAll("input[data-key]").forEach((i) => {
@@ -220,26 +237,37 @@ function wizardStep2(type) {
     if (!body.password_env) missing.push(".env variable");
     return { body, missing };
   };
-  $e("wzBack").onclick = wizardStep1;
+  $e("wzBack").onclick = existing ? () => w.classList.add("hidden") : wizardStep1;
   $e("wzTest").onclick = async () => {
     const { body, missing } = collect();
     if (missing.length) { $e("wzResult").innerHTML = `<div class="error-box">Please fill in: ${missing.map(esc).join(", ")}</div>`; return; }
-    w.querySelector(".steps").outerHTML = wizardSteps(3);
+    if (w.querySelector(".steps")) w.querySelector(".steps").outerHTML = wizardSteps(3);
     $e("wzResult").innerHTML = "<p class='muted'>Connecting…</p>";
     const r = await post("/connections/test", body).catch((e) => ({ ok: false, error: e.message }));
     $e("wzResult").innerHTML = r.ok
       ? `<div class="banner ok"><h2>Connection works</h2>${esc(r.version || "")} · logged in as <b>${esc(r.login_user || "")}</b>${r.database ? " · database " + esc(r.database) : ""}</div>`
       : `<div class="error-box">Could not connect: ${esc(r.error)}</div>`;
     $e("wzSave").disabled = false;
-    $e("wzSave").textContent = r.ok ? "Save source" : "Save anyway (fix it later)";
+    $e("wzSave").textContent = existing ? (r.ok ? "Save changes" : "Save changes anyway") : r.ok ? "Save source" : "Save anyway (fix it later)";
   };
   $e("wzSave").onclick = async () => {
     const { body, missing } = collect();
-    if (missing.length) return;
+    if (missing.length) { $e("wzResult").innerHTML = `<div class="error-box">Please fill in: ${missing.map(esc).join(", ")}</div>`; return; }
+    if (existing) {
+      try {
+        const r = await eapi(`/connections/${existing.connection_id}`, { method: "PUT", body: JSON.stringify(body) });
+        toast(`${body.name} saved` + (r.overview.ok ? "" : " (not reachable yet)"));
+        if (typeof initScopes === "function") initScopes();          // the Source picker at the top shows the new name
+        est.connections = []; est.conn = existing.connection_id; est.overview = null;
+        renderEstate("estate-connections");
+      } catch (e) { $e("wzResult").innerHTML = `<div class="error-box">${esc(e.message)}</div>`; }
+      return;
+    }
     try {
       const r = await post("/connections", body);
       w.querySelector(".steps").outerHTML = wizardSteps(4);
       toast(`${t.label} source saved` + (r.overview.ok ? "" : " (not reachable yet)"));
+      if (typeof initScopes === "function") initScopes();            // and appears in the Source picker at the top
       est.connections = []; est.conn = r.connection_id; est.overview = null;
       renderEstate("estate-connections");
     } catch (e) { $e("wzResult").innerHTML = `<div class="error-box">${esc(e.message)}</div>`; }

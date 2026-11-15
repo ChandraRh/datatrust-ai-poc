@@ -410,6 +410,31 @@ def add_connection(name, host, port, database, username, password_env, by, sourc
     return row["connection_id"]
 
 
+def update_connection(connection_id: int, name, host, port, database, username, password_env, by, settings=None):
+    """Change a source's details in place: same id, so its rules, coverage, incidents and history stay with it.
+    The type cannot change (that would be a different source). Passwords are never stored: only the .env variable name."""
+    from .source_types import DEFAULT_PORT
+    old = get_connection(connection_id)
+    t = old["source_type"]
+    if not (name or "").strip() or not (host or "").strip() or (not (username or "").strip() and t != "sqlserver"):
+        raise ValueError("name, host/account and login user are required")
+    if not password_env or not password_env.replace("_", "").isalnum():
+        raise ValueError("password_env must be the NAME of a variable in .env, e.g. CONN_SALES_PASSWORD")
+    new = {"name": name.strip(), "host": host.strip(), "port": int(port or DEFAULT_PORT[t]), "database": (database or "").strip(),
+           "username": (username or "").strip(), "password_env": password_env, "settings": settings or {}}
+    with db() as conn:
+        conn.execute("""UPDATE portal.connections SET name = %s, host = %s, port = %s, database = %s, username = %s,
+                               password_env = %s, settings = %s WHERE connection_id = %s""",
+                     (new["name"], new["host"], new["port"], new["database"], new["username"], new["password_env"],
+                      json.dumps(new["settings"]), connection_id))
+        conn.commit()
+    changed = [f"{k}: {old.get(k)!r} -> {v!r}" for k, v in new.items() if k != "settings" and old.get(k) != v]
+    if (old.get("settings") or {}) != new["settings"]:
+        changed.append("settings changed")
+    audit(by, "CONNECTION_CHANGED", f"{connection_id} {new['name']}", "; ".join(changed) or "no change")
+    return connection_id
+
+
 def delete_connection(connection_id: int, by: str):
     with db() as conn:
         conn.execute("DELETE FROM portal.access_requests WHERE connection_id = %s AND status = 'PENDING'", (connection_id,))

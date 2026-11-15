@@ -116,6 +116,19 @@ def add_connection(body: NewConnection, user: dict = Depends(admin_user)):
     return {"connection_id": cid, "overview": service.overview(cid)}
 
 
+@router.put("/connections/{cid}")
+def update_connection(cid: int, body: NewConnection, user: dict = Depends(admin_user)):
+    """Edit a source in place (same id: its rules, coverage and history stay). Its type cannot change."""
+    guard(store.update_connection, cid, body.name, body.host, body.port, body.database, body.username,
+          body.password_env, user["username"], body.settings)
+    try:                                                   # forget what was cached for the old details
+        from checks import coverage
+        coverage._count_cache.pop(cid, None)
+    except Exception:                                      # noqa: BLE001
+        pass
+    return {"connection_id": cid, "overview": service.overview(cid)}
+
+
 @router.delete("/connections/{cid}")
 def delete_connection(cid: int, user: dict = Depends(admin_user)):
     store.delete_connection(cid, user["username"])
