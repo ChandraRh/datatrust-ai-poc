@@ -572,7 +572,7 @@ def impact(inc: dict) -> dict:
     if inc["type"] == "SETTLEMENT_MISMATCH":
         amount = inc["metrics"]["amount_difference"]
     actions = {
-        "SETTLEMENT_MISMATCH": ["Ask the source team to resend the rejected payments with currency",
+        "SETTLEMENT_MISMATCH": ["Correct the rejected payments of this date (Rejected records shows which rule rejected them) and re-insert them, or ask the source team to resend them",
                                 "Re-run the pipeline for the business date", "Check settlement reconciliation is MATCH",
                                 "Notify the revenue report owner"],
         "REJECTED_ROWS": ["Fix the rows at source (see sample)", "Re-run the pipeline for the business date",

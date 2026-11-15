@@ -8,7 +8,55 @@
   const KINDS = { freshness: "fresh", volume: "volume", schema: "schema", null_rate: "empty values", uniqueness: "unique key",
     custom_sql: "own SQL", reconciliation: "reconciliation" };
   const STATUS = { PASS: ["ok", "Passing"], FAIL: ["bad", "Failing"], ERROR: ["bad", "Could not run"], WARN: ["warn", "Warning"] };
-  const V = { data: null, sel: new Set(), q: "", onlyOpen: false, log: null, busy: false };
+  const V = { data: null, sel: new Set(), q: "", onlyOpen: false, log: null, busy: false, biz: {} };
+  // business rules: the kinds Start monitoring does not add (keys, required columns, business conditions)
+  const BIZ_TYPES = ["uniqueness", "null_rate", "custom_sql"];
+  const SEVC = { LOW: "grey", MEDIUM: "warn", HIGH: "bad", CRITICAL: "bad" };
+
+  function bizPanel(k, b) {
+    if (b.loading) return `<div class="cv-biz"><p class="small muted">Profiling ${esc(k)} and drafting business rules… (up to a minute)</p></div>`;
+    if (b.error) return `<div class="cv-biz"><div class="error-box small">${esc(b.error)}</div></div>`;
+    const s = b.items;
+    return `<div class="cv-biz"><p class="small">${s.length ? `${s.length} business rule(s) proposed` : "No business rules to propose for this table"}
+        <span class="muted">· ${esc(b.source && b.source.startsWith("ai") ? "by " + b.source.slice(4, -1) : "from the table profile (no AI model answered)")}
+        · from column types, empty %, distinct counts and number / date ranges; no rows or text values were sent</span></p>
+      ${s.map((x, i) => `<label class="cv-biz-item"><input type="checkbox" data-bizpick="${esc(k)}|${i}" checked>
+        <span><b>${esc(x.name)}</b> <span class="chip ${SEVC[x.severity] || "grey"}">${esc(x.severity)}</span> <span class="small muted">${esc(KINDS[x.check_type] || x.check_type)}</span>
+        <br><span class="small">${esc(x.why || "")}</span>${x.config && x.config.sql ? `<pre class="code small">${esc(x.config.sql)}</pre>` : ""}</span></label>`).join("")}
+      ${s.length ? `<div class="pacts"><button class="btn btn-sm" data-bizadd="${esc(k)}">Add selected</button>
+        <button class="btn light btn-sm" data-bizclose="${esc(k)}">Close</button><span class="small muted">each runs once right away</span></div>`
+        : `<button class="btn light btn-sm" data-bizclose="${esc(k)}">Close</button>`}</div>`;
+  }
+
+  async function suggestBiz(k) {
+    const d = V.data, at = k.indexOf(".");
+    V.biz[k] = { loading: true };
+    rerender();
+    try {
+      const r = await post("/checks/suggest", { connection_id: d.connection.id, database: d.connection.database || null,
+        schema_name: k.slice(0, at), table_name: k.slice(at + 1) });
+      const has = (d.tables.find((t) => key(t) === k) || {}).checks || {};
+      // business kinds only, and not a unique key when the table already has one (the same key, most likely)
+      V.biz[k] = { items: r.suggestions.filter((x) => BIZ_TYPES.includes(x.check_type) && !(x.check_type === "uniqueness" && has.uniqueness)),
+        source: r.source };
+    } catch (e) { V.biz[k] = { error: e.message }; }
+    rerender();
+  }
+
+  async function addBiz(k) {
+    const b = V.biz[k], picked = [...document.querySelectorAll(`[data-bizpick^="${CSS.escape(k)}|"]:checked`)].map((x) => b.items[Number(x.dataset.bizpick.split("|").pop())]);
+    if (!picked.length) return toast("Tick at least one rule");
+    let ok = 0; const errs = [];
+    for (const s of picked) {
+      const { why, ...body } = s;
+      try { await post("/checks", { ...body, description: why || body.description }); ok++; } catch (e) { errs.push(`${s.name}: ${e.message}`); }
+    }
+    toast(`${ok} business rule(s) added to ${k}${errs.length ? `, ${errs.length} failed` : ""}`);
+    V.biz[k] = errs.length ? { ...b, error: errs.join(" · ") } : undefined;
+    if (!errs.length) delete V.biz[k];
+    V.data = null;
+    rerender();
+  }
 
   const statusChip = (r) => {
     if (!r.monitored) return `<span class="chip grey">Not watched</span>`;
@@ -31,7 +79,9 @@
         <p class="small muted">${esc(d.connection.name)} · ${esc(d.connection.type)} · database ${esc(d.connection.database || "default")}${tot.truncated ? " · showing the first 500 tables" : ""}</p>
         <p class="small"><b>Start monitoring</b> measures each chosen table once (read-only) and adds three rules that fit it:
           <b>fresh</b> (new rows still arrive), <b>volume</b> (a normal amount arrives) and <b>schema</b> (no column dropped, renamed or retyped).
-          Limits come from what the table shows today. Rules a table already has are kept. They run within the hour and appear in DQ Rule Studio.</p>
+          Limits come from what the table shows today. Rules a table already has are kept. They run within the hour and appear in DQ Rule Studio.
+          <b>AI business rules</b> on a table proposes the rules that depend on meaning (a unique key, a required column, <code>amount &gt; 0</code>):
+          you tick the ones to add.</p>
         ${isAdmin() ? "" : `<p class="small muted">Only an admin can start monitoring.</p>`}</div>`;
     const tools = `<div class="cv-tools">
         <input id="cvSearch" type="search" placeholder="Filter tables" value="${esc(V.q)}" aria-label="Filter tables">
@@ -42,7 +92,9 @@
     const list = rows.length ? `<div class="cv-list">${rows.map((r) => `<label class="cv-row">
         ${isAdmin() ? `<input type="checkbox" data-cv="${esc(key(r))}" ${V.sel.has(key(r)) ? "checked" : ""} ${r.starter_done ? "disabled" : ""}>` : ""}
         <span class="cv-name"><b>${esc(r.schema)}.</b>${esc(r.table)} <span class="small muted">${r.columns} columns${r.has_time_column ? "" : " · no date column"}</span></span>
-        <span class="cv-kinds">${kindChips(r.checks)}</span>${statusChip(r)}</label>`).join("")}</div>`
+        <span class="cv-kinds">${kindChips(r.checks)}</span>${statusChip(r)}
+        ${isAdmin() ? `<button class="btn-link small" data-biz="${esc(key(r))}" title="Propose business rules for this table from its profile (AI)">AI business rules</button>` : ""}</label>
+        ${V.biz[key(r)] ? bizPanel(key(r), V.biz[key(r)]) : ""}`).join("")}</div>`
       : `<p class="muted">${d.tables.length ? "No table matches the filter." : "No tables found in this database."}</p>`;
     return head + (V.log ? logCard() : "") + `<div class="card">${tools}${list}</div>`;
   }
@@ -118,7 +170,7 @@
   async function page() {
     await ensureCore();
     const s = state.overview.scope || {};
-    if (lastScope !== s.key) { V.data = null; V.sel.clear(); V.log = null; V.q = ""; lastScope = s.key; }
+    if (lastScope !== s.key) { V.data = null; V.sel.clear(); V.log = null; V.q = ""; V.biz = {}; lastScope = s.key; }
     if (!V.data) V.data = await cvapi("/coverage?" + sq());
     const d = V.data;
     const sub = $e("dqCoverageSub");
@@ -147,6 +199,9 @@
     const st = $e("cvStart");
     if (st) st.onclick = () => startSelected(d.connection.id);
     box.querySelectorAll("[data-cvt]").forEach((b) => (b.onclick = () => monitorTarget(b)));
+    box.querySelectorAll("[data-biz]").forEach((b) => (b.onclick = (e) => { e.preventDefault(); e.stopPropagation(); suggestBiz(b.dataset.biz); }));
+    box.querySelectorAll("[data-bizadd]").forEach((b) => (b.onclick = () => { b.disabled = true; addBiz(b.dataset.bizadd); }));
+    box.querySelectorAll("[data-bizclose]").forEach((b) => (b.onclick = () => { delete V.biz[b.dataset.bizclose]; rerender(); }));
   }
 
   async function rerender() {

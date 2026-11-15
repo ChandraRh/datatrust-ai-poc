@@ -740,5 +740,8 @@ label.cv-row { cursor: pointer; }
 .cv-row .cv-name { flex: 1 1 260px; min-width: 0; overflow-wrap: anywhere; }
 .cv-kinds { display: flex; flex-wrap: wrap; gap: 4px; }
 .cv-kind { font-size: 11px; padding: 1px 7px; border-radius: 999px; background: var(--line-soft); color: var(--ink-2); }
+.cv-biz { margin: 0 0 8px 28px; padding: 10px 12px; border-left: 3px solid #7C5CDB; background: var(--card); display: flex; flex-direction: column; gap: 8px; }
+.cv-biz-item { display: flex; gap: 8px; align-items: flex-start; }
+.cv-biz-item pre { margin: 4px 0 0; }
 .cv-log .cv-res { padding: 7px 0; border-bottom: 1px solid var(--line-soft); }
 .cv-log .cv-res:last-child { border-bottom: 0; }

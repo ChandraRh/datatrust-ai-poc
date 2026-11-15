@@ -111,6 +111,12 @@ def incident_card(inc: dict, owners: list, related: list | None = None) -> dict:
                                                + "<br>".join(f"{ICON.get(r['severity'], '⚪')} {r['title']}" for r in related[:8])}})
     if inc.get("due"):
         rows.append({"decoratedText": {"topLabel": "Time to fix", "text": f"{inc['due']['target_h']:g} h for {sev.lower()} incidents"}})
+    plain = _plain_adf_error(inc)
+    if plain:
+        rows.append({"textParagraph": {"text": f"<b>In plain words (AI):</b> {plain}"[:900]}})
+    note = _triage_note(inc)
+    if note:
+        rows.append({"textParagraph": {"text": note[:1200]}})
     if inc.get("scope_name"):
         rows.append({"decoratedText": {"topLabel": "Source", "text": str(inc["scope_name"])}})
     if inc.get("business_date"):
@@ -161,6 +167,46 @@ def _ensure(conn):
     conn.execute("ALTER TABLE app.alert_log ADD COLUMN IF NOT EXISTS overdue_alerted_at TIMESTAMP")   # the one time-to-fix reminder
 
 
+TRIAGE_PER_ROUND = 2                                     # AI triage notes per alert round (each is one model request)
+_triage_budget = {"left": TRIAGE_PER_ROUND}
+
+
+def _triage_note(inc: dict) -> str | None:
+    """A new CRITICAL incident's card gets the AI root cause (ai.explain: likely cause + what to check first), from the
+    same evidence as Investigate, so Investigate later shows the saved answer without a second request."""
+    if inc.get("severity") != "CRITICAL" or _triage_budget["left"] <= 0:
+        return None
+    try:
+        import ai
+        _triage_budget["left"] -= 1
+        a = ai.explain(inc["id"], inc.get("scope"), include_rows=False)    # automatic: no rows of the data go to the model
+    except Exception:                                       # noqa: BLE001  no note rather than no alert
+        return None
+    if not a.get("available") or not (a.get("headline") or a.get("root_cause")):
+        return None
+    steps = "".join(f"<br>{n}. {s}" for n, s in enumerate((a.get("fix_steps") or [])[:2], 1))
+    return (f"<b>Likely cause (AI, {a.get('confidence') or '?'} confidence):</b> {a.get('headline') or a.get('root_cause')}"
+            + (f"<br><b>Check first:</b>{steps}" if steps else "")
+            + ("<br><i>Some numbers in this note could not be matched to the evidence; check them on Investigate.</i>" if a.get("unverified") else ""))
+
+
+def _plain_adf_error(inc: dict) -> str | None:
+    """For a High / Critical ADF failure that no rule recognised: the AI model's plain explanation (one request per
+    distinct error, cached). Anything that goes wrong just leaves it out of the card."""
+    cause = ((inc.get("adf") or {}).get("cause")) if str(inc.get("id", "")).startswith("adf:") else None
+    if not cause or inc.get("severity") not in ("HIGH", "CRITICAL"):
+        return None
+    try:
+        import ai
+        a = ai.explain_adf_error(cause, call=True)
+    except Exception:                                       # noqa: BLE001
+        return None
+    if not a or not a.get("plain"):
+        return None
+    return a["plain"] + (f" Likely cause: {a['likely_cause']}" if a.get("likely_cause") else "") + \
+        (f" First step: {a['fixes'][0]}" if a.get("fixes") else "")
+
+
 def _owners(inc):
     """The incident's owners (owners.py: explicit per source / table / pipeline, else the Connect guess)."""
     if inc.get("owners") is not None:
@@ -202,6 +248,7 @@ def check_once() -> dict:
 
         new = [i for iid, i in current.items() if iid not in known or known[iid]["resolved_alerted_at"]]
         batches = _batches(new)                                 # new incidents of one cause: one card for all of them
+        _triage_budget["left"] = TRIAGE_PER_ROUND               # AI triage notes for new Critical incidents, a few per round
         for batch in batches[:MAX_CARDS_PER_CHECK]:
             claimed = []
             for inc in batch:

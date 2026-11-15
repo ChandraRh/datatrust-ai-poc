@@ -741,5 +741,12 @@ def _investigate_adf(s: dict, inc: dict) -> dict:
                         "sub": f"{int(run['rows_skipped']):,} skipped" if run.get("rows_skipped") else ""},
                        {"label": "Pipeline health", "value": impact.get("health") or "–",
                         "tone": {"Healthy": None, "Needs attention": "warn"}.get(impact.get("health"), "bad")}]
+    error_ai = None
+    try:                                     # an error no rule knows: plain words by the AI model (High / Critical ask it once)
+        import ai
+        error_ai = ai.explain_adf_error(cause if isinstance(cause, dict) else None, call=inc["severity"] in ("HIGH", "CRITICAL"))
+    except Exception as e:                                            # noqa: BLE001  never break Investigate over it
+        print(f"!! ADF error explanation skipped: {type(e).__name__}: {e}")
     return {"found": True, "incident": inc, "checks": checks, "root_cause": root or i["summary"], "chain": chain, "sample": [],
-            "impact": impact, "run_id": i.get("run_id")}
+            "impact": impact, "run_id": i.get("run_id"), "error_ai": error_ai,
+            "error_raw": (cause or {}).get("message") if isinstance(cause, dict) else None}

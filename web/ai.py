@@ -29,14 +29,23 @@ def _evidence_pack(inv: dict) -> dict:
             "sample_rows": (inv.get("sample") or [])[:15], "sql_that_ran": inv.get("sql"),
             "downstream": {"label": imp.get("views_label") or "gold views", "objects": imp.get("gold_views") or []},
             "amount_at_risk": imp.get("amount_at_risk"), "standard_actions": imp.get("actions") or [],
+            "explained_by": inc.get("rejected_explained"),          # e.g. the rejected rows (and their rules) that account for a gap
             "adf_cause": (inc.get("adf") or {}).get("cause"), "adf_fixes": (inc.get("adf") or {}).get("fixes")}
 
 
-def explain(incident_id: str, scope: str | None = None, refresh: bool = False, cached_only: bool = False) -> dict:
+def _without_rows(ev: dict) -> dict:
+    """The evidence pack without sample rows: what an automatic note (no one pressed a button) may send to the model."""
+    return {**ev, "sample_rows": [], "sample_rows_note": "not sent: rows from the data are only shared when someone asks on Investigate"}
+
+
+def explain(incident_id: str, scope: str | None = None, refresh: bool = False, cached_only: bool = False,
+            include_rows: bool = True) -> dict:
+    """include_rows=False (automatic notes, e.g. the Google Chat triage note): the model never sees rows of the data."""
     inv = scopes.investigate(incident_id, scope)
     if not inv.get("found"):
         return {"available": False, "reason": "This incident is no longer open."}
-    ev = _evidence_pack(inv)
+    full = _evidence_pack(inv)
+    ev = full if include_rows else _without_rows(full)
     if llm.provider() == "none":
         return {"available": False, "reason": "No AI model is configured. Set LLM_PROVIDER (gemini, anthropic or ollama) in .env.",
                 "root_cause": inv.get("root_cause"), "fix_steps": ev["standard_actions"]}
@@ -44,10 +53,13 @@ def explain(incident_id: str, scope: str | None = None, refresh: bool = False, c
               "Return JSON: {\"headline\": one sentence, \"root_cause\": 2-4 sentences, \"confidence\": \"high\"|\"medium\"|\"low\", "
               "\"because\": [3-5 short bullets, each citing a fact from the evidence], \"fix_steps\": [3-6 concrete ordered steps], "
               "\"prevent\": [1-3 steps that stop it happening again], \"business_impact\": one sentence (what downstream shows wrong), "
-              "\"unknowns\": [what the evidence cannot tell, may be empty]}. Confidence is high only when the evidence checks confirm the cause.")
+              "\"unknowns\": [what the evidence cannot tell, may be empty]}. Confidence is high only when the evidence checks confirm the cause. "
+              "Be specific: the headline names the mechanism with the rule names, counts and dates from the evidence (e.g. which rule "
+              "rejected how many rows), not just the incident title. standard_actions are generic templates: adapt them to this "
+              "incident and leave out any that do not fit its evidence.")
     prompt = "Evidence (JSON):\n" + json.dumps(ev, default=str)[:24000]
     if cached_only and not refresh:                                   # pages show a saved answer without spending a model call
-        hit = llm.cached("explain", incident_id, ev)
+        hit = llm.cached("explain", incident_id, ev) or llm.cached("explain", incident_id, _without_rows(full))   # also the triage note
         return {"available": True, **hit} if hit else {"available": False, "not_generated": True}
     try:
         out = llm.grounded("explain", incident_id, ev, system, prompt, refresh=refresh)
@@ -148,6 +160,47 @@ def suggest_checks(connection_id: int, database: str | None, schema: str, table:
             continue                                                   # the model proposed something we cannot run: dropped
         out.append({**v, "why": i.get("why")})
     return {"profile": profile, "suggestions": out, "source": source}
+
+
+# ============================================================================ an ADF error the rules do not know, in plain words
+GENERIC_CAUSES = ("user_error", "transient_system")          # adf/diagnose.py's catch-alls: no rule recognised the error
+ADF_ERROR_SYSTEM = (
+    "You are DataTrust AI. Explain one Azure Data Factory activity error to a data engineer, in plain words. " + GROUND +
+    "Use only the error code, failure type, activity type and message given; values from the data are masked as <value>. "
+    "Return JSON {\"plain\": one or two sentences saying what went wrong, \"where\": one of \"source\", \"target\", "
+    "\"pipeline settings\", \"credentials\", \"network\", \"Azure\", \"likely_cause\": one sentence, "
+    "\"fixes\": [two to four concrete steps, most likely first], \"retry_helps\": true or false}. "
+    "If the message is too vague to tell, say so in likely_cause and make the first fix 'open the activity run in ADF Monitor'.")
+
+
+def mask_error(message: str) -> str:
+    """An ADF message without what changes from run to run or could be customer data: ids, times, e-mails, long numbers,
+    quoted values. Names of tables, columns and paths stay (they are what makes the explanation useful)."""
+    import re
+    m = re.sub(r"\b[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}\b", "<id>", message or "", flags=re.I)
+    m = re.sub(r"\b\d{4}-\d{2}-\d{2}[T ]\d{2}:\d{2}(?::\d{2}(?:\.\d+)?)?(?:Z|[+-]\d{2}:?\d{2})?", "<time>", m)
+    m = re.sub(r"[\w.+-]+@[\w-]+\.[\w.-]+", "<email>", m)
+    m = re.sub(r"(?i)(value|values|data)\s*(?:is|:|=)?\s*'[^']*'", r"\1 '<value>'", m)
+    m = re.sub(r"\b\d{6,}\b", "<number>", m)
+    return " ".join(m.split())[:1500]
+
+
+def explain_adf_error(cause: dict | None, call: bool = True) -> dict | None:
+    """Plain-words explanation of an ADF error that no rule recognised. One model request per distinct (masked) error,
+    cached; call=False only reads the cache. None when the rules already explain it, or nothing is available."""
+    if not cause or cause.get("cause_id") not in GENERIC_CAUSES or llm.provider() == "none":
+        return None
+    evidence = {"error_code": cause.get("error_code"), "failure_type": cause.get("failure_type"),
+                "activity_type": cause.get("activity_type"), "message": mask_error(cause.get("message") or "")}
+    if not evidence["message"] and not evidence["error_code"]:
+        return None
+    if not call:
+        return llm.cached("adf_error", cause["cause_id"], evidence)
+    try:
+        return llm.grounded("adf_error", cause["cause_id"], evidence, ADF_ERROR_SYSTEM,
+                            "ADF error (JSON):\n" + json.dumps(evidence, default=str))
+    except llm.Unavailable:
+        return llm.cached("adf_error", cause["cause_id"], evidence)
 
 
 # ============================================================================ a rule from plain English

@@ -792,6 +792,7 @@ async function renderInvestigate(id) {
         <small>Review checks below; unavailable data is not treated as a match.</small>
       </div>
     </div>
+    ${adfErrorCard(inv)}
     <div class="grid g-2">
       <div class="card">
         <div class="investigation-section-head"><div><h3>Evidence checks</h3><p class="small muted">Each check includes the data source used.</p></div>
@@ -1064,6 +1065,21 @@ async function renderVerify() {
     </div>`;
   gauge("gauge3", t.score);
   bindRecheck($("verifyBody"));
+}
+
+// An ADF error no rule recognised, in plain words (ai.explain_adf_error); the original message stays one click away
+function adfErrorCard(inv) {
+  const a = inv.error_ai;
+  if (!a || !a.plain) return "";
+  return `<div class="card ai-card adf-error-ai"><div class="ai-head"><span class="ai-badge">AI</span><b>What this ADF error means</b>
+      ${a.where ? `<span class="cv-kind">${esc(a.where)}</span>` : ""}<span class="grow"></span>
+      <span class="small muted">${esc(a.model || "")}${a.cached ? " · saved answer" : ""}</span></div>
+    <p>${esc(a.plain)}</p>
+    ${a.likely_cause ? `<p class="small"><b>Likely cause:</b> ${esc(a.likely_cause)}</p>` : ""}
+    ${(a.fixes || []).length ? `<h4>What to do</h4><ol>${a.fixes.map((f) => `<li>${esc(f)}</li>`).join("")}</ol>` : ""}
+    <p class="small muted">${a.retry_helps ? "Re-running is likely to help." : "Re-running alone is unlikely to help: fix the cause first."}
+      DataTrust's own rules did not recognise this error, so the AI model explained it from the error text (values from your data are masked).</p>
+    ${inv.error_raw ? `<details class="small"><summary>The original ADF message</summary><pre class="code small">${esc(inv.error_raw)}</pre></details>` : ""}</div>`;
 }
 
 // "Re-check now": run the incident's rule / read the factory / read the pipeline's results again, then say if it closed
