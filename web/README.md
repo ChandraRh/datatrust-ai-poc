@@ -161,6 +161,23 @@ freshness, volume, validity, uniqueness (duplicate rows, unique-key rules), sche
 Observe shows each subject's mark, the cap, the confidence and "Why not 100" (the points each problem costs).
 A new kind of source only has to produce signals; the formula does not change.
 
+### Owners (`web/owners.py`)
+Every incident shows its owner on Detect, Investigate (Contact owner) and in the Google Chat card. An admin sets one with
+**Set owner** on Detect: a person from the people directory (Connect) for **this table / pipeline** or for **the whole
+source** (`portal.ownership`, `/api/owners`, audited). The most specific owner wins; owners of one source never own another.
+Without an explicit owner, the old guess (Connect's "data they own" words matched against the incident text) is shown,
+marked "guessed from Connect".
+
+### Time to fix and grouping
+* **Time to fix** (Built-in checks → Time to fix, for every source): Critical 4 h, High 24 h, Medium 72 h, Low 168 h by
+  default, counted from when the incident first appeared. Detect shows "fix by …", "N h left" (under a quarter left) or
+  "overdue by …", and filters on **Overdue**. Google Chat sends **one** reminder in the incident's thread when it passes
+  its target, naming the owner (again only if it closes and reopens). The first time this runs, incidents that were
+  overdue already get one summary message instead of a reminder each.
+* **Grouping**: incidents of one source that share a cause (the same ADF run, the same table, the same business date)
+  show as one card on Detect, led by the most severe, folded open to each incident. New incidents of one cause go to
+  Google Chat as one card listing the related ones.
+
 ### Built-in check settings (Data quality → Built-in checks, `web/builtin.py`)
 Checks come from two places: **rules** (DQ Rule Studio, `monitor.checks`, any database) and **built-in checks** that
 DataTrust runs on its own for a kind of source: the POC pipeline (settlement per date, rows lost / rejected / duplicated,

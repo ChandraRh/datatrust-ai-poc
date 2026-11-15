@@ -544,11 +544,88 @@ function incidentRow(i) {
   const age = since(i.first_seen);
   const again = i.supersedes ? `<span class="chip grey" title="Continues ${esc(i.supersedes)}">also failed in an earlier run</span>` : "";
   return `<div class="incident"><span class="sev ${i.severity}">${i.severity}</span>
-    <div class="body"><div class="t">${esc(i.title)} ${appr} ${ack} ${again}</div><div class="small muted">${esc(i.summary)}${age ? ` · ${age}` : ""}</div></div>
+    <div class="body"><div class="t">${esc(i.title)} ${appr} ${ack} ${again} ${dueChip(i)}</div><div class="small muted">${esc(i.summary)}${age ? ` · ${age}` : ""}</div>
+      ${ownerLine(i)}<div class="owner-form" data-owner-form="${esc(i.id)}"></div></div>
     <div class="inc-acts">${i.acknowledged_by ? "" : `<button class="btn light" data-ack="${esc(i.id)}">Acknowledge</button>`}
-    <button class="btn light" data-contact="${esc(i.title + " — " + i.summary)}">Contact owner</button>
+    <button class="btn light" data-contact="${esc(i.title + " — " + i.summary)}" data-incident="${esc(i.id)}">Contact owner</button>
     ${recordsButton(i)}<button class="btn light" onclick="go('investigate','${esc(i.id)}')">Investigate</button></div></div>`;
 }
+// Time to fix (Built-in checks -> Time to fix): overdue in red, less than a quarter of the time left in amber
+const hrs = (h) => (Math.abs(h) < 48 ? `${Math.round(Math.abs(h))} h` : `${Math.round(Math.abs(h) / 24)} days`);
+function dueChip(i) {
+  const d = i.due;
+  if (!d) return "";
+  const at = String(d.due_at).slice(0, 16).replace("T", " ");
+  if (d.overdue) return `<span class="chip bad" title="Time to fix for ${esc(i.severity.toLowerCase())}: ${d.target_h} h (due ${esc(at)})">overdue by ${hrs(d.left_h)}</span>`;
+  if (d.left_h < d.target_h / 4) return `<span class="chip warn" title="Due ${esc(at)}">${hrs(d.left_h)} left to fix</span>`;
+  return `<span class="chip grey" title="Time to fix for ${esc(i.severity.toLowerCase())}: ${d.target_h} h">fix by ${esc(at)}</span>`;
+}
+
+// incidents that share a cause (scopes.attach_groups) shown as one card, led by the most severe; open it for each one
+function incidentGroup(members) {
+  const lead = members[0], g = lead.group;
+  const overdue = members.filter((m) => m.due && m.due.overdue).length;
+  return `<details class="inc-group"><summary><span class="sev ${lead.severity}">${lead.severity}</span>
+      <div class="body"><div class="t">${members.length} related incidents <span class="small muted">· ${esc(g.why)}</span>
+        ${overdue ? `<span class="chip bad">${overdue} overdue</span>` : ""}</div>
+        <div class="small muted">${esc(lead.title)}${members.length > 1 ? ` · and ${members.length - 1} more` : ""}</div>${ownerLine(lead, false)}</div>
+      <span class="inc-group-open small">Show all</span></summary>
+    <div class="inc-group-body">${members.map(incidentRow).join("")}</div></details>`;
+}
+function incidentList(filtered) {
+  const out = [], seen = new Set();
+  for (const i of filtered) {
+    const k = i.group && i.group.key;
+    if (k && seen.has(k)) continue;
+    const members = k ? filtered.filter((x) => x.group && x.group.key === k) : [i];
+    if (k) seen.add(k);
+    out.push(members.length > 1 ? incidentGroup(members) : incidentRow(i));
+  }
+  return out.join("");
+}
+
+// Owner of an incident (owners.py): set per source, or per table / pipeline; a Connect match without one set is a guess
+const isAdminUser = () => typeof est === "undefined" || !est.user || est.user.role === "admin";
+function ownerLine(i, withButton = true) {
+  const os = i.owners || [], guess = os.length && os.every((o) => o.guess);
+  const names = os.map((o) => `<b title="${esc(o.why)} · ${esc(o.email)}">${esc(o.name)}</b>`).join(", ");
+  const set = withButton && isAdminUser() ? ` <button class="btn-link" data-setowner="${esc(i.id)}">${os.length && !guess ? "Change" : "Set owner"}</button>` : "";
+  return `<div class="small owner-line">${os.length ? `Owner: ${names}${guess ? ` <span class="muted">(guessed from Connect)</span>` : ` <span class="muted">(${esc(os[0].why)})</span>`}`
+    : `<span class="muted">No owner yet.</span>`}${set}</div>`;
+}
+document.addEventListener("click", async (e) => {                // Set owner: pick a person, for this table / pipeline or the whole source
+  const b = e.target.closest("[data-setowner]");
+  if (!b) return;
+  const id = b.dataset.setowner, inc = (state.incidents.open || []).find((x) => x.id === id);
+  const box = document.querySelector(`[data-owner-form="${CSS.escape(id)}"]`);
+  if (!inc || !box) return;
+  if (box.innerHTML) { box.innerHTML = ""; return; }                // a second click closes it
+  let people = [];
+  try { people = await eapi("/people"); } catch (x) { toast(x.message); return; }
+  const scope = scopeOfIncident(id), tgt = inc.owner_target || {};
+  if (!people.length) {
+    box.innerHTML = `<p class="small">Nobody is in the people directory yet. <a href="#" data-goconnect>Add people in Connect</a>, then set the owner here.</p>`;
+    box.querySelector("[data-goconnect]").onclick = (ev) => { ev.preventDefault(); document.querySelector('#tabs [data-page="estate-people"]').click(); };
+    return;
+  }
+  box.innerHTML = `<div class="owner-pick">
+    <select data-op="person" aria-label="Owner">${people.map((p) => `<option value="${p.person_id}">${esc(p.name)}${p.team ? ` (${esc(p.team)})` : ""}</option>`).join("")}</select>
+    ${tgt.target ? `<label><input type="radio" name="ot-${esc(id)}" value="${esc(tgt.target)}" checked> this ${esc(tgt.kind)} <code>${esc(tgt.target)}</code></label>` : ""}
+    <label><input type="radio" name="ot-${esc(id)}" value="" ${tgt.target ? "" : "checked"}> the whole source</label>
+    <button class="btn btn-sm" data-op="save">Save</button> <button class="btn light btn-sm" data-op="cancel">Cancel</button></div>`;
+  box.querySelector('[data-op="cancel"]').onclick = () => (box.innerHTML = "");
+  box.querySelector('[data-op="save"]').onclick = async () => {
+    const target = (box.querySelector(`input[name="ot-${CSS.escape(id)}"]:checked`) || {}).value || "";
+    try {
+      await api("/api/owners", { method: "PUT", headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ scope, target, person_id: Number(box.querySelector('[data-op="person"]').value) }) });
+      toast("Owner saved");
+      state.version = null;
+      await checkVersion(true);
+      await loadCore(); go(state.page);
+    } catch (x) { toast(x.message); }
+  };
+});
 document.addEventListener("click", async (e) => {                // Acknowledge: "someone is on it" (needs a sign-in when sign-in is on)
   const b = e.target.closest("[data-ack]");
   if (!b) return;
@@ -584,9 +661,11 @@ function renderDetect() {
     { value: "HIGH", label: "High" },
     { value: "MEDIUM", label: "Medium" },
     { value: "LOW", label: "Low" },
+    { value: "OVERDUE", label: "Overdue" },
   ];
+  const isOverdue = (i) => !!(i.due && i.due.overdue);
   $("incidentSeveritySummary").innerHTML = severityOptions.map(({ value, label }) => {
-    const count = value ? open.filter((i) => i.severity === value).length : open.length;
+    const count = value === "OVERDUE" ? open.filter(isOverdue).length : value ? open.filter((i) => i.severity === value).length : open.length;
     return `<button type="button" class="incident-severity-filter" data-severity="${value}" aria-pressed="false" aria-label="${label}: ${count} open incident${count === 1 ? "" : "s"}">
       <span>${label}</span><strong>${count}</strong></button>`;
   }).join("");
@@ -604,7 +683,8 @@ function renderDetect() {
     });
     const query = state.incidentFilters.query.toLowerCase();
     const filtered = open.filter((i) => {
-      const matchesSeverity = !state.incidentFilters.severity || i.severity === state.incidentFilters.severity;
+      const f = state.incidentFilters.severity;
+      const matchesSeverity = !f || (f === "OVERDUE" ? isOverdue(i) : i.severity === f);
       const searchable = `${i.severity} ${i.title} ${i.summary} ${i.type}`.toLowerCase();
       return matchesSeverity && (!query || searchable.includes(query));
     });
@@ -615,7 +695,7 @@ function renderDetect() {
     $("incidentExport").title = `Download ${filtered.length} matching open incident${filtered.length === 1 ? "" : "s"} as CSV`;
     $("incidentExport").onclick = () => exportIncidents(filtered);
     $("incidentList").innerHTML = filtered.length
-      ? filtered.map(incidentRow).join("")
+      ? incidentList(filtered)
       : open.length
         ? `<div class="incident-empty"><p>No open incidents match these filters.</p><button class="btn light btn-sm" id="incidentNoMatchClear" type="button">Clear filters</button></div>`
         : "<p class='muted'>Nothing open.</p>";

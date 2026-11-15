@@ -27,6 +27,7 @@ import appdb
 SEVERITY = {"LOW": 0, "MEDIUM": 1, "HIGH": 2, "CRITICAL": 3}
 ICON = {"CRITICAL": "🔴", "HIGH": "🔴", "MEDIUM": "🟠", "LOW": "🔵"}
 BASELINE = "__baseline__"
+OVERDUE_BASELINE = "__overdue_baseline__"       # reminders switched on: what was overdue already is summed up once, not one by one
 MAX_CARDS_PER_CHECK = 5
 state = {"last_check": None, "last_error": None, "last_result": None, "running": False}
 
@@ -100,15 +101,24 @@ def _button(text, url):
     return {"text": text, "onClick": {"openLink": {"url": url}}}
 
 
-def incident_card(inc: dict, owners: list) -> dict:
+def incident_card(inc: dict, owners: list, related: list | None = None) -> dict:
+    """related: other new incidents of the same cause (same run / table / business date), listed on this one card."""
     sev = inc["severity"]
     rows = [{"textParagraph": {"text": inc["summary"][:900]}}]
+    if related:
+        why = (inc.get("group") or {}).get("why") or "same cause"
+        rows.append({"textParagraph": {"text": f"<b>{len(related)} related incident(s)</b> ({why}):<br>"
+                                               + "<br>".join(f"{ICON.get(r['severity'], '⚪')} {r['title']}" for r in related[:8])}})
+    if inc.get("due"):
+        rows.append({"decoratedText": {"topLabel": "Time to fix", "text": f"{inc['due']['target_h']:g} h for {sev.lower()} incidents"}})
     if inc.get("scope_name"):
         rows.append({"decoratedText": {"topLabel": "Source", "text": str(inc["scope_name"])}})
     if inc.get("business_date"):
         rows.append({"decoratedText": {"topLabel": "Business date", "text": str(inc["business_date"])}})
-    rows.append({"decoratedText": {"topLabel": "Owner", "text": ", ".join(f"{o['name']} ({o['email']})" for o in owners[:3])
-                                   if owners else "No owner recorded yet (add one on the Connect page)"}})
+    guess = owners and all(o.get("guess") for o in owners)
+    rows.append({"decoratedText": {"topLabel": "Owner" + (" (guessed from Connect)" if guess else ""),
+                                   "text": ", ".join(f"{o['name']} ({o['email']})" for o in owners[:3])
+                                   if owners else "No owner yet: set one with Set owner on the Detect page"}})
     rows.append({"buttonList": {"buttons": [_button("Open incident", f"{public_url()}/#investigate={quote(inc['id'])}"),
                                             _button("Impact & fix", f"{public_url()}/#impact={quote(inc['id'])}"),
                                             _button("Contact owner", f"{public_url()}/#estate-people")]}})
@@ -148,12 +158,16 @@ def _ensure(conn):
                         first_alerted_at    TIMESTAMP DEFAULT now(),
                         resolved_alerted_at TIMESTAMP,
                         last_error          TEXT)""")
+    conn.execute("ALTER TABLE app.alert_log ADD COLUMN IF NOT EXISTS overdue_alerted_at TIMESTAMP")   # the one time-to-fix reminder
 
 
 def _owners(inc):
+    """The incident's owners (owners.py: explicit per source / table / pipeline, else the Connect guess)."""
+    if inc.get("owners") is not None:
+        return inc["owners"]
     try:
-        from estate import store
-        return store.match_people(f"{inc['title']} {inc['summary']}")
+        import owners
+        return owners.for_incident(inc, inc.get("scope") or "")
     except Exception:
         return []
 
@@ -187,34 +201,40 @@ def check_once() -> dict:
             return {"configured": True, "baseline": True, "open": len(current), "errors": errors}
 
         new = [i for iid, i in current.items() if iid not in known or known[iid]["resolved_alerted_at"]]
-        for inc in new[:MAX_CARDS_PER_CHECK]:
-            reopened = inc["id"] in known
-            claimed = conn.execute("""INSERT INTO app.alert_log (incident_id, severity, title) VALUES (%s, %s, %s)
-                                      ON CONFLICT (incident_id) DO UPDATE SET resolved_alerted_at = NULL, first_alerted_at = now()
-                                      WHERE app.alert_log.resolved_alerted_at IS NOT NULL
-                                      RETURNING incident_id""", (inc["id"], inc["severity"], inc["title"])).fetchone()
+        batches = _batches(new)                                 # new incidents of one cause: one card for all of them
+        for batch in batches[:MAX_CARDS_PER_CHECK]:
+            claimed = []
+            for inc in batch:
+                if conn.execute("""INSERT INTO app.alert_log (incident_id, severity, title) VALUES (%s, %s, %s)
+                                   ON CONFLICT (incident_id) DO UPDATE SET resolved_alerted_at = NULL, overdue_alerted_at = NULL,
+                                       first_alerted_at = now()
+                                   WHERE app.alert_log.resolved_alerted_at IS NOT NULL
+                                   RETURNING incident_id""", (inc["id"], inc["severity"], inc["title"])).fetchone():
+                    claimed.append(inc)
             conn.commit()
             if not claimed:
-                continue                                        # another instance sent it
+                continue                                        # another instance sent them
+            lead = claimed[0]
             try:
-                card = incident_card(inc, _owners(inc))
-                if reopened:
+                card = incident_card(lead, _owners(lead), claimed[1:])
+                if lead["id"] in known:
                     card["cardsV2"][0]["card"]["header"]["title"] += " · reopened"
-                send(card, thread=inc["id"])
-                sent_new.append(inc["id"])
-            except Exception as e:                              # not sent: release the claim, retry next round
-                conn.execute("DELETE FROM app.alert_log WHERE incident_id = %s AND resolved_alerted_at IS NULL", (inc["id"],))
+                send(card, thread=lead["id"])
+                sent_new += [c["id"] for c in claimed]
+            except Exception as e:                              # not sent: release the claims, retry next round
+                for c in claimed:
+                    conn.execute("DELETE FROM app.alert_log WHERE incident_id = %s AND resolved_alerted_at IS NULL", (c["id"],))
                 conn.commit()
-                errors.append(f"{inc['id']}: {e}")
-        if len(new) > MAX_CARDS_PER_CHECK:
-            rest = new[MAX_CARDS_PER_CHECK:]
+                errors.append(f"{lead['id']}: {e}")
+        if len(batches) > MAX_CARDS_PER_CHECK:
+            rest = [i for b in batches[MAX_CARDS_PER_CHECK:] for i in b]
             try:
                 send(text_message(f"…and {len(rest)} more new incident(s): " + "; ".join(i["title"] for i in rest[:10]) + f" ({public_url()})"))
             except Exception as e:
                 errors.append(str(e))
 
         for iid, row in known.items():
-            if iid == BASELINE or iid.startswith("BRIEFING:") or row["resolved_alerted_at"] or iid in current:
+            if iid in (BASELINE, OVERDUE_BASELINE) or iid.startswith("BRIEFING:") or row["resolved_alerted_at"] or iid in current:
                 continue
             claimed = conn.execute("""UPDATE app.alert_log SET resolved_alerted_at = now()
                                       WHERE incident_id = %s AND resolved_alerted_at IS NULL RETURNING incident_id""", (iid,)).fetchone()
@@ -228,7 +248,69 @@ def check_once() -> dict:
                 conn.execute("UPDATE app.alert_log SET resolved_alerted_at = NULL WHERE incident_id = %s", (iid,))
                 conn.commit()
                 errors.append(f"{iid}: {e}")
-    return {"configured": True, "new": sent_new, "resolved": sent_resolved, "open": len(current), "errors": errors}
+
+        sent_overdue = _overdue_reminders(conn, current, known, errors)
+    return {"configured": True, "new": sent_new, "resolved": sent_resolved, "overdue": sent_overdue, "open": len(current),
+            "errors": errors}
+
+
+def _batches(new: list) -> list:
+    """New incidents grouped by cause (scopes.attach_groups), in the order they came; a lone incident is its own batch."""
+    out, by_key = [], {}
+    for inc in new:
+        key = (inc.get("scope"), (inc.get("group") or {}).get("key"))
+        if key[1] and key in by_key:
+            by_key[key].append(inc)
+        else:
+            out.append([inc])
+            if key[1]:
+                by_key[key] = out[-1]
+    return out
+
+
+def overdue_text(inc: dict, owners: list) -> str:
+    d = inc["due"]
+    who = ", ".join(o["name"] for o in owners[:3]) if owners else "nobody yet (Set owner on Detect)"
+    return (f"⏰ *Overdue:* {inc['title']}\nOpen {d['open_h']:g} h; the time to fix for {inc['severity'].lower()} incidents is "
+            f"{d['target_h']:g} h. Owner: {who}. {public_url()}/#investigate={quote(inc['id'])}")
+
+
+def _overdue_reminders(conn, current: dict, known: dict, errors: list) -> list:
+    """One reminder per incident when it passes its time to fix (never repeated; again only if it closes and reopens).
+    The first time this runs, incidents that were overdue already get one summary instead of a reminder each."""
+    overdue = {iid: i for iid, i in current.items() if (i.get("due") or {}).get("overdue")}
+    if OVERDUE_BASELINE not in known:
+        if conn.execute("INSERT INTO app.alert_log (incident_id, title) VALUES (%s, 'overdue reminders switched on') "
+                        "ON CONFLICT DO NOTHING RETURNING incident_id", (OVERDUE_BASELINE,)).fetchone():
+            for iid in overdue:
+                conn.execute("UPDATE app.alert_log SET overdue_alerted_at = now() WHERE incident_id = %s", (iid,))
+            conn.commit()
+            if overdue:
+                lines = "\n".join(f"{ICON.get(i['severity'], '⚪')} {i['title']} (open {i['due']['open_h']:g} h, target {i['due']['target_h']:g} h)"
+                                  for i in list(overdue.values())[:15])
+                try:
+                    send(text_message(f"⏰ *Time-to-fix reminders are on.* {len(overdue)} incident(s) are already past their "
+                                      f"target:\n{lines}\nFrom now on each one that passes its target gets one reminder. {public_url()}"))
+                except Exception as e:
+                    errors.append(str(e))
+        return []
+    sent = []
+    for iid, inc in list(overdue.items())[:MAX_CARDS_PER_CHECK]:
+        row = known.get(iid)
+        if not row or row.get("overdue_alerted_at") or row.get("resolved_alerted_at"):
+            continue                                            # not alerted yet (comes as new first), or reminded already
+        if not conn.execute("""UPDATE app.alert_log SET overdue_alerted_at = now()
+                               WHERE incident_id = %s AND overdue_alerted_at IS NULL RETURNING incident_id""", (iid,)).fetchone():
+            continue
+        conn.commit()
+        try:
+            send(text_message(overdue_text(inc, _owners(inc))), thread=iid)
+            sent.append(iid)
+        except Exception as e:                                  # not sent: try again next round
+            conn.execute("UPDATE app.alert_log SET overdue_alerted_at = NULL WHERE incident_id = %s", (iid,))
+            conn.commit()
+            errors.append(f"{iid}: {e}")
+    return sent
 
 
 def send_test() -> None:
@@ -242,7 +324,8 @@ def status() -> dict:
     recent = []
     if appdb.table_exists("app.alert_log"):
         recent = appdb.rows("""SELECT incident_id, severity, title, first_alerted_at, resolved_alerted_at FROM app.alert_log
-                            WHERE incident_id <> %(b)s ORDER BY first_alerted_at DESC LIMIT 20""", {"b": BASELINE})
+                            WHERE incident_id NOT IN (%(b)s, %(o)s) ORDER BY first_alerted_at DESC LIMIT 20""",
+                            {"b": BASELINE, "o": OVERDUE_BASELINE})
     return {"configured": bool(webhook()), "problem": problem(), "running": state["running"], "space": masked(), "min_severity": min_severity(),
             "interval_seconds": interval(), "public_url": public_url(), "last_check": state["last_check"],
             "last_error": state["last_error"], "last_result": state["last_result"], "recent": recent}

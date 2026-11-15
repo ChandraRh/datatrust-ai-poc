@@ -27,6 +27,13 @@ def _p(name, label, default, lo, hi, unit="", hint=""):
 
 # key -> definition. "severity" = how serious a failure is (and so: Critical caps the score at 74, High at 89)
 CHECKS = {
+    # ---------------------------------------------------------------- every source
+    "all.time_to_fix": {"kind": "all", "subject": "", "label": "Time to fix", "severity": "MEDIUM", "no_severity": True,
+                        "what": "How long an incident may stay open, by its severity, counted from when it first appeared. Past "
+                                "it, Detect shows it as overdue and Google Chat sends one reminder in the incident's thread, "
+                                "naming its owner. Switched off: no targets, no reminders.",
+                        "params": [_p("critical_h", "Critical", 4, 1, 720, "h"), _p("high_h", "High", 24, 1, 720, "h"),
+                                   _p("medium_h", "Medium", 72, 1, 2160, "h"), _p("low_h", "Low", 168, 1, 4320, "h")]},
     # ---------------------------------------------------------------- POC pipeline
     "poc.freshness": {"kind": "poc", "subject": "freshness", "label": "Pipeline ran in time", "severity": "HIGH",
                       "what": "A successful pipeline run within the last N hours.",
@@ -215,8 +222,6 @@ def overview(scope: Optional[str]) -> dict:
     s = scopes.resolve(scope)
     kind = "adf" if s["kind"] == "adf" else "poc" if s["poc"] else None
     out = {"scope": s, "kind": kind, "severities": SEVERITIES, "checks": [], "pipelines": []}
-    if not kind:
-        return out
     saved = _load()
     pipelines = []
     if kind == "adf":
@@ -224,11 +229,12 @@ def overview(scope: Optional[str]) -> dict:
         pipelines = sorted(set(insights._definitions(s["id"])["pipeline"]) | set(insights._recent_runs(s["id"])))
         out["pipelines"] = pipelines
     for key, d in CHECKS.items():
-        if d["kind"] != kind:
+        if d["kind"] != kind and d["kind"] != "all":              # "all": settings for every source (time to fix)
             continue
         base = saved.get((key, ""))
         row = {"key": key, "label": d["label"], "what": d["what"], "subject": d["subject"], "params": d["params"],
                "caps": d.get("caps", True),                       # False: the severity only weighs how much it counts
+               "no_severity": d.get("no_severity", False), "everywhere": d["kind"] == "all",
                "default": defaults(key), "value": setting(key), "changed": bool(base),
                "changed_by": base and base.get("updated_by"), "changed_at": base and base.get("updated_at"), "overrides": []}
         for p in pipelines:

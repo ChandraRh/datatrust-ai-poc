@@ -194,8 +194,13 @@
     place();
     const toConnect = () => { closePop(); document.querySelector('#tabs button[data-page="estate-people"]').click(); };
     try {
-      const r = await fetch("/api/estate/people/match", { method: "POST", credentials: "same-origin", headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ text: context }) });
+      // an incident with owners set (per source / table / pipeline) shows them; otherwise guess from the words, as before
+      const inc = anchor.dataset.incident && typeof state !== "undefined" && state.incidents
+        ? (state.incidents.open || []).find((x) => x.id === anchor.dataset.incident) : null;
+      const set = inc && (inc.owners || []).filter((o) => !o.guess);
+      const r = set && set.length ? { status: 200, json: async () => set.map((o) => ({ ...o, matched: [o.why.replace(/^owns /, "")] })) }
+        : await fetch("/api/estate/people/match", { method: "POST", credentials: "same-origin", headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ text: context }) });
       if (!pop) return;
       if (r.status === 401) {
         pop.innerHTML = `<p class="small">Log in to the portal to see who owns this.</p><button class="btn btn-sm" id="cpGo">Open Connect</button>`;

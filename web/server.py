@@ -96,6 +96,12 @@ try:                                                    # Azure Data Factory con
 except Exception as e:
     print(f"!! Azure Data Factory connector not ready: {e}")
 
+try:                                                    # who owns which source / table / pipeline (owners.py)
+    import owners
+    owners.ensure_tables()
+except Exception as e:
+    print(f"!! Owners not ready (incidents fall back to the Connect guess): {e}")
+
 try:                                                    # Built-in check settings (Data quality -> Built-in checks)
     import builtin, builtin_routes
     app.include_router(builtin_routes.router)
@@ -218,6 +224,35 @@ def quality_rules(scope: Optional[str] = None):
 @app.post("/api/incidents/{incident_id}/ack")
 def acknowledge(incident_id: str, user: dict = Depends(estate_routes.current_user)):
     _scoped(scopes.acknowledge, incident_id, user["username"])
+    return {"ok": True}
+
+
+class Owner(BaseModel):
+    scope: str
+    target: str = ""
+    person_id: int
+
+
+@app.get("/api/owners")
+def owners_list(scope: str, user: dict = Depends(estate_routes.current_user)):
+    """Who owns this source, and which of its tables / pipelines."""
+    import owners
+    return owners.list_for(scope)
+
+
+@app.put("/api/owners")
+def owners_set(body: Owner, user: dict = Depends(estate_routes.admin_user)):
+    import owners
+    _scoped(owners.set_owner, body.scope, body.target, body.person_id, user["username"])
+    estate_store.audit(user["username"], "OWNER_SET", f"{body.scope} {body.target or '(whole source)'}", f"person {body.person_id}")
+    return {"ok": True}
+
+
+@app.delete("/api/owners")
+def owners_remove(scope: str, person_id: int, target: str = "", user: dict = Depends(estate_routes.admin_user)):
+    import owners
+    owners.remove_owner(scope, target, person_id)
+    estate_store.audit(user["username"], "OWNER_REMOVED", f"{scope} {target or '(whole source)'}", f"person {person_id}")
     return {"ok": True}
 
 

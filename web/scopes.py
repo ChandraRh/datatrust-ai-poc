@@ -170,9 +170,74 @@ def incidents(scope: str | None) -> dict:
         st = state.get(i["id"]) or {}
         i["first_seen"], i["acknowledged_by"], i["acknowledged_at"] = st.get("first_seen"), st.get("acknowledged_by"), st.get("acknowledged_at")
         i["supersedes"] = st.get("supersedes")
-    order = {"CRITICAL": 0, "HIGH": 1, "MEDIUM": 2, "LOW": 3}
-    found.sort(key=lambda i: (order.get(i["severity"], 4), i["id"]))
+    _attach_owners(found, s["key"])
+    attach_due(found)
+    found.sort(key=lambda i: (SEV_ORDER.get(i["severity"], 4), i["id"]))
+    attach_groups(found)
     return {"scope": s, "open": found, "resolved": _resolved(s["key"], {i["id"] for i in found})}
+
+
+SEV_ORDER = {"CRITICAL": 0, "HIGH": 1, "MEDIUM": 2, "LOW": 3}
+DUE_PARAM = {"CRITICAL": "critical_h", "HIGH": "high_h", "MEDIUM": "medium_h", "LOW": "low_h"}
+
+
+def attach_due(found: list, now: datetime | None = None) -> None:
+    """Time to fix (Built-in checks -> Time to fix): by severity, counted from when the incident first appeared."""
+    import builtin
+    cfg = builtin.setting("all.time_to_fix")
+    now = now or datetime.now(timezone.utc)
+    for i in found:
+        i["due"] = None
+        if not cfg["enabled"] or not i.get("first_seen") or i.get("severity") not in DUE_PARAM:
+            continue
+        first = datetime.fromisoformat(str(i["first_seen"]))
+        first = first if first.tzinfo else first.replace(tzinfo=timezone.utc)
+        hours = cfg[DUE_PARAM[i["severity"]]]
+        due_at = first + timedelta(hours=hours)
+        left = (due_at - now).total_seconds() / 3600
+        i["due"] = {"target_h": hours, "due_at": due_at.isoformat(), "left_h": round(left, 1), "overdue": left < 0,
+                    "open_h": round((now - first).total_seconds() / 3600, 1)}
+
+
+def group_of(i: dict) -> tuple[str, str] | None:
+    """(key, why) of the incidents that likely share one cause: the same factory run, the same table, the same business date."""
+    if str(i.get("id", "")).startswith("adf:"):
+        a = i.get("adf") or {}
+        if a.get("run_id") and a.get("pipeline"):
+            return f"run:{a['pipeline']}:{a['run_id']}", f"same run of {a['pipeline']}"
+        return None
+    m = i.get("metrics") or {}
+    t = m.get("target")
+    if t and re.match(r"^[\w$#@]+\.[\w$#@]+$", str(t)):
+        return f"table:{t}", f"same table {t}"
+    if i.get("business_date"):
+        return f"date:{i['business_date']}", f"same business date {i['business_date']}"
+    return None
+
+
+def attach_groups(found: list) -> None:
+    """Incidents of one source that share a cause get the same 'group' (only when there are two or more); the most severe
+    one (the list is sorted by severity) leads it."""
+    by = {}
+    for i in found:
+        g = group_of(i)
+        if g:
+            by.setdefault(g[0], (g[1], []))[1].append(i)
+    for i in found:
+        i["group"] = None
+    for key, (why, members) in by.items():
+        if len(members) < 2:
+            continue
+        for i in members:
+            i["group"] = {"key": key, "why": why, "size": len(members), "lead": members[0]["id"]}
+
+
+def _attach_owners(found: list, scope_key: str) -> None:
+    try:
+        import owners
+        owners.attach(found, scope_key)
+    except Exception as e:                                       # noqa: BLE001  owners never break the incident list
+        print(f"!! owners not attached: {type(e).__name__}: {e}")
 
 
 def approve(incident_id: str, title: str, actions: list, note: str, by: str) -> dict:
@@ -237,6 +302,13 @@ def all_incidents() -> list:
         try:
             found = _incidents(s)
             _track(s, found)                                          # so a resolved alert can say why
+            _attach_owners(found, s["key"])                           # the alert card names the owner
+            state = _state(s["key"])
+            for i in found:
+                i["first_seen"] = (state.get(i["id"]) or {}).get("first_seen")
+            attach_due(found)                                         # an overdue incident gets one reminder
+            found.sort(key=lambda i: (SEV_ORDER.get(i["severity"], 4), i["id"]))
+            attach_groups(found)                                      # new incidents of one cause go out as one card
             for i in found:
                 out.append({**i, "scope": s["key"], "scope_name": s["name"]})
         except Exception:                                             # noqa: BLE001  one unreachable source must not stop alerts

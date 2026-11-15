@@ -29,22 +29,23 @@
     const id = `${c.key}|${pipeline}`;
     return `<div class="bi-form" data-form="${esc(id)}">
       <label class="bi-on"><input type="checkbox" data-f="enabled" ${v.enabled ? "checked" : ""} ${ro}> On</label>
-      <label>Severity <select data-f="severity" ${ro}>${sevs.map((s) => `<option value="${s}" ${s === v.severity ? "selected" : ""}>${s[0] + s.slice(1).toLowerCase()}</option>`).join("")}</select></label>
+      ${c.no_severity ? `<input type="hidden" data-f="severity" value="${esc(v.severity)}">`
+        : `<label>Severity <select data-f="severity" ${ro}>${sevs.map((s) => `<option value="${s}" ${s === v.severity ? "selected" : ""}>${s[0] + s.slice(1).toLowerCase()}</option>`).join("")}</select></label>`}
       ${c.params.map((p) => `<label title="${esc(p.hint || "")}">${esc(p.label)} <input type="number" data-param="${esc(p.name)}" value="${esc(v[p.name])}"
           min="${p.min}" max="${p.max}" step="1" ${ro}>${p.unit ? ` <span class="small muted">${esc(p.unit)}</span>` : ""}${p.hint ? ` <span class="small muted">(${esc(p.hint)})</span>` : ""}</label>`).join("")}
       ${isAdmin() ? `<button class="btn btn-sm" data-save="${esc(id)}" disabled>Save</button>` : ""}
-      <span class="small muted bi-sev" data-caps="${c.caps ? 1 : 0}">${esc(sevHelp(c.caps, v.severity))}</span></div>`;
+      ${c.no_severity ? "" : `<span class="small muted bi-sev" data-caps="${c.caps ? 1 : 0}">${esc(sevHelp(c.caps, v.severity))}</span>`}</div>`;
   }
 
   function card(c, d) {
     const changed = c.changed ? `<span class="small muted">Changed by ${esc(c.changed_by || "?")} ${esc(when(c.changed_at))}
         ${isAdmin() ? ` · <a href="#" data-reset="${esc(c.key)}|">Back to default</a> (${esc(valueText(c, c.default))})` : ""}</span>`
       : `<span class="small muted">Default</span>`;
-    const head = `<div class="bi-head"><b>${esc(c.label)}</b><span class="cv-kind">${esc(SUBJECT[c.subject] || c.subject)}</span>
+    const head = `<div class="bi-head"><b>${esc(c.label)}</b><span class="cv-kind">${esc(c.everywhere ? "Every source" : SUBJECT[c.subject] || c.subject)}</span>
         ${c.value.enabled ? "" : `<span class="chip grey">Off</span>`}<span class="grow"></span>${changed}</div>
       <p class="small muted">${esc(c.what)}</p>`;
     let own = "";
-    if (d.kind === "adf") {
+    if (d.kind === "adf" && !c.everywhere) {
       const taken = new Set(c.overrides.map((o) => o.pipeline));
       const free = d.pipelines.filter((p) => !taken.has(p));
       const adding = V.adding[c.key];
@@ -57,7 +58,7 @@
               ${free.map((p) => `<option>${esc(p)}</option>`).join("")}</select></label>` : ""}</div>`;
     }
     return `<div class="card bi-card" data-key="${esc(c.key)}">${head}
-      <div class="small"><b>${d.kind === "adf" ? "All pipelines" : "Setting"}</b></div>${form(c, c.value, "", d.severities)}${own}</div>`;
+      <div class="small"><b>${c.everywhere ? "All sources" : d.kind === "adf" ? "All pipelines" : "Setting"}</b></div>${form(c, c.value, "", d.severities)}${own}</div>`;
   }
 
   async function page() {
@@ -73,8 +74,8 @@
     if (!d.kind) {
       return { html: note + `<div class="card"><p>This database has <b>no built-in checks</b>: DataTrust cannot see a pipeline here, only its tables.
         Everything it checks on this source is a <b>rule</b>, and rules are set in DQ Rule Studio.</p>
-        <button class="btn btn-sm" id="biToRules">Open DQ Rule Studio</button></div>`,
-        bind() { const b = $e("biToRules"); if (b) b.onclick = () => document.querySelector('#tabs [data-page="estate-dq-rules"]').click(); } };
+        <button class="btn btn-sm" id="biToRules">Open DQ Rule Studio</button></div>` + d.checks.map((c) => card(c, d)).join(""),
+        bind() { const b = $e("biToRules"); if (b) b.onclick = () => document.querySelector('#tabs [data-page="estate-dq-rules"]').click(); bind(); } };
     }
     const intro = `<div class="card small"><p>These checks run on their own; you do not add them. Here you decide <b>how serious</b> each one is
       (Critical caps the trust score at 74, High at 89), its <b>limits</b>, and whether it runs at all. A change applies to Detect and the trust
