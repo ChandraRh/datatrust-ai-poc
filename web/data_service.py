@@ -164,6 +164,53 @@ def latest_batch(layer: str = "BRONZE") -> dict:
 
 
 # ============================================================================ pipeline status
+LAYERS = ("BRONZE", "SILVER", "GOLD")
+
+
+def run_state(layers: list, usual_minutes: list, cfg: dict, now: datetime | None = None) -> dict:
+    """Where the latest batch stands. The pipeline writes a layer's row only when that layer ends, so a batch with Bronze
+    but no Gold (and no failed layer) is still running, or stopped halfway without saying so.
+        complete  every layer succeeded          ended  a layer failed / was skipped / cancelled (it says so itself)
+        running   Bronze written, Gold not yet   stuck  running for longer than factor x the usual run time (cfg)"""
+    if not layers:
+        return {"state": "none", "missing": list(LAYERS)}
+    have = {l["layer"]: l["status"] for l in layers}
+    missing = [x for x in LAYERS if x not in have]
+    started = min((_dt(l["started_at"]) for l in layers if l.get("started_at")), default=None)
+    now = now or datetime.now()                                   # the pipeline writes local times (datetime.now())
+    minutes = round((now - started).total_seconds() / 60, 1) if started else None
+    usual = sorted(usual_minutes)[len(usual_minutes) // 2] if usual_minutes else None
+    limit = max(cfg["factor"] * usual, cfg["min_minutes"]) if usual else max(cfg["min_minutes"], 60)
+    out = {"missing": missing, "started_at": started.isoformat(sep=" ") if started else None, "minutes": minutes,
+           "usual_minutes": round(usual, 1) if usual else None, "limit_minutes": round(limit, 1), "check_on": cfg["enabled"]}
+    if any(s != "SUCCESS" for s in have.values()):
+        return {**out, "state": "ended"}
+    if not missing:
+        return {**out, "state": "complete"}
+    stuck = cfg["enabled"] and minutes is not None and minutes > limit
+    return {**out, "state": "stuck" if stuck else "running"}
+
+
+def stuck_text(batch_id, run: dict) -> str:
+    done = [x for x in LAYERS if x not in run["missing"]]
+    usual = f"a run usually takes {run['usual_minutes']:g} min" if run.get("usual_minutes") else "no earlier run to compare with"
+    return (f"Batch {batch_id} stopped after {', '.join(done) or 'starting'}: {' and '.join(run['missing'])} never finished "
+            f"({run['minutes']:g} min since it started; {usual}, stuck after {run['limit_minutes']:g} min)")
+
+
+def _stuck_incident(batch: dict, run: dict, cfg: dict) -> dict:
+    return {"id": f"RUN-{batch['batch_id']}-INCOMPLETE", "severity": cfg["severity"], "type": "PIPELINE_INCOMPLETE",
+            "title": f"Batch {batch['batch_id']} is stuck: {' and '.join(run['missing'])} never finished",
+            "summary": stuck_text(batch["batch_id"], run) + ". The pipeline writes a layer's log row only when the layer ends, "
+                       "so the process probably stopped (crash, killed, machine off) or is hanging. Reports still show the "
+                       "previous complete run.",
+            "metrics": {**run, "batch_id": batch["batch_id"]}, "business_date": batch.get("business_date")}
+
+
+def _dt(v) -> datetime:
+    return v if isinstance(v, datetime) else datetime.fromisoformat(str(v))
+
+
 def pipeline_status() -> dict:
     bronze = latest_batch("BRONZE")
     batch_id = bronze.get("batch_id")
@@ -180,7 +227,11 @@ def pipeline_status() -> dict:
                      FROM audit.error_log ORDER BY error_id DESC LIMIT 50""")
     last_success = one("""SELECT MAX(ended_at) AS t FROM audit.batch_control
                           WHERE layer = 'GOLD' AND status = 'SUCCESS'""").get("t")
-    return {"batch": bronze, "layers": layers, "steps": steps, "errors": errors, "last_success": last_success,
+    usual = rows("""SELECT EXTRACT(EPOCH FROM MAX(ended_at) - MIN(started_at)) / 60 AS minutes FROM audit.batch_control
+                    GROUP BY batch_id HAVING bool_or(layer = 'GOLD' AND status = 'SUCCESS')
+                    ORDER BY MAX(ended_at) DESC LIMIT 10""")
+    run = run_state(layers, [float(u["minutes"]) for u in usual if u["minutes"] is not None], _setting("poc.incomplete"))
+    return {"batch": bronze, "layers": layers, "run": run, "steps": steps, "errors": errors, "last_success": last_success,
             "history": rows("""SELECT batch_id, COALESCE(MAX(business_date)::text, 'ALL DATES') AS business_date,
                                       MAX(load_mode) AS load_mode,
                                       MAX(CASE WHEN layer='BRONZE' THEN status END) AS bronze,
@@ -359,6 +410,9 @@ def incidents() -> list:
                 "severity": _layer_severity(layer["status"], cfg["poc.layers"]), "type": "PIPELINE_FAILURE",
                 "title": f"{layer['layer']} layer {layer['status']} in batch {status['batch']['batch_id']}",
                 "summary": detail or "", "metrics": layer, "business_date": status["batch"].get("business_date")})
+    run = status.get("run") or {}
+    if run.get("state") == "stuck":                                  # started, but its later layers never finished
+        found.append(_stuck_incident(status["batch"], run, _setting("poc.incomplete")))
 
     # 4. breaking schema changes on bronze / silver / gold (schema-change guard, needs change tracking)
     try:
@@ -571,6 +625,9 @@ def trust_signals() -> tuple[list, dict]:
     for l in (status["layers"] if cfg["poc.layers"]["enabled"] else []):   # the latest run, layer by layer (same severities as Detect)
         sig.append(trust.signal("runs", 1 if l["status"] == "SUCCESS" else 0, _layer_severity(l["status"], cfg["poc.layers"]),
                                 f"latest run: {l['layer']} {l['status']}"))
+    run = status.get("run") or {}
+    if run.get("state") == "stuck":                              # the missing layers count as failing only once it is stuck
+        sig.append(trust.signal("runs", 0, cfg["poc.incomplete"]["severity"], stuck_text(status["batch"].get("batch_id"), run)))
     fr = cfg["poc.freshness"]
     if fr["enabled"]:
         stale = hours_old is None or hours_old > fr["hours"]

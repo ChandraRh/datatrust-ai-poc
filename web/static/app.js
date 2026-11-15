@@ -397,6 +397,15 @@ function renderTrustBreakdown(t, extra = "") {
        is never averaged away. Confidence says how much of the source is measured; it is shown beside the score, not mixed into it.</p></details>`;
 }
 
+// "Last run" on Observe (POC): a batch with Bronze but no Gold is running, or stuck once it takes far longer than usual
+function lastRunKpi(p) {
+  const r = p.run || {};
+  if (r.state === "running") return ["Last run", "RUNNING", "warn"];
+  if (r.state === "stuck") return ["Last run", "STUCK", "bad"];
+  const ok = p.layers.length && p.layers.every((l) => l.status === "SUCCESS");
+  return ["Last run", ok ? "SUCCESS" : "CHECK", ok ? "" : "bad"];
+}
+
 function renderObserve() {
   aiBriefing();
   if (!isPoc()) return renderObserveGeneric();
@@ -423,7 +432,7 @@ function renderObserve() {
   const kpis = [
     ["Data assets", assets, ""], ["Gross revenue", inrShort(o.totals.gross), ""], ["Open incidents", o.incidents.open, o.incidents.high ? "bad" : o.incidents.open ? "warn" : ""],
     ["Revenue gaps", o.incidents.money, o.incidents.money ? "bad" : ""], ["Quality issues", o.incidents.quality, o.incidents.quality ? "warn" : ""],
-    ["Last run", (p.layers.every((l) => l.status === "SUCCESS") && p.layers.length) ? "SUCCESS" : "CHECK", p.layers.every((l) => l.status === "SUCCESS") ? "" : "bad"],
+    lastRunKpi(p),
   ];
   $("obsKpis").innerHTML = kpis.map(([l, v, c]) => `<div class="kpi ${c}"><div class="l">${l}</div><div class="v">${typeof v === "number" ? num(v) : esc(v)}</div></div>`).join("");
   const d = t.dimensions;
@@ -464,8 +473,13 @@ function renderObserve() {
   $("revLegend").innerHTML = Object.entries(REV).filter(([k]) => days.some((d) => cls(d) === k))
     .map(([, [c, l]]) => `<span><i style="background:${c}"></i>${l}</span>`).join("");
   const sch = Object.fromEntries(o.assets.map((a) => [a.schema, a.n]));
-  const st = (s) => (s === "SUCCESS" ? "ok" : s ? "bad" : "grey");
+  const st = (s) => (s === "SUCCESS" ? "ok" : s === "RUNNING" ? "warn" : s ? "bad" : "grey");
   const lay = Object.fromEntries(p.layers.map((l) => [l.layer, l.status]));
+  const run = p.run || {};
+  for (const m of run.missing || []) {                       // a layer the latest batch has not finished yet
+    if (run.state === "running") lay[m] = "RUNNING";
+    if (run.state === "stuck") lay[m] = "NOT FINISHED";
+  }
   $("estate").innerHTML = [
     ["Source files", "local / ADLS", "ok", "Connected"],
     ["Bronze", `${sch.bronze || 0} tables`, st(lay.BRONZE), lay.BRONZE || "no run"],

@@ -47,6 +47,12 @@ CHECKS = {
                    "what": "Bronze, Silver and Gold of the latest batch succeeded. The severity is for a failed layer; a cancelled or "
                            "skipped one counts one level lower.",
                    "params": []},
+    "poc.incomplete": {"kind": "poc", "subject": "runs", "label": "Run finishes (not stuck halfway)", "severity": "HIGH",
+                       "what": "A batch that has started (Bronze written) but has no Gold yet counts as in progress. It is stuck when "
+                               "it stays so longer than N times the usual run time (learned from recent complete runs), and never "
+                               "less than the minimum.",
+                       "params": [_p("factor", "Stuck after", 3, 1, 20, "× the usual run time"),
+                                  _p("min_minutes", "But never before", 20, 1, 1440, "min")]},
     # ---------------------------------------------------------------- ADF pipelines
     "adf.run_failed": {"kind": "adf", "subject": "runs", "label": "Latest run succeeded", "severity": "HIGH",
                        "what": "The newest finished run of the pipeline succeeded (a cancelled run counts one level lower).",

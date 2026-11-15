@@ -27,6 +27,7 @@ LABELS = {
     "rule_changed": ("Rule changed", False),
     "unexplained": ("Not verified", False),
     "superseded": ("Still failing in a newer run", False),
+    "run_finished": ("Run finished", True),
 }
 NO_REASON = ("No reason recorded", False)               # resolved before DataTrust recorded reasons
 
@@ -97,6 +98,8 @@ def classify(row: dict, open_now: list) -> tuple:
             return _adf(iid, open_ids)
         if re.match(r"^db\d+:CHECK-\d+$", iid):
             return _check(int(iid.rsplit("-", 1)[1]), row["first_seen"])
+        if t == "PIPELINE_INCOMPLETE" or iid.endswith("-INCOMPLETE"):
+            return _incomplete(iid, open_ids)
         if t == "PIPELINE_FAILURE":
             return _run(iid, open_ids)
         if t == "REJECTED_ROWS":
@@ -209,6 +212,23 @@ def _run(iid: str, open_ids: list) -> tuple:
         how = "was retried and" if b["batch_id"] == batch else f"ran again as batch {b['batch_id']} and"
         return "pipeline_rerun", f"The pipeline {how} its {layer} layer succeeded.", None
     return "unexplained", "This run is no longer the latest, but the newest run does not show a successful " + layer + " layer.", None
+
+
+def _incomplete(iid: str, open_ids: list) -> tuple:
+    """A stuck batch is gone: did it finish late, fail outright (that incident takes over), or was it left behind?"""
+    batch = iid[len("RUN-"):-len("-INCOMPLETE")]
+    layers = {r["layer"]: r["status"] for r in ds.rows("SELECT layer, status FROM audit.batch_control WHERE batch_id = %(b)s "
+                                                       "ORDER BY started_at NULLS FIRST", {"b": batch})}
+    failed = next((o for o in open_ids if o.startswith(f"RUN-{batch}-") and o != iid), None)
+    if failed:
+        return "superseded", f"Batch {batch} reported a failed layer; the incident continues as {failed}.", failed
+    if layers.get("GOLD") == "SUCCESS" and all(s == "SUCCESS" for s in layers.values()):
+        return "run_finished", f"Batch {batch} finished late: all its layers succeeded.", None
+    if any(s != "SUCCESS" for s in layers.values()):
+        return "unexplained", f"Batch {batch} ended with a layer that did not succeed: " + \
+               ", ".join(f"{k} {v}" for k, v in layers.items()) + ".", None
+    return "unexplained", f"A newer run started; batch {batch} never finished (its {', '.join(x for x in ('SILVER', 'GOLD') if x not in layers)} " \
+                          f"layer is still missing).", None
 
 
 def _schema(iid: str) -> tuple:
