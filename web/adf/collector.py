@@ -130,8 +130,10 @@ def probe_copy(conn, src: dict, defs: dict, run: dict, task: dict, compare_rows:
     if t and t.get("kind") == "postgres":
         mapping = [m.get("sink", {}).get("name") for m in ((adef.get("translator") or {}).get("mappings") or [])
                    if isinstance(m, dict) and (m.get("sink") or {}).get("name")]
+        added = [c.get("name") for c in ((adef.get("source") or {}).get("additionalColumns") or [])
+                 if isinstance(c, dict) and c.get("name")]                # columns the Copy step adds itself (batch_id ...)
         try:
-            checks += probes.target_checks(t, task, cfg, columns, mapping or None, compare_rows)
+            checks += probes.target_checks(t, task, cfg, columns, mapping or None, compare_rows, added)
         except Exception as e:                                           # noqa: BLE001
             checks.append(probes._check("TARGET_TABLE", "target", t.get("name"), "UNKNOWN", None, None,
                                         f"Could not query the target: {type(e).__name__}: {str(e)[:300]}"))

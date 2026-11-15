@@ -36,6 +36,33 @@ class RuntimeTargetTests(unittest.TestCase):
         self.assertEqual([(c["check_type"], c["status"]) for c in checks], [("TARGET_TABLE", "UNKNOWN")])
         self.assertIn("not checked", checks[0]["detail"])
 
+    def test_columns_the_copy_step_adds_count_as_incoming(self):
+        class Conn:
+            def __init__(self): self.n = 0
+            def __enter__(self): return self
+            def __exit__(self, *a): return False
+            def execute(self, sql, params=None):
+                self.n += 1
+                rows = {1: [{"column_name": "payment_id", "is_nullable": "NO", "column_default": None, "data_type": "text"},
+                            {"column_name": "batch_id", "is_nullable": "NO", "column_default": None, "data_type": "text"},
+                            {"column_name": "load_ts", "is_nullable": "NO", "column_default": "now()", "data_type": "timestamp"}],
+                        2: [{"est": 10}], 3: [{"n": 10}]}[min(self.n, 3)]
+                return type("R", (), {"fetchall": lambda s: rows, "fetchone": lambda s: rows[0]})()
+
+        class Src:
+            def connect(self, db): return Conn()
+
+        asset = {"name": "salesdb.bronze.payments", "schema": "bronze", "table": "payments", "unresolved": []}
+        with patch.object(probes, "find_pg_connection", return_value=(Src(), "salesdb", "test")):
+            without = probes.target_checks(asset, {}, {}, ["payment_id"], None, False)
+            withadd = probes.target_checks(asset, {}, {}, ["payment_id"], None, False, ["batch_id", "source_file"])
+        sm = lambda cs: next(c for c in cs if c["check_type"] == "SCHEMA_MATCH")
+        self.assertEqual(sm(without)["status"], "WARN")                    # batch_id is required and not in the file
+        self.assertIn("batch_id", sm(without)["detail"])
+        self.assertEqual(sm(withadd)["status"], "WARN")                    # source_file is added but the table lacks it
+        self.assertNotIn("required", sm(withadd)["detail"])
+        self.assertIn("source_file", sm(withadd)["detail"])
+
     def test_other_runtime_functions_stay_unknown(self):
         with self.assertRaises(resolve.Unresolved):
             resolve.evaluate("item().name", {})

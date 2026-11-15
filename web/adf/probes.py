@@ -209,7 +209,10 @@ def find_pg_connection(asset: dict, cfg: dict):
     return None, db, None
 
 
-def target_checks(asset: dict, task: dict, cfg: dict, source_columns: list, mapping: list | None, compare_rows: bool) -> list:
+def target_checks(asset: dict, task: dict, cfg: dict, source_columns: list, mapping: list | None, compare_rows: bool,
+                  added_columns: list | None = None) -> list:
+    """added_columns: columns the Copy step adds to every row itself (source "additionalColumns", e.g. batch_id), so they
+    are incoming even though the file does not have them."""
     label = asset.get("name")
     src, db, via = find_pg_connection(asset, cfg)
     if not src:
@@ -253,6 +256,8 @@ def target_checks(asset: dict, task: dict, cfg: dict, source_columns: list, mapp
             checks.append(_check("TARGET_ROWS", "target", label, "INFO", None, f"{count:,} ({how})", f"{count:,} rows in the table now."))
         table_cols = {c["column_name"].lower(): c for c in cols}
         incoming = [m.lower() for m in (mapping or [])] or [c.lower() for c in source_columns]
+        if incoming and added_columns:
+            incoming += [a.lower() for a in added_columns if a.lower() not in incoming]
         if incoming:
             extra = [c for c in incoming if c not in table_cols]
             required = [n for n, c in table_cols.items() if c["is_nullable"] == "NO" and not c["column_default"] and n not in incoming]
