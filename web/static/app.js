@@ -429,7 +429,7 @@ function renderObserve() {
   const d = t.dimensions;
   const freshnessLimit = t.rules.freshness_hours;
   const freshnessNotice = $("freshnessNotice");
-  if (d.freshness_hours == null || d.freshness_hours > freshnessLimit) {
+  if (freshnessLimit != null && (d.freshness_hours == null || d.freshness_hours > freshnessLimit)) {   // null: check switched off
     const lastSuccess = d.freshness_hours == null
       ? "No successful pipeline run is recorded."
       : `The last successful pipeline run was ${num(d.freshness_hours)} hours ago.`;

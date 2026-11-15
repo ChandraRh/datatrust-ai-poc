@@ -153,14 +153,23 @@ freshness, volume, validity, uniqueness (duplicate rows, unique-key rules), sche
    MEDIUM 2, LOW 1). A warning or a check that could not run counts as half; a share of rows counts as that share.
 2. The **score** = the average of the subjects that have signals. A subject with none is left out, never counted as 0.
 3. A **cap** keeps a serious open problem from being averaged away: an open CRITICAL problem → at most 74 (At risk),
-   an open HIGH one → at most 89 (Needs attention). A settlement mismatch is CRITICAL (`SETTLEMENT_SEVERITY` in
-   data_service.py), on Detect too.
+   an open HIGH one → at most 89 (Needs attention). A settlement mismatch is CRITICAL by default, on Detect too.
 4. **Confidence** = how much of the source is measured (tables watched, pipelines with runs): high from 80 %, medium
    from 30 %, else low. It is shown beside the score, never mixed into it.
 
 ≥ 90 Healthy, ≥ 75 Needs attention, below At risk. The daily trend uses the same formula on what is known per day.
 Observe shows each subject's mark, the cap, the confidence and "Why not 100" (the points each problem costs).
 A new kind of source only has to produce signals; the formula does not change.
+
+### Built-in check settings (Data quality → Built-in checks, `web/builtin.py`)
+Checks come from two places: **rules** (DQ Rule Studio, `monitor.checks`, any database) and **built-in checks** that
+DataTrust runs on its own for a kind of source: the POC pipeline (settlement per date, rows lost / rejected / duplicated,
+each layer of the latest run, freshness) and every ADF pipeline (latest run, 7-day success rate, loaded on time, normal
+number of rows, rows skipped, after-run source / target checks). On this page an admin sets each built-in check's
+**severity**, its **limits** (e.g. the POC's 24 h, ADF's "too few below 50 % of usual") and **on / off**; for ADF once
+for all pipelines and, where one pipeline needs it, for that pipeline only. Saved in `app.builtin_settings`
+(`/api/builtin/settings`, audited); the same setting drives the incident on Detect and the trust signal. A plain
+database has no built-in checks: everything on it is a rule.
 
 ## AI agent modes (.env LLM_PROVIDER)
 * `none` (default): built-in agent, free and offline. Understands the questions listed on the Ask page.

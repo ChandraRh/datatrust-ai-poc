@@ -96,6 +96,13 @@ try:                                                    # Azure Data Factory con
 except Exception as e:
     print(f"!! Azure Data Factory connector not ready: {e}")
 
+try:                                                    # Built-in check settings (Data quality -> Built-in checks)
+    import builtin, builtin_routes
+    app.include_router(builtin_routes.router)
+    builtin.ensure_tables()
+except Exception as e:
+    print(f"!! Built-in check settings not ready (defaults are used): {e}")
+
 try:                                                    # Data checks on any connected database (own tables, own API, scheduler)
     from checks import routes as checks_routes, runner as checks_runner, store as checks_store
     app.include_router(checks_routes.router)

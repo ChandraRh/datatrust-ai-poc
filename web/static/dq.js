@@ -509,6 +509,7 @@
   window.DQ = {
     async page(page) {
       if (page === "estate-dq-coverage") return window.COVERAGE.page();   // coverage.js
+      if (page === "estate-dq-builtin") return window.BUILTIN.page();     // builtin.js
       await ensureCore();                                        // which source is selected (app.js)
       const kind = isPoc() ? "poc" : (state.overview.scope || {}).kind;
       $e("dqRejSub").textContent = {

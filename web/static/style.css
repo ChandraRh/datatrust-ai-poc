@@ -673,6 +673,18 @@ tr.clickable { cursor: pointer; } tr.clickable:hover td { background: var(--bran
 .conf { margin-top: 4px; }
 .conf-high, .conf-medium { color: var(--ink-2); }
 .conf-low { color: var(--amber); font-weight: 600; }
+/* ---- Data quality → Built-in checks */
+.bi-card { display: flex; flex-direction: column; gap: 6px; }
+.bi-head { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; }
+.bi-head .grow { flex: 1; }
+.bi-card > p { margin: 0; }
+.bi-form { display: flex; flex-wrap: wrap; align-items: center; gap: 8px 16px; padding: 8px 0; font-size: 13.5px; }
+.bi-form label { display: inline-flex; align-items: center; gap: 6px; }
+.bi-form input[type=number] { width: 76px; padding: 5px 7px; border: 1px solid var(--line); border-radius: var(--radius-sm); }
+.bi-form select { padding: 5px 7px; border: 1px solid var(--line); border-radius: var(--radius-sm); }
+.bi-own { border-top: 1px solid var(--line-soft); padding-top: 8px; display: flex; flex-direction: column; gap: 6px; }
+.bi-pipe { padding-left: 12px; border-left: 2px solid var(--line-soft); }
+.bi-own select { padding: 4px 6px; border: 1px solid var(--line); border-radius: var(--radius-sm); }
 .subj > summary { list-style: none; cursor: pointer; }
 .subj > summary::-webkit-details-marker { display: none; }
 .subj > summary:focus-visible { outline: 2px solid var(--teal); outline-offset: 2px; border-radius: 6px; }

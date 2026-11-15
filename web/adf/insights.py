@@ -28,6 +28,7 @@ import statistics
 from datetime import datetime, timezone
 
 import appdb as ds                       # telemetry.* lives in DataTrust's own database
+import builtin
 import trust
 
 from . import diagnose, resolve, store
@@ -165,10 +166,27 @@ def _checks(run_id: str) -> list:
                       WHERE c.run_id = %s ORDER BY k.run_start, k.activity_name, c.side, c.check_type""", (run_id,))
 
 
-def _freshness_limit(triggers: list, cfg: dict) -> tuple:
-    """(trigger interval in minutes, hours after which the pipeline's data counts as stale); both None when unknown."""
+def _freshness_limit(triggers: list, cfg: dict, fixed_hours: int = 0) -> tuple:
+    """(trigger interval in minutes, hours after which the pipeline's data counts as stale); both None when unknown.
+    fixed_hours (Built-in checks page, "Loaded on time") replaces the limit that follows the trigger."""
     interval = min((t["interval_minutes"] for t in triggers if t["interval_minutes"] and t["state"] == "Started"), default=None)
+    if fixed_hours:
+        return interval, float(fixed_hours)
     return interval, ((2 * interval + 30) / 60 if interval else cfg.get("freshness_hours"))
+
+
+def settings_of(src: dict, name: str) -> dict:
+    """The effective built-in check settings of one pipeline: all pipelines' defaults, then this pipeline's overrides."""
+    return {k.split(".", 1)[1]: builtin.setting(k, src["source_id"], name) for k in builtin.CHECKS if k.startswith("adf.")}
+
+
+def _after_run_severity(c: dict, base: str) -> str:
+    """A failed (or passing) after-run check has the setting's severity; a difference is one level lower for the file's rows
+    or columns, two levels lower otherwise."""
+    if c["status"] in ("FAIL", "PASS"):
+        return base
+    one = builtin.lower(base)
+    return one if c["check_type"] in ("SCHEMA_MATCH", "SOURCE_ROWS") else builtin.lower(one)
 
 
 def issue_signals(found: list) -> list:
@@ -182,34 +200,37 @@ def pipeline_signals(src: dict, name: str, runs: list, mine: list, defs: dict) -
         return []
     sig = issue_signals(mine)
     kinds = {i["type"] for i in mine}
+    S = settings_of(src, name)
     finished = [r for r in runs if r["status"] in FINISHED]
     succeeded = [r for r in finished if r["status"] == "Succeeded"]
     week = [r for r in finished if (_age_hours(r["run_start"]) or 1e9) <= 168]
-    if week:
+    if week and S["success_rate"]["enabled"]:
         ok = sum(r["status"] == "Succeeded" for r in week)
-        sig.append(trust.signal("runs", ok / len(week), "HIGH", f"{name}: {len(week) - ok} of {len(week)} runs failed in the last 7 days",
+        sig.append(trust.signal("runs", ok / len(week), S["success_rate"]["severity"], f"{name}: {len(week) - ok} of {len(week)} runs failed in the last 7 days",
                                 failed=False,                       # history: lowers the mark; only an open failure caps
                                 ok_text=f"{name}: all {len(week)} runs of the last 7 days succeeded"))
     newest = finished[0] if finished else None
-    if newest and not kinds & {"RUN_FAILED", "RUN_CANCELLED"}:
-        sig.append(trust.signal("runs", 1, "HIGH", f"{name}: latest run succeeded"))
-    _, limit_h = _freshness_limit(_triggers_for(defs, name), src.get("config") or {})
-    if limit_h and "STALE" not in kinds:
-        sig.append(trust.signal("freshness", 1, "HIGH", f"{name}: loaded on time"))
+    if newest and not kinds & {"RUN_FAILED", "RUN_CANCELLED"} and S["run_failed"]["enabled"]:
+        sig.append(trust.signal("runs", 1, S["run_failed"]["severity"], f"{name}: latest run succeeded"))
+    _, limit_h = _freshness_limit(_triggers_for(defs, name), src.get("config") or {}, S["stale"]["hours"])
+    if limit_h and "STALE" not in kinds and S["stale"]["enabled"]:
+        sig.append(trust.signal("freshness", 1, S["stale"]["severity"], f"{name}: loaded on time"))
     if succeeded:
         # a pass only when the comparison of _pipeline_issues could run: a row count and >= 3 earlier successful loads
         history = [r["rows_written"] for r in succeeded[1:11] if r["rows_written"] is not None]
-        if "VOLUME" not in kinds and len(history) >= 3 and succeeded[0]["rows_written"] is not None and _median(history):
-            sig.append(trust.signal("volume", 1, "MEDIUM", f"{name}: usual number of rows loaded"))
-        if "ROWS_SKIPPED" not in kinds:
-            sig.append(trust.signal("validity", 1, "MEDIUM", f"{name}: no rows skipped"))
-    if newest:
+        vol = S["volume"]
+        if vol["enabled"] and "VOLUME" not in kinds and len(history) >= vol["min_history"] \
+                and succeeded[0]["rows_written"] is not None and _median(history):
+            sig.append(trust.signal("volume", 1, vol["severity"], f"{name}: usual number of rows loaded"))
+        if "ROWS_SKIPPED" not in kinds and S["rows_skipped"]["enabled"]:
+            sig.append(trust.signal("validity", 1, S["rows_skipped"]["severity"], f"{name}: no rows skipped"))
+    if newest and S["after_run"]["enabled"]:
         failed_steps = {t["activity_run_id"] for t in _tasks(newest["run_id"]) if t["status"] == "Failed"}
         for c in _checks(newest["run_id"]):
             if c["check_type"] == "SKIPPED_ROWS" or c["activity_run_id"] in failed_steps:
                 continue                                             # counted as rows skipped / as that step's failure
             st = c["status"]
-            sev = "HIGH" if st in ("FAIL", "PASS") else ("MEDIUM" if c["check_type"] in ("SCHEMA_MATCH", "SOURCE_ROWS") else "LOW")
+            sev = _after_run_severity(c, S["after_run"]["severity"])
             what = CHECK_LABEL.get(c["check_type"], c["check_type"])
             seen = f" (expected {c['expected']}, found {c['observed']})" if c.get("expected") is not None else ""
             sig.append(trust.status_signal(CHECK_SUBJECT.get(c["check_type"], "volume"), st, sev,
@@ -221,31 +242,33 @@ def pipeline_signals(src: dict, name: str, runs: list, mine: list, defs: dict) -
 def _pipeline_issues(src: dict, name: str, runs: list, defs: dict) -> list:
     out = []
     cfg = src.get("config") or {}
+    S = settings_of(src, name)
     finished = [r for r in runs if r["status"] in FINISHED]
     succeeded = [r for r in finished if r["status"] == "Succeeded"]
     newest = finished[0] if finished else None
     triggers = _triggers_for(defs, name)
-    if newest and newest["status"] == "Failed":
+    if newest and newest["status"] == "Failed" and S["run_failed"]["enabled"]:
         streak = next((i for i, r in enumerate(finished) if r["status"] != "Failed"), len(finished))
         roots = diagnose.failure_chain(newest, _tasks(newest["run_id"]), _child_lookup)
         top = roots[0] if roots else None
-        out.append(_issue("CRITICAL" if streak >= 3 else "HIGH", "RUN_FAILED", src, name,
+        n = S["run_failed"]["streak"]
+        out.append(_issue("CRITICAL" if n and streak >= n else S["run_failed"]["severity"], "RUN_FAILED", src, name,
                           f"{name} failed" + (f" {streak} times in a row" if streak > 1 else ""),
                           (f"{top['title']} in step '{top.get('activity_name') or '?'}'"
                            + (f" of child pipeline {top['path'][-2]}" if len(top.get("path") or []) > 2 else "") + ". " if top else "") +
                           f"Last attempt {_short(newest['run_start'])}.", newest["run_id"],
                           cause=top, fixes=(top or {}).get("fixes"), system=(top or {}).get("system"),
                           evidence=[(top or {}).get("message", "")[:400]] if top else []))
-    elif newest and newest["status"] == "Cancelled":
-        out.append(_issue("MEDIUM", "RUN_CANCELLED", src, name, f"{name}: newest run was cancelled",
+    elif newest and newest["status"] == "Cancelled" and S["run_failed"]["enabled"]:
+        out.append(_issue(builtin.lower(S["run_failed"]["severity"]), "RUN_CANCELLED", src, name, f"{name}: newest run was cancelled",
                           f"Run started {_short(newest['run_start'])} was cancelled; its data was not (fully) loaded.", newest["run_id"],
                           fixes=["Check who cancelled it in ADF Monitor and re-run if the data is still needed."], system=diagnose.ADF))
     # freshness
-    interval, limit_h = _freshness_limit(triggers, cfg)
+    interval, limit_h = _freshness_limit(triggers, cfg, S["stale"]["hours"])
     last_ok = succeeded[0] if succeeded else None
     age = _age_hours(last_ok["run_end"] or last_ok["run_start"]) if last_ok else None
-    if limit_h and runs and (age is None or age > limit_h):
-        out.append(_issue("HIGH", "STALE", src, name, f"{name}: data is stale",
+    if S["stale"]["enabled"] and limit_h and runs and (age is None or age > limit_h):
+        out.append(_issue(S["stale"]["severity"], "STALE", src, name, f"{name}: data is stale",
                           (f"Last successful run finished {age:.1f} h ago" if age is not None else "No successful run yet") +
                           f"; expected at least every {limit_h:.1f} h" + (f" (trigger runs {interval} min apart)." if interval else "."),
                           last_ok["run_id"] if last_ok else None,
@@ -271,22 +294,23 @@ def _pipeline_issues(src: dict, name: str, runs: list, defs: dict) -> list:
                                   fixes=["Open the run: the step still in progress is the one waiting (source, target, or integration runtime).",
                                          "Check locks / long queries on the target database."], system=diagnose.ADF))
     if last_ok:
-        if last_ok["rows_skipped"]:
-            out.append(_issue("MEDIUM", "ROWS_SKIPPED", src, name, f"{name} skipped {int(last_ok['rows_skipped']):,} row(s)",
+        if last_ok["rows_skipped"] and S["rows_skipped"]["enabled"]:
+            out.append(_issue(S["rows_skipped"]["severity"], "ROWS_SKIPPED", src, name, f"{name} skipped {int(last_ok['rows_skipped']):,} row(s)",
                               "The run succeeded but some rows were not loaded (fault tolerance skipped incompatible rows).",
                               last_ok["run_id"], fixes=["Open the run to see the skipped-rows log and why they did not fit.",
                                                         "Fix the values at the source and re-load them."], system=diagnose.DATA))
         history = [r["rows_written"] for r in succeeded[1:11] if r["rows_written"] is not None]
-        if len(history) >= 3 and last_ok["rows_written"] is not None:
+        vol = S["volume"]
+        if vol["enabled"] and len(history) >= vol["min_history"] and last_ok["rows_written"] is not None:
             m = _median(history)
             now_rows = last_ok["rows_written"]
             if m and now_rows == 0:
-                out.append(_issue("HIGH", "VOLUME", src, name, f"{name} loaded 0 rows",
+                out.append(_issue(builtin.higher(vol["severity"]), "VOLUME", src, name, f"{name} loaded 0 rows",
                                   f"Usually loads about {m:,.0f} rows. The run 'succeeded' but nothing arrived: empty or missing source file?",
                                   last_ok["run_id"], fixes=["Check the source files of that run (Source checks on the run page)."],
                                   system=diagnose.SOURCE))
-            elif m and now_rows < 0.5 * m:
-                out.append(_issue("MEDIUM", "VOLUME", src, name, f"{name} loaded far fewer rows than usual",
+            elif m and now_rows < vol["low_pct"] / 100 * m:
+                out.append(_issue(vol["severity"], "VOLUME", src, name, f"{name} loaded far fewer rows than usual",
                                   f"{now_rows:,.0f} rows vs a usual {m:,.0f} ({now_rows / m:.0%}).", last_ok["run_id"],
                                   fixes=["Compare the source file with earlier days: partial delivery or a filter change?"],
                                   system=diagnose.SOURCE))
@@ -300,8 +324,8 @@ def _pipeline_issues(src: dict, name: str, runs: list, defs: dict) -> list:
     if newest:
         failed_steps = {t["activity_run_id"] for t in _tasks(newest["run_id"]) if t["status"] == "Failed"}
         for c in _checks(newest["run_id"]):
-            if c["status"] in ("FAIL", "WARN") and c["check_type"] != "SKIPPED_ROWS":
-                sev = "HIGH" if c["status"] == "FAIL" else ("MEDIUM" if c["check_type"] in ("SCHEMA_MATCH", "SOURCE_ROWS") else "LOW")
+            if c["status"] in ("FAIL", "WARN") and c["check_type"] != "SKIPPED_ROWS" and S["after_run"]["enabled"]:
+                sev = _after_run_severity(c, S["after_run"]["severity"])
                 if c["activity_run_id"] in failed_steps:
                     continue                                 # part of that step's failure, shown as evidence there
                 label = CHECK_LABEL.get(c["check_type"], c["check_type"])

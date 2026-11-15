@@ -31,6 +31,7 @@ def _find_project_root() -> Path:
 
 sys.path.insert(0, str(_find_project_root()))                    # project root: config.py, .env
 import config  # noqa: E402
+import builtin  # noqa: E402
 import trust  # noqa: E402
 
 # entity -> (source file, bronze table, silver table, business key, SCD type)
@@ -44,10 +45,19 @@ ENTITIES = {
     "categories":     ("categories.csv",     "bronze.categories",     "silver.categories",     "category_id", 1),
 }
 
-# Trust score: the standard formula of web/trust.py, fed with this pipeline's signals (trust_signals)
-SETTLEMENT_SEVERITY = "CRITICAL"        # money that does not match the gateway: caps the score at 74 (At risk), Detect shows it CRITICAL
-FRESHNESS_HOURS = 24                    # the pipeline must succeed at least this often
+# Trust score: the standard formula of web/trust.py, fed with this pipeline's signals (trust_signals).
+# Severity, limits and on / off of the POC's built-in checks: web/builtin.py (page Data quality -> Built-in checks);
+# the same setting drives the incident on Detect and the trust signal.
 HEALTHY, ATTENTION = trust.HEALTHY, trust.ATTENTION
+
+
+def _setting(key: str) -> dict:
+    return builtin.setting(key)
+
+
+def _layer_severity(status: str, cfg: dict) -> str:
+    """A failed layer has the setting's severity; a cancelled or skipped one counts one level lower."""
+    return cfg["severity"] if status == "FAILED" else builtin.lower(cfg["severity"])
 
 
 # ============================================================================ database helpers
@@ -287,8 +297,9 @@ def incidents() -> list:
         """SELECT DISTINCT ON (incident_id) incident_id, approved_by, approved_at, status
            FROM app.remediation_log ORDER BY incident_id, approved_at DESC""")}
 
+    cfg = {k: _setting(k) for k in ("poc.settlement", "poc.rejected", "poc.duplicates", "poc.rows_lost", "poc.layers")}
     # 1. settlement vs silver mismatch (money)
-    for r in settlement_recon():
+    for r in (settlement_recon() if cfg["poc.settlement"]["enabled"] else []):
         if r["recon_status"] != "MISMATCH":
             continue
         rej = one("""SELECT COUNT(*) AS n, COALESCE(SUM((raw_record::jsonb->>'amount')::numeric), 0) AS amount,
@@ -298,7 +309,7 @@ def incidents() -> list:
                        AND (upper(trim(raw_record::jsonb->>'status')) = 'CAPTURED'
                             OR rule_name = 'STATUS_VALID')""", {"d": r["business_date"]})   # a status typo was settled too
         found.append({
-            "id": f"RECON-{r['business_date']}", "severity": SETTLEMENT_SEVERITY, "type": "SETTLEMENT_MISMATCH",
+            "id": f"RECON-{r['business_date']}", "severity": cfg["poc.settlement"]["severity"], "type": "SETTLEMENT_MISMATCH",
             "title": f"Revenue gap on {r['business_date']}: settlement does not match silver",
             "business_date": r["business_date"],
             "summary": (f"Gateway settled {r['settled_payments']:,} payments / {inr(r['settled_amount'])}; "
@@ -310,9 +321,9 @@ def incidents() -> list:
     # 2. rejected rows per entity / rule / date
     for r in rows("""SELECT entity, rule_name, business_date::text AS business_date, COUNT(*) AS n,
                             MIN(batch_id) AS batch_id
-                     FROM silver.rejected_records GROUP BY 1, 2, 3 ORDER BY 1, 3"""):
+                     FROM silver.rejected_records GROUP BY 1, 2, 3 ORDER BY 1, 3""") if cfg["poc.rejected"]["enabled"] else []:
         found.append({
-            "id": f"DQ-{r['entity']}-{r['rule_name']}-{r['business_date']}", "severity": "MEDIUM",
+            "id": f"DQ-{r['entity']}-{r['rule_name']}-{r['business_date']}", "severity": cfg["poc.rejected"]["severity"],
             "type": "REJECTED_ROWS", "business_date": r["business_date"],
             "title": f"{r['n']} {r['entity']} row(s) failed rule {r['rule_name']}",
             "summary": f"Held back in silver.rejected_records (business date {r['business_date']}); "
@@ -323,16 +334,16 @@ def incidents() -> list:
     # 3. duplicates removed / unexplained loss / failed steps of the latest batch
     lin = lineage()
     for e in lin["entities"]:
-        if e["duplicates"]:
+        if e["duplicates"] and cfg["poc.duplicates"]["enabled"]:
             found.append({
-                "id": f"DUP-{e['entity']}", "severity": "LOW", "type": "DUPLICATES",
+                "id": f"DUP-{e['entity']}", "severity": cfg["poc.duplicates"]["severity"], "type": "DUPLICATES",
                 "title": f"{e['duplicates']} duplicate {e['entity']} row(s) in the source",
                 "summary": f"{e['source_file']} delivered the same {e['entity']} more than once; silver kept "
                            f"the latest copy, so nothing is double counted.", "metrics": e,
                 "business_date": lin["business_date"]})
-        if e["source_to_bronze_gap"] or e["unexplained_loss"]:
+        if (e["source_to_bronze_gap"] or e["unexplained_loss"]) and cfg["poc.rows_lost"]["enabled"]:
             found.append({
-                "id": f"LOSS-{e['entity']}", "severity": "HIGH", "type": "DATA_LOSS",
+                "id": f"LOSS-{e['entity']}", "severity": cfg["poc.rows_lost"]["severity"], "type": "DATA_LOSS",
                 "title": f"{e['entity']}: rows missing between source and target",
                 "summary": f"source {e['source_rows']}, bronze {e['bronze_rows']}, silver loaded "
                            f"{e['silver_loaded']}, rejected {e['rejected']}, duplicates {e['duplicates']}.",
@@ -340,12 +351,12 @@ def incidents() -> list:
 
     status = pipeline_status()
     for layer in status["layers"]:
-        if layer["status"] in ("FAILED", "CANCELLED", "SKIPPED"):
+        if layer["status"] in ("FAILED", "CANCELLED", "SKIPPED") and cfg["poc.layers"]["enabled"]:
             failed_steps = [s for s in status["steps"] if s["status"] in ("FAILED", "CANCELLED")]
             detail = failed_steps[0]["message"] if failed_steps else layer.get("message")
             found.append({
                 "id": f"RUN-{status['batch']['batch_id']}-{layer['layer']}",
-                "severity": "CRITICAL" if layer["status"] == "FAILED" else "HIGH", "type": "PIPELINE_FAILURE",
+                "severity": _layer_severity(layer["status"], cfg["poc.layers"]), "type": "PIPELINE_FAILURE",
                 "title": f"{layer['layer']} layer {layer['status']} in batch {status['batch']['batch_id']}",
                 "summary": detail or "", "metrics": layer, "business_date": status["batch"].get("business_date")})
 
@@ -532,9 +543,11 @@ def trust_signals() -> tuple[list, dict]:
     last_success = status["last_success"]
     hours_old = (datetime.now() - datetime.fromisoformat(last_success)).total_seconds() / 3600 if last_success else None
     sig = []
-    for r in recon:                                              # one per business date: does the gateway agree with silver?
+    cfg = {k: _setting(k) for k in builtin.CHECKS if k.startswith("poc.")}   # severity / limits / on-off (Built-in checks page)
+    st, rl, rj, dp = cfg["poc.settlement"], cfg["poc.rows_lost"], cfg["poc.rejected"], cfg["poc.duplicates"]
+    for r in (recon if st["enabled"] else []):                   # one per business date: does the gateway agree with silver?
         ok = r["recon_status"] == "MATCH"
-        sig.append(trust.signal("reconciliation", 1 if ok else 0, SETTLEMENT_SEVERITY,
+        sig.append(trust.signal("reconciliation", 1 if ok else 0, st["severity"],
                                 f"settlement does not match silver on {r['business_date']}",
                                 ok_text=f"settlement matches silver on {r['business_date']}"))
     tot = {"in": 0, "lost": 0, "rejected": 0, "duplicates": 0}
@@ -544,20 +557,25 @@ def trust_signals() -> tuple[list, dict]:
             continue
         lost = max(e["unexplained_loss"] or 0, 0) + max(e["source_to_bronze_gap"] or 0, 0)
         name = e["entity"]
-        sig.append(trust.signal("volume", (n - lost) / n, "HIGH", f"{name}: {lost} row(s) missing between source and silver",
-                                failed=lost > 0, ok_text=f"{name}: all {n:,} rows reached silver (or were rejected / de-duplicated on purpose)"))
-        sig.append(trust.signal("validity", (n - e["rejected"]) / n, "MEDIUM", f"{name}: {e['rejected']} row(s) rejected by quality rules",
-                                failed=e["rejected"] > 0, ok_text=f"{name}: no rows rejected by quality rules"))
-        sig.append(trust.signal("uniqueness", (n - e["duplicates"]) / n, "LOW", f"{name}: {e['duplicates']} duplicate row(s) in the source file",
-                                failed=e["duplicates"] > 0, ok_text=f"{name}: no duplicate rows in the source file"))
+        if rl["enabled"]:
+            sig.append(trust.signal("volume", (n - lost) / n, rl["severity"], f"{name}: {lost} row(s) missing between source and silver",
+                                    failed=lost > 0, ok_text=f"{name}: all {n:,} rows reached silver (or were rejected / de-duplicated on purpose)"))
+        if rj["enabled"]:
+            sig.append(trust.signal("validity", (n - e["rejected"]) / n, rj["severity"], f"{name}: {e['rejected']} row(s) rejected by quality rules",
+                                    failed=e["rejected"] > 0, ok_text=f"{name}: no rows rejected by quality rules"))
+        if dp["enabled"]:
+            sig.append(trust.signal("uniqueness", (n - e["duplicates"]) / n, dp["severity"], f"{name}: {e['duplicates']} duplicate row(s) in the source file",
+                                    failed=e["duplicates"] > 0, ok_text=f"{name}: no duplicate rows in the source file"))
         for k, v in (("in", n), ("lost", lost), ("rejected", e["rejected"]), ("duplicates", e["duplicates"])):
             tot[k] += v
-    for l in status["layers"]:                                   # the latest run, layer by layer (same severities as Detect)
-        sig.append(trust.signal("runs", 1 if l["status"] == "SUCCESS" else 0, "CRITICAL" if l["status"] == "FAILED" else "HIGH",
+    for l in (status["layers"] if cfg["poc.layers"]["enabled"] else []):   # the latest run, layer by layer (same severities as Detect)
+        sig.append(trust.signal("runs", 1 if l["status"] == "SUCCESS" else 0, _layer_severity(l["status"], cfg["poc.layers"]),
                                 f"latest run: {l['layer']} {l['status']}"))
-    stale = hours_old is None or hours_old > FRESHNESS_HOURS
-    sig.append(trust.signal("freshness", 0 if stale else 1, "HIGH", f"no successful pipeline run in the last {FRESHNESS_HOURS} h",
-                            ok_text=f"the pipeline succeeded within the last {FRESHNESS_HOURS} h"))
+    fr = cfg["poc.freshness"]
+    if fr["enabled"]:
+        stale = hours_old is None or hours_old > fr["hours"]
+        sig.append(trust.signal("freshness", 0 if stale else 1, fr["severity"], f"no successful pipeline run in the last {fr['hours']} h",
+                                ok_text=f"the pipeline succeeded within the last {fr['hours']} h"))
     n = tot["in"] or 1
     matched = sum(r["recon_status"] == "MATCH" for r in recon)
     dims = {"completeness": round(100.0 * (n - tot["lost"]) / n, 2), "validity": round(100.0 * (n - tot["rejected"]) / n, 2),
@@ -573,7 +591,8 @@ def trust_score(extra_signals: list | None = None) -> dict:
     t = trust.compute(sig + list(extra_signals or []),
                       trust.confidence(len(ENTITIES), len(ENTITIES), "pipeline tables"))   # the pipeline measures every table it loads
     t["dimensions"] = dims
-    t["rules"]["freshness_hours"] = FRESHNESS_HOURS
+    fr = _setting("poc.freshness")
+    t["rules"]["freshness_hours"] = fr["hours"] if fr["enabled"] else None      # the stale-data notice on Observe
     t["trend"] = trust_trend()
     return t
 
@@ -581,6 +600,7 @@ def trust_score(extra_signals: list | None = None) -> dict:
 def trust_trend() -> list:
     """Score per business date with the same formula, from what is known per date: settlement match and rejected rows."""
     out = []
+    st, rj = _setting("poc.settlement"), _setting("poc.rejected")
     for r in rows("""
         SELECT d.business_date::text AS business_date,
                COALESCE(s.recon_status, 'NO SETTLEMENT') AS recon_status,
@@ -589,11 +609,11 @@ def trust_trend() -> list:
         FROM gold.daily_revenue d LEFT JOIN gold.settlement_reconciliation s USING (business_date)
         ORDER BY 1"""):
         sig = []
-        if r["recon_status"] in ("MATCH", "MISMATCH"):
-            sig.append(trust.signal("reconciliation", 1 if r["recon_status"] == "MATCH" else 0, SETTLEMENT_SEVERITY, "settlement"))
+        if r["recon_status"] in ("MATCH", "MISMATCH") and st["enabled"]:
+            sig.append(trust.signal("reconciliation", 1 if r["recon_status"] == "MATCH" else 0, st["severity"], "settlement"))
         n = r["volume"] + r["rejected"]
-        if n:
-            sig.append(trust.signal("validity", r["volume"] / n, "MEDIUM", "rejected rows", failed=r["rejected"] > 0))
+        if n and rj["enabled"]:
+            sig.append(trust.signal("validity", r["volume"] / n, rj["severity"], "rejected rows", failed=r["rejected"] > 0))
         t = trust.compute(sig)
         if t["score"] is not None:
             out.append({"business_date": r["business_date"], "score": t["score"], "recon_status": r["recon_status"],
