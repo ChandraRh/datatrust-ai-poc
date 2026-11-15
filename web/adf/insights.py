@@ -496,6 +496,22 @@ def _activity_lineage(defs: dict, pipeline: str, ctx: dict, tasks_by_name: dict 
     return edges
 
 
+def _with_seen_tables(source_id: int, pipeline: str, edges: list) -> list:
+    """A Copy target named at run time (by a Lookup): the tables recent runs actually loaded, e.g. bronze.payments."""
+    try:
+        from checks import coverage
+    except Exception:                                          # noqa: BLE001
+        return edges
+    for e in edges:
+        t = e.get("target") or {}
+        if e.get("type") == "Copy" and ("@" in str(t.get("table")) or "@" in str(t.get("schema"))):
+            try:
+                e["seen_tables"] = [f"{s}.{n}" for s, n in coverage._runtime_tables(source_id, pipeline, t.get("schema"), t.get("table"))]
+            except Exception:                                  # noqa: BLE001
+                e["seen_tables"] = []
+    return edges
+
+
 def _default_ctx(defs: dict, name: str) -> dict:
     """pipeline() with the parameters' default values: lineage of a pipeline outside any particular run."""
     params = ((defs["pipeline"].get(name) or {}).get("properties") or {}).get("parameters") or {}
@@ -556,6 +572,8 @@ def run_detail(run_id: str) -> dict:
     raw_run = dict(_j(raw) or {})
     ctx = resolve.run_context({**run, "raw": raw_run, "run_start": run["run_start"]}, run["pipeline_name"],
                               (src.get("config") or {}).get("factory_name", ""))
+    # what each step returned in THIS run (e.g. the Lookup naming the target table), so the run's paths show real names
+    ctx["activity_outputs"] = {n: ts[-1].get("output") for n, ts in by_name.items() if ts and ts[-1].get("output")}
     roots = diagnose.failure_chain(run, tasks, _child_lookup) if run["status"] in ("Failed", "Cancelled") else []
     checks = _checks(run_id)
     for r in roots:                                     # evidence from the checks of the same step
@@ -610,7 +628,8 @@ def pipeline_detail(source_id: int, name: str) -> dict:
     return {"name": name, "factory": src["name"], "source_id": source_id, "description": props.get("description"),
             "parameters": props.get("parameters") or {}, "folder": (props.get("folder") or {}).get("name"),
             "activities": resolve.flatten_activities(props.get("activities")), "triggers": _triggers_for(defs, name),
-            "lineage": _activity_lineage(defs, name, _default_ctx(defs, name)), "runs": runs_[:60], "issues": mine, "health": label, "score": score,
+            "lineage": _with_seen_tables(source_id, name, _activity_lineage(defs, name, _default_ctx(defs, name))),
+            "runs": runs_[:60], "issues": mine, "health": label, "score": score,
             "adf_link": _adf_link(src), "removed": not p}
 
 

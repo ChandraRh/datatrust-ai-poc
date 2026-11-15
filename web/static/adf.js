@@ -220,29 +220,130 @@
   }
   function bindBack() { const b = $e("adfBack"); if (b) b.onclick = () => { A.runId = null; A.pipe = null; renderEstate("estate-adf-runs"); }; }
 
-  function assetHtml(a) {
+  // ---- "How it works": the steps as one line (and the failure branch), the data moves as a short table,
+  //      the rest summed up in one line; the full step and dataset details stay folded underneath
+  const pretty = (t) => String(t ?? "").replace(/@\{(.+?)\}/g, "@$1")
+    .replace(/@?pipeline\(\)\.parameters\.(\w+)/g, "{$1}")
+    .replace(/@?activity\('([^']+)'\)\.output\.firstRow\.(\w+)/g, "{$2 from $1}")
+    .replace(/@?item\(\)\.(\w+)/g, "{each $1}")
+    .replace(/@?activity\('([^']+)'\)[\w.()[\]']*/g, "{output of $1}");
+  const onFailure = (d) => (d.conditions || []).some((c) => /^(failed|skipped)$/i.test(c));
+  function flowOf(steps) {
+    const top = steps.filter((s) => !s.parent), fail = new Set(top.filter((s) => (s.depends_on || []).some(onFailure)).map((s) => s.name));
+    for (let changed = true; changed;) {            // what only runs after failure-path steps is on the failure path too
+      changed = false;
+      for (const s of top) if (!fail.has(s.name) && (s.depends_on || []).length && s.depends_on.every((d) => fail.has(d.activity))) { fail.add(s.name); changed = true; }
+    }
+    return { main: top.filter((s) => !fail.has(s.name)), onFail: top.filter((s) => fail.has(s.name)) };
+  }
+  function flowChip(s, steps, withStatus) {
+    const inner = steps.filter((x) => x.parent === s.name);
+    const after = (s.depends_on || []).map((d) => `${d.activity} ${(d.conditions || []).join("/").toLowerCase()}`).join(", ");
+    const cls = withStatus ? (ST[s.status] || "grey") : "";
+    return `<span class="flow-chip ${cls} ${s.state === "Inactive" ? "off" : ""}" title="${esc(s.type)}${after ? " · after " + esc(after) : ""}${withStatus ? " · " + esc(LABEL[s.status] || s.status || "") : ""}">${esc(s.name)}<small>${esc(s.type)}${inner.length ? ` · ${inner.length} inside` : ""}${s.state === "Inactive" ? " · off" : ""}</small></span>`;
+  }
+  const flowLine = (list, steps, withStatus) => list.map((s) => flowChip(s, steps, withStatus)).join(`<span class="flow-arr" aria-hidden="true">→</span>`);
+  function place(a) {
     if (!a) return `<span class="muted">–</span>`;
-    const title = a.kind === "storage" ? `${esc(a.system)} · ${esc(a.account || "?")}` : a.kind === "postgres" ? `${esc(a.system)} · ${esc(a.host || "server not readable")}` : esc(a.system || a.kind || "");
-    const name = a.kind === "storage" ? `${esc(a.container || "?")}/${esc(a.path || "")}${a.wildcard_file ? ` <span class="muted">(${esc(a.wildcard_folder || "")}/${esc(a.wildcard_file)})</span>` : ""}`
-      : a.kind === "postgres" ? `${esc(a.database || "?")}.<b>${esc(a.schema)}.${esc(a.table || "?")}</b>` : esc(a.name || "");
-    return `<div class="adf-asset ${esc(a.kind)}"><div class="small muted">${title}</div><div class="mono">${name}</div>
-      <div class="small muted">dataset ${esc(a.dataset || "–")}${a.write && a.write.method ? ` · write: ${esc(a.write.method)}` : ""}${a.write && a.write.pre_copy_script ? " · pre-copy script" : ""}</div>
-      ${a.unresolved && a.unresolved.length ? `<div class="small warn">depends on runtime values: ${esc(a.unresolved.join(", "))}</div>` : ""}</div>`;
+    if (a.kind === "storage") return `<span class="mono">${esc(pretty(`${a.container || "?"}/${a.path || ""}`))}</span><div class="small muted">${esc(a.system || "Storage")} · ${esc(a.account || "?")}</div>`;
+    if (a.kind === "postgres" || a.kind === "sql") return `<span class="mono">${esc(pretty(a.schema || ""))}.${esc(pretty(a.table || "?"))}</span><div class="small muted">${esc((a.system || "").replace("Azure Database for PostgreSQL", "Azure PostgreSQL"))} · ${esc(a.database || "?")}</div>`;
+    return `<span>${esc(pretty(a.name || a.system || "?"))}</span>`;
+  }
+  function howItWorks(steps, edges, withStatus) {
+    const { main, onFail } = flowOf(steps);
+    const moves = edges.filter((e) => ["Copy", "ExecutePipeline", "ExecuteDataFlow"].includes(e.type));
+    const other = {};
+    edges.filter((e) => !["Copy", "ExecutePipeline", "ExecuteDataFlow"].includes(e.type)).forEach((e) => {
+      const where = e.touches ? (e.touches.database || e.touches.name || e.touches.system || "") : "";
+      (other[where] = other[where] || {})[e.type] = ((other[where] || {})[e.type] || 0) + 1;
+    });
+    const seen = (e) => (e.seen_tables && e.seen_tables.length ? `<div class="small">recent runs loaded ${e.seen_tables.length} table${e.seen_tables.length > 1 ? "s" : ""}:
+        ${e.seen_tables.slice(0, 4).map((t) => `<code>${esc(t)}</code>`).join(" ")}${e.seen_tables.length > 4 ? ` +${e.seen_tables.length - 4} more` : ""}</div>` : "");
+    const row = (e) => `<tr><td>${withStatus && e.status ? chip(e.status) + " " : ""}<b>${esc(e.activity)}</b></td>` + (e.type === "Copy"
+      ? `<td>${place(e.source)}</td><td>${place(e.target)}${seen(e)}</td>`
+      : e.type === "ExecutePipeline" ? `<td class="muted">–</td><td>runs pipeline <b>${esc(e.child_pipeline || "?")}</b></td>`
+      : `<td colspan="2">data flow <b>${esc(e.dataflow || "?")}</b></td>`) + "</tr>";
+    return `<div class="hiw-label">Steps</div><div class="flow-line">${flowLine(main, steps, withStatus) || `<span class="muted">Pipeline definition not read (yet).</span>`}</div>
+      ${onFail.length ? `<div class="hiw-label">If a step fails</div><div class="flow-line">${flowLine(onFail, steps, withStatus)}</div>` : ""}
+      <div class="hiw-label">Data it moves</div>
+      ${moves.length ? `<div class="tablewrap"><table class="hiw-moves"><thead><tr><th>Step</th><th>From</th><th>To</th></tr></thead><tbody>${moves.map(row).join("")}</tbody></table></div>`
+        : `<p class="small muted">No Copy step: this pipeline moves no data itself.</p>`}
+      ${Object.keys(other).length ? `<p class="small muted">Also: ${Object.entries(other).map(([w, t]) => `${Object.entries(t).map(([k, n]) => `${n} ${esc(k)}`).join(", ")}${w ? ` on ${esc(w)}` : ""}`).join(" · ")}.</p>` : ""}
+      <p class="small muted">${moves.some((e) => [e.source, e.target].some((a) => a && /\{/.test(pretty(a.kind === "storage" ? `${a.container}/${a.path}` : `${a.schema}.${a.table}`)))) ? `{name} = a value set when the pipeline runs${withStatus ? "" : " (each run page shows that run's own values)"}. ` : ""}Hover a step for its type and what it waits for.</p>
+      <details class="small hiw-more"><summary>All step and dataset details</summary>${detailsTable(steps, edges, withStatus)}</details>`;
   }
 
-  function lineageHtml(edges) {
-    if (!edges.length) return `<p class="muted">No data movement found in the definition (no Copy activities).</p>`;
-    return edges.map((e) => e.type === "Copy" ? `<div class="adf-flow">${assetHtml(e.source)}<div class="adf-arrow"><div>${esc(e.activity)}</div>${e.status ? chip(e.status) : ""}<span>→</span></div>${assetHtml(e.target)}</div>`
-      : e.type === "ExecutePipeline" ? `<div class="adf-flow small"><span class="adf-arrow"><div>${esc(e.activity)}</div>${e.status ? chip(e.status) : ""}</span> runs pipeline <b>${esc(e.child_pipeline || "?")}</b></div>`
-      : `<div class="adf-flow small"><span class="adf-arrow"><div>${esc(e.activity)} (${esc(e.type)})</div>${e.status ? chip(e.status) : ""}</span>${e.touches ? assetHtml(e.touches) : e.dataflow ? `data flow <b>${esc(e.dataflow)}</b>` : ""}</div>`).join("");
+  // ---- the folded "All step and dataset details": one row per step (what it waits for, what it reads/writes, datasets)
+  function where(a) {   // a Script / Lookup / Stored procedure step names a server and database, often no table
+    if (!a) return "";
+    if ((a.kind === "postgres" || a.kind === "sql") && !a.table) return `<span class="muted">runs on ${esc(a.database || "?")}</span><div class="small muted">${esc((a.system || "").replace("Azure Database for PostgreSQL", "Azure PostgreSQL"))}</div>`;
+    return place(a);
   }
-
-  function stepsHtml(steps, withStatus = true) {
+  function detailsTable(steps, edges, withStatus) {
     if (!steps.length) return `<p class="muted">Pipeline definition not read (yet).</p>`;
-    return `<ol class="adf-steps">${steps.map((s) => `<li class="${s.parent ? "nested" : ""}">${withStatus ? chip(s.status) + " " : ""}<b>${esc(s.name)}</b> <span class="small muted">${esc(s.type)}${s.runs > 1 ? ` · ${s.runs} runs${s.failed ? `, ${s.failed} failed` : ""}` : ""}${s.state === "Inactive" ? " · deactivated" : ""}</span>
-      ${s.depends_on && s.depends_on.length ? `<div class="small muted">after ${s.depends_on.map((d) => `${esc(d.activity)} <i>${esc(d.conditions.join("/").toLowerCase())}</i>`).join(", ")}</div>` : ""}
-      ${s.parent ? `<div class="small muted">inside ${esc(s.parent)}${s.branch && s.branch !== "activities" ? ` (${esc(s.branch)})` : ""}</div>` : ""}</li>`).join("")}</ol>`;
+    const byStep = {}; edges.forEach((e) => { (byStep[e.activity] = byStep[e.activity] || []).push(e); });
+    const ds = (a) => (a && a.dataset ? esc(a.dataset) : "");
+    const cells = (e) => {
+      if (!e) return [`<span class="muted">–</span>`, ""];
+      const runtime = [e.source, e.target, e.touches].flatMap((a) => (a && a.unresolved) || []);
+      const note = runtime.length ? `<div class="small muted">set at run time: ${esc([...new Set(runtime)].map(pretty).join(", "))}</div>` : "";
+      if (e.type === "Copy") return [`${place(e.source)}<div class="dt-arrow" aria-hidden="true">↓</div>${place(e.target)}${note}`,
+        [ds(e.source), ds(e.target)].filter(Boolean).join(" → ") + (e.target && e.target.write && e.target.write.method ? `<div class="small muted">write: ${esc(e.target.write.method)}${e.target.write.pre_copy_script ? " · pre-copy script" : ""}</div>` : "")];
+      if (e.type === "ExecutePipeline") return [`runs pipeline <b>${esc(e.child_pipeline || "?")}</b>`, ""];
+      if (e.dataflow) return [`data flow <b>${esc(e.dataflow)}</b>`, ""];
+      return [e.touches ? where(e.touches) + note : `<span class="muted">–</span>`, ds(e.touches)];
+    };
+    const rows = steps.map((s) => {
+      const [data, dset] = cells((byStep[s.name] || [])[0]);
+      const after = (s.depends_on || []).map((d) => `${esc(d.activity)} <i>${esc((d.conditions || []).join("/").toLowerCase())}</i>`).join("<br>");
+      return `<tr class="${s.parent ? "nested" : ""}"><td>${withStatus ? chip(s.status) + " " : ""}<b>${esc(s.name)}</b>
+          <div class="small muted">${esc(s.type)}${s.runs > 1 ? ` · ${s.runs} runs${s.failed ? `, ${s.failed} failed` : ""}` : ""}${s.state === "Inactive" ? " · deactivated" : ""}${s.parent ? ` · inside ${esc(s.parent)}${s.branch && s.branch !== "activities" ? ` (${esc(s.branch)})` : ""}` : ""}</div></td>
+        <td class="small">${after || `<span class="muted">first step</span>`}</td><td>${data}</td><td class="small">${dset || `<span class="muted">–</span>`}</td></tr>`;
+    }).join("");
+    return `<div class="tablewrap dt-wrap"><table class="dt-table"><colgroup><col class="c-step"><col class="c-after"><col class="c-data"><col class="c-ds"></colgroup>
+      <thead><tr><th>Step</th><th>Runs after</th><th>Reads / writes</th><th>Dataset</th></tr></thead><tbody>${rows}</tbody></table></div>`;
   }
+
+  // ---- Source and target checks, compact: one result line, one line per file / table, problems in full, the table folded
+  const n0s = (v) => (v == null || v === "" ? "?" : isNaN(Number(v)) ? String(v) : Number(v).toLocaleString());
+  function checkShort(c) {
+    const ok = c.status === "PASS", e = c.expected, o = c.observed;
+    const t = {
+      SOURCE_FILES: ok ? "file present" : "files",
+      SOURCE_ROWS: e != null && o != null ? `${n0s(o)} rows${ok ? ` = ADF read ${n0s(e)}` : ` vs ADF read ${n0s(e)}`}` : "row count",
+      SCHEMA_MATCH: ok ? "columns match" : "columns differ",
+      TARGET_TABLE: ok ? "table exists" : "table",
+      TARGET_ROWS: o != null ? `holds ${n0s(String(o).split(" ")[0])} rows` : "row count",
+      SKIPPED_ROWS: o != null ? `${n0s(o)} rows skipped` : "skipped rows",
+    }[c.check_type];
+    return t || CHECK[c.check_type] || c.check_type;
+  }
+  function checksCompact(checks) {
+    if (!checks.length) return `<p class="muted">No checks for this run (only Copy steps of each pipeline's newest runs are checked).</p>`;
+    const passed = checks.filter((c) => c.status === "PASS").length;
+    const groups = [];
+    for (const c of checks) {
+      const k = `${c.side}|${c.asset || ""}|${c.activity_name || ""}`;
+      let g = groups.find((x) => x.k === k);
+      if (!g) groups.push((g = { k, side: c.side, asset: c.asset, step: c.activity_name, items: [] }));
+      g.items.push(c);
+    }
+    const mark = { PASS: ["ok", "✓"], FAIL: ["bad", "✗"], WARN: ["warn", "!"], UNKNOWN: ["grey", "?"], INFO: ["grey", "i"] };
+    const problems = checks.filter((c) => !["PASS", "INFO"].includes(c.status));
+    const steps = new Set(checks.map((c) => c.activity_name).filter(Boolean));
+    const newest = checks.map((c) => c.checked_at).filter(Boolean).sort().pop();
+    return `<p class="small"><b class="${problems.length ? "bad" : "ok"}">${passed} of ${checks.length} passed</b>
+        <span class="muted">${steps.size === 1 ? `· step ${esc([...steps][0])} ` : ""}${newest ? `· checked ${esc(ago(newest))}` : ""}</span></p>
+      <div class="chk-lines">${groups.map((g) => `<div class="chk-line"><span class="chk-side">${g.side === "source" ? "Source" : "Target"}</span>
+        <span class="mono chk-asset">${esc(pretty(g.asset || "–"))}</span>${steps.size > 1 && g.step ? `<span class="small muted">${esc(g.step)}</span>` : ""}
+        <span class="chk-items">${g.items.map((c) => { const [cls, m] = mark[c.status] || mark.UNKNOWN;
+          return `<span class="chk-item ${cls}" title="${esc(CHECK[c.check_type] || c.check_type)}: ${esc((c.detail || "").split("\n")[0])}"><b>${m}</b> ${esc(checkShort(c))}</span>`; }).join("")}</span></div>`).join("")}</div>
+      ${problems.map((c) => `<div class="chk-problem ${ST[c.status] || "grey"}">${chip(c.status)} <b>${esc(CHECK[c.check_type] || c.check_type)}</b> <span class="mono small">${esc(pretty(c.asset || ""))}</span>
+        <div class="small">${c.expected ? `expected ${esc(c.expected)} · ` : ""}${c.observed ? `found ${esc(c.observed)}` : ""}</div>
+        <div class="small muted">${esc(c.detail || "").replace(/\n/g, "<br>")}</div></div>`).join("")}`;
+  }
+  // ---- step table: only the steps that move data, fail or report an error; the rest in one line, the full table folded
+  const isDataStep = (t) => t.rows_read != null || t.rows_written != null || t.data_read != null || t.status === "Failed" || t.error_message;
 
   async function runDetail(runId) {
     const d = await api(`/runs/${encodeURIComponent(runId)}`);
@@ -256,12 +357,21 @@
           title="${esc(t.status)} · ${dur(t.duration_ms)}${t.queue_ms ? ` (queued ${dur(t.queue_ms)})` : ""}">${q ? `<i style="width:${q}%"></i>` : ""}</div></div>
         <div class="adf-g-dur small">${dur(t.duration_ms)}</div></div>`;
     }).join("");
-    const stepRows = d.tasks.map((t) => `<tr><td>${chip(t.status)}</td><td><b>${esc(t.activity_name)}</b><div class="small muted">${esc(t.activity_type)}</div></td>
+    const stepRow = (t) => `<tr><td>${chip(t.status)}</td><td><b>${esc(t.activity_name)}</b><div class="small muted">${esc(t.activity_type)}</div></td>
         <td class="num">${n0(t.rows_read)}</td><td class="num">${n0(t.rows_written)}</td><td class="num ${t.rows_skipped ? "warn" : ""}">${n0(t.rows_skipped)}</td>
         <td class="num">${t.data_read != null ? fmtBytes(t.data_read) : "–"} / ${t.data_written != null ? fmtBytes(t.data_written) : "–"}</td>
         <td class="num">${dur(t.duration_ms)}${t.queue_ms ? `<div class="small muted">queue ${dur(t.queue_ms)}</div>` : ""}</td>
         <td class="small">${t.source_type ? `${esc(t.source_type)} → ${esc(t.sink_type)}` : ""}${t.diu ? `<div class="muted">${t.diu} DIU${t.parallel ? ` · ${t.parallel} parallel` : ""}</div>` : ""}${t.throughput_kbps ? `<div class="muted">${Number(t.throughput_kbps).toFixed(1)} KB/s</div>` : ""}</td>
-        <td class="small adf-msg">${t.error_message ? `<span class="bad">${esc(t.error_code || "")}</span> ${esc(t.error_message.slice(0, 140))}${t.error_message.length > 140 ? "…" : ""}` : ""}</td></tr>`).join("");
+        <td class="small adf-msg">${t.error_message ? `<span class="bad">${esc(t.error_code || "")}</span> ${esc(t.error_message.slice(0, 140))}${t.error_message.length > 140 ? "…" : ""}` : ""}</td></tr>`;
+    const stepHead = `<thead><tr><th>Status</th><th>Step</th><th class="num">Rows read</th><th class="num">Rows written</th>
+          <th class="num">Skipped</th><th class="num">Data read / written</th><th class="num">Duration</th><th>Engine</th><th>Error</th></tr></thead>`;
+    const dataSteps = d.tasks.filter(isDataStep), restSteps = d.tasks.filter((t) => !isDataStep(t));
+    const restCount = restSteps.reduce((m, t) => ((m[LABEL[t.status] || t.status] = (m[LABEL[t.status] || t.status] || 0) + 1), m), {});
+    const stepsCard = d.tasks.length ? `<div class="card"><h3>Data steps: rows, data and errors</h3>
+        ${dataSteps.length ? `<div class="tablewrap adf-table"><table>${stepHead}<tbody>${dataSteps.map(stepRow).join("")}</tbody></table></div>`
+          : `<p class="small muted">No step of this run moved data or reported an error.</p>`}
+        ${restSteps.length ? `<p class="small muted">${restSteps.length} other step${restSteps.length > 1 ? "s" : ""} (${Object.entries(restCount).map(([s, n]) => `${n} ${esc(s.toLowerCase())}`).join(", ")}): no rows or data of their own; their timing is under Steps over time.</p>` : ""}
+        <details class="small hiw-more"><summary>All ${d.tasks.length} steps</summary><div class="tablewrap adf-table"><table>${stepHead}<tbody>${d.tasks.map(stepRow).join("")}</tbody></table></div></details></div>` : "";
     const roots = d.root_causes.map((c) => `<div class="adf-root">
         <div class="adf-path">${c.path.map((p) => `<span>${esc(p)}</span>`).join("<b>›</b>")}</div>
         <h3>${esc(c.title)} <span class="chip grey">${esc(c.system)}</span> ${c.retry_helps ? `<span class="chip ok">re-run may fix it</span>` : `<span class="chip warn">needs a fix before re-running</span>`}</h3>
@@ -270,8 +380,8 @@
         ${c.details && Object.keys(c.details).length ? `<div class="small muted">Named in the error: ${Object.entries(c.details).filter(([k]) => k !== "inner_codes").map(([k, v]) => `${esc(k)} <code>${esc(v)}</code>`).join(" · ")}${c.details.inner_codes ? ` · codes <code>${esc(c.details.inner_codes.join(", "))}</code>` : ""}</div>` : ""}
         <div><b>What to do</b><ol class="adf-fixes">${c.fixes.map((f) => `<li>${esc(f)}</li>`).join("")}</ol></div>
         ${c.evidence && c.evidence.length ? `<div class="small"><b>DataTrust checked:</b> ${c.evidence.map((e) => `${chip(e.status)} ${esc(CHECK[e.check_type] || e.check_type)}: ${esc((e.detail || "").split("\n")[0])}`).join("<br>")}</div>` : ""}</div>`).join("");
-    const checks = d.checks.map((c) => `<tr><td>${chip(c.status)}</td><td>${esc(c.side === "source" ? "Source" : "Target")}</td><td><b>${esc(CHECK[c.check_type] || c.check_type)}</b><div class="small muted">${esc(c.activity_name || "")}</div></td>
-        <td class="small mono">${esc(c.asset || "")}</td><td class="small">${c.expected ? `expected ${esc(c.expected)}<br>` : ""}${c.observed ? `found ${esc(c.observed)}` : ""}</td>
+    const checks = d.checks.map((c) => `<tr><td>${chip(c.status)}</td><td><div class="small muted">${esc(c.side === "source" ? "Source" : "Target")}</div><b>${esc(CHECK[c.check_type] || c.check_type)}</b><div class="small muted">${esc(c.activity_name || "")}</div></td>
+        <td class="small mono">${esc(pretty(c.asset || ""))}</td><td class="small">${c.expected ? `expected ${esc(c.expected)}<br>` : ""}${c.observed ? `found ${esc(c.observed)}` : ""}</td>
         <td class="small adf-msg">${esc(c.detail || "").replace(/\n/g, "<br>")}<div class="muted">checked ${esc(ago(c.checked_at))}</div></td></tr>`).join("");
     const cmp = d.compare;
     const vs = (v, m, f) => (v != null && m ? `<div class="small ${v > 2 * m || v < 0.5 * m ? "warn" : "muted"}">usual ${f(m)}</div>` : "");
@@ -291,14 +401,13 @@
           ${d.reruns.length ? `<div class="small muted">Same run group (re-runs): ${d.reruns.map((c) => `${runLink(c.run_id)} ${chip(c.status)}`).join(" ")}</div>` : ""}
           ${params.length ? `<div class="small adf-params"><b>Parameters</b> ${params.map(([k, v]) => `<code>${esc(k)} = ${esc(typeof v === "object" ? JSON.stringify(v) : v)}</code>`).join(" ")}</div>` : ""}</div>
         ${roots ? `<div class="card adf-rootcard"><h3>Why it ${r.status === "Cancelled" ? "stopped" : "failed"}</h3>${roots}</div>` : ""}
-        <div class="card"><h3>Steps over time</h3>${gantt ? `<div class="adf-gantt">${gantt}</div><div class="small muted">Bars are placed on the run's timeline (0 → ${dur(total)}); the lighter part is time spent waiting in the queue.</div>` : `<p class="muted">No step details yet${["InProgress", "Queued"].includes(r.status) ? " (run still in progress)" : ""}.</p>`}</div>
-        <div class="card"><h3>Steps: rows, data and errors</h3><div class="tablewrap adf-table"><table><thead><tr><th>Status</th><th>Step</th><th class="num">Rows read</th><th class="num">Rows written</th>
-          <th class="num">Skipped</th><th class="num">Data read / written</th><th class="num">Duration</th><th>Engine</th><th>Error</th></tr></thead><tbody>${stepRows}</tbody></table></div></div>
+        <div class="card"><h3>How this run went</h3>${howItWorks(d.steps, d.lineage, true)}</div>
         <div class="card"><h3>Source and target checks</h3><p class="small muted">DataTrust looks at the files and tables itself; it does not rely only on what ADF reports.</p>
-          ${checks ? `<div class="tablewrap adf-table"><table><thead><tr><th>Result</th><th>Side</th><th>Check</th><th>Asset</th><th>Values</th><th>Details</th></tr></thead><tbody>${checks}</tbody></table></div>`
-            : `<p class="muted">No checks for this run (only Copy steps of each pipeline's newest runs are checked).</p>`}</div>
-        <div class="card"><h3>Data moved in this run</h3>${lineageHtml(d.lineage)}</div>
-        <div class="card"><h3>Pipeline steps and order</h3>${stepsHtml(d.steps)}</div>`,
+          ${checksCompact(d.checks)}
+          ${checks ? `<details class="small hiw-more"><summary>Full check details</summary><div class="tablewrap adf-table"><table class="chk-table"><colgroup><col class="c-res"><col class="c-chk"><col class="c-asset"><col class="c-val"><col class="c-det"></colgroup>
+            <thead><tr><th>Result</th><th>Check</th><th>Asset</th><th>Values</th><th>Details</th></tr></thead><tbody>${checks}</tbody></table></div></details>` : ""}</div>
+        <div class="card"><h3>Steps over time</h3>${gantt ? `<div class="adf-gantt">${gantt}</div><div class="small muted">Bars are placed on the run's timeline (0 → ${dur(total)}); the lighter part is time spent waiting in the queue.</div>` : `<p class="muted">No step details yet${["InProgress", "Queued"].includes(r.status) ? " (run still in progress)" : ""}.</p>`}</div>
+        ${stepsCard}`,
       bind() { bindBack(); bindLinks($e("body-estate-adf-runs")); },
     };
   }
@@ -318,8 +427,7 @@
         ${p.issues.length ? `<div class="card"><h3>Open issues</h3>${p.issues.map((i) => issueCard(i, false)).join("")}</div>` : ""}
         <div class="grid g-2"><div class="card"><h3>Duration per run</h3><div class="chartbox"><canvas id="adfDur"></canvas></div></div>
           <div class="card"><h3>Rows loaded per run</h3><div class="chartbox"><canvas id="adfRows"></canvas></div></div></div>
-        <div class="card"><h3>Data it moves</h3><p class="small muted">With the parameters' default values; each run page shows the exact paths of that run.</p>${lineageHtml(p.lineage)}</div>
-        <div class="card"><h3>Steps and order</h3>${stepsHtml(p.activities, false)}</div>
+        <div class="card"><h3>How it works</h3>${howItWorks(p.activities, p.lineage, false)}</div>
         <div class="card"><h3>Recent runs</h3><div class="tablewrap adf-table"><table><thead><tr><th>Status</th><th>Started</th><th class="num">Duration</th><th class="num">Rows</th><th>Message</th></tr></thead>
           <tbody>${p.runs.map((r) => `<tr class="clickable" data-run="${esc(r.run_id)}"><td>${chip(r.status)}</td><td class="nowrap">${esc(when(r.run_start))}</td>
             <td class="num">${dur(r.duration_ms)}</td><td class="num">${n0(r.rows_written)}</td><td class="small adf-msg">${esc((r.message || "").replace(/^Operation on target .*? failed: /, "").slice(0, 200))}</td></tr>`).join("") || `<tr><td colspan="5" class="muted">No runs in the history yet.</td></tr>`}</tbody></table></div></div>`,

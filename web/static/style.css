@@ -740,8 +740,48 @@ label.cv-row { cursor: pointer; }
 .cv-row .cv-name { flex: 1 1 260px; min-width: 0; overflow-wrap: anywhere; }
 .cv-kinds { display: flex; flex-wrap: wrap; gap: 4px; }
 .cv-kind { font-size: 11px; padding: 1px 7px; border-radius: 999px; background: var(--line-soft); color: var(--ink-2); }
+/* ---- ADF: How it works (steps as one line, data moves as a short table) */
+.hiw-label { font-size: 11.5px; text-transform: uppercase; letter-spacing: .05em; color: var(--muted); margin: 12px 0 6px; }
+.hiw-label:first-child { margin-top: 0; }
+.flow-line { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; }
+.flow-chip { display: inline-flex; align-items: baseline; gap: 6px; padding: 3px 10px; border: 1px solid var(--line); border-radius: 999px;
+  font-size: 12.5px; background: var(--card); white-space: nowrap; }
+.flow-chip small { color: var(--muted); font-size: 11px; }
+.flow-chip.ok { border-color: var(--teal); } .flow-chip.bad { border-color: var(--red); background: var(--red-bg); }
+.flow-chip.warn { border-color: var(--amber); } .flow-chip.grey { color: var(--muted); }
+.flow-chip.off { opacity: .55; text-decoration: line-through; }
+.flow-arr { color: var(--muted); font-size: 12px; }
+.hiw-moves td { vertical-align: top; font-size: 13px; } .hiw-moves .mono { overflow-wrap: anywhere; }
+.hiw-more { margin-top: 10px; } .hiw-more summary { cursor: pointer; color: var(--ink-2); }
+/* ---- ADF: source and target checks, one line per file / table */
+.chk-lines { display: flex; flex-direction: column; gap: 6px; }
+.chk-line { display: flex; flex-wrap: wrap; align-items: baseline; gap: 6px 10px; padding: 7px 10px; border: 1px solid var(--line-soft);
+  border-radius: var(--radius-sm); font-size: 13px; }
+.chk-side { font-size: 11px; text-transform: uppercase; letter-spacing: .05em; color: var(--muted); min-width: 52px; }
+.chk-asset { font-size: 12.5px; overflow-wrap: anywhere; }
+.chk-items { display: flex; flex-wrap: wrap; gap: 6px 12px; margin-left: auto; }
+.chk-item b { margin-right: 2px; } .chk-item.ok b { color: var(--teal); } .chk-item.bad b, .chk-item.bad { color: var(--red); }
+.chk-item.warn b { color: var(--amber); } .chk-item.grey { color: var(--muted); }
+.chk-problem { margin-top: 8px; padding: 8px 10px; border-left: 3px solid var(--line); background: var(--line-soft); border-radius: 4px; }
+.chk-problem.bad { border-left-color: var(--red); background: var(--red-bg); }
+.chk-problem.warn { border-left-color: var(--amber); background: var(--amber-bg); }
+.chk-problem .mono { overflow-wrap: anywhere; }
+/* full check table: fixed shares, so a long asset name wraps instead of squeezing Values / Details */
+.chk-table { table-layout: fixed; width: 100%; min-width: 760px; }
+.chk-table .c-res { width: 110px; } .chk-table .c-chk { width: 19%; } .chk-table .c-asset { width: 24%; }
+.chk-table .c-val { width: 19%; } .chk-table .c-det { width: auto; }
+.chk-table td { overflow-wrap: anywhere; vertical-align: top; }
+.chk-table td.adf-msg { white-space: normal; }
 .cv-biz { margin: 0 0 8px 28px; padding: 10px 12px; border-left: 3px solid #7C5CDB; background: var(--card); display: flex; flex-direction: column; gap: 8px; }
 .cv-biz-item { display: flex; gap: 8px; align-items: flex-start; }
 .cv-biz-item pre { margin: 4px 0 0; }
 .cv-log .cv-res { padding: 7px 0; border-bottom: 1px solid var(--line-soft); }
 .cv-log .cv-res:last-child { border-bottom: 0; }
+
+/* ADF run / pipeline page: folded "All step and dataset details" table */
+.dt-wrap { max-height: none; }
+.dt-table { table-layout: fixed; width: 100%; min-width: 720px; margin-top: 8px; }
+.dt-table .c-step { width: 26%; } .dt-table .c-after { width: 22%; } .dt-table .c-data { width: 32%; } .dt-table .c-ds { width: auto; }
+.dt-table td { overflow-wrap: anywhere; vertical-align: top; }
+.dt-table tr.nested td:first-child { padding-left: 26px; }
+.dt-arrow { color: var(--muted); line-height: 1.2; }
