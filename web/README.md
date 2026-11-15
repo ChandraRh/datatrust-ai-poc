@@ -127,6 +127,7 @@ Google Chat alerts cover every source and name it on each card. Links: `#observe
 | Impact | A fix plan and prevention steps; new steps can be ticked into the approval | same |
 | Observe | Today's briefing for the source: state, what broke / got fixed, what to watch; optional daily post to Google Chat (`BRIEFING_CHAT_AT`) | the source's score, incidents and trend |
 | DQ Rule Studio → Add rule | Suggested rules for a table (also without a model, from the profile) | the table's measured profile (counts, empty %, distinct, ranges) |
+| DQ Rule Studio → Add rule | A rule from plain words ("every email ends with @gmail.com"): written, checked (read-only SELECT on that table, known columns only) and run once on today's data before anything is saved; without a model, common phrasings still work (unique, never empty, ends / starts with, positive, at least N) | the table's column names and types only, never rows or values |
 | Ask DataTrust AI | Questions about the selected source (or any other by name) | read-only tools: overview, incidents, checks, ADF runs, catalog, one SELECT |
 
 Rules (`web/llm.py`): the model never gets direct access; it answers from evidence DataTrust measured; any number it writes

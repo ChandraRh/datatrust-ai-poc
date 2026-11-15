@@ -310,7 +310,62 @@
         <button class="btn btn-sm" id="ckSuggest">${C.suggest && C.suggest.key === tableKey ? "Suggest again" : "Suggest checks"}</button></div>
         <p class="small muted">DataTrust measures the table (row count, empty values, distinct values, ranges per column) and proposes checks that fit it.
           Nothing is added until you choose.</p><div id="ckSuggestBody">${C.suggest && C.suggest.key === tableKey ? suggestList(C.suggest.data) : ""}</div></div>` : "";
-    return { html: html + sugg, bind: () => { bindForm(); bindSuggest(tableKey); } };
+    const words = tableKey ? `<div class="card ai-card" id="ckWordsCard"><div class="ai-head"><span class="ai-badge">AI</span>
+        <b>Describe a rule for ${esc(f.schema_name)}.${esc(f.table_name)} in plain words</b></div>
+        <div class="ck-words"><input id="ckWordsText" maxlength="500" value="${esc(C.words && C.words.key === tableKey ? C.words.text : "")}"
+            placeholder="e.g. every email ends with @gmail.com · order_id is unique · amount is positive · status is never empty">
+          <button class="btn btn-sm" id="ckWordsGo">Write the rule</button></div>
+        <p class="small muted">DataTrust turns the sentence into a rule and runs it once on today's data, so you see what it would report before
+          anything is saved. The AI model only sees the table's column names and types, never its rows.</p>
+        <div id="ckWordsOut">${C.words && C.words.key === tableKey && C.words.data ? wordsResult(C.words.data) : ""}</div></div>` : "";
+    return { html: html + words + sugg, bind: () => { bindForm(); bindWords(tableKey); bindSuggest(tableKey); } };
+  }
+
+  // ---- a rule described in plain words (ai.rule_from_text): proposed, test-run, then put into the form to adjust and save
+  function wordsResult(d) {
+    if (!d.ok) return `<div class="banner warn small"><b>No rule written.</b> ${esc(d.reason || "")}${d.note ? `<br>${esc(d.note)}` : ""}</div>`;
+    const r = d.rule, p = d.preview || {};
+    return `<div class="ck-words-res">
+      <p><b>${esc(r.name)}</b> <span class="chip ${SEV[r.severity]}">${esc(r.severity)}</span> <span class="small muted">${esc((TYPES[r.check_type] || [r.check_type])[0])}
+        · ${esc(d.source && d.source.startsWith("ai") ? "written by " + d.source.slice(4, -1) : "matched a common phrasing")}</span></p>
+      ${d.understood ? `<p class="small"><b>Checks:</b> ${esc(d.understood)}</p>` : ""}
+      ${(d.assumptions || []).length ? `<p class="small muted">${d.assumptions.map(esc).join(" · ")}</p>` : ""}
+      ${r.config && r.config.sql ? `<pre class="code small">${esc(r.config.sql)}</pre>` : ""}
+      <p class="small"><b>On today's data:</b></p>${resultBox({ check_type: r.check_type }, p)}
+      ${d.note ? `<p class="small muted">${esc(d.note)}</p>` : ""}
+      <div class="pacts"><button class="btn" id="ckWordsUse">Use this rule</button><span class="small muted">fills the form above: adjust anything, then <b>Add rule</b></span></div></div>`;
+  }
+  function bindWords(tableKey) {
+    if (!tableKey || !$e("ckWordsGo")) return;
+    const [cid, db, schema, table] = tableKey.split("|");
+    const go = async () => {
+      const text = $e("ckWordsText").value.trim();
+      if (!text) return toast("Describe the rule first");
+      readForm();
+      $e("ckWordsGo").disabled = true;
+      $e("ckWordsOut").innerHTML = "<p class='muted'>Writing the rule and running it once on today's data…</p>";
+      try {
+        C.words = { key: tableKey, text, data: await send("/from-text", "POST", { connection_id: Number(cid), database: db || null, schema_name: schema, table_name: table, text }) };
+        $e("ckWordsOut").innerHTML = wordsResult(C.words.data);
+        bindUse();
+      } catch (x) { $e("ckWordsOut").innerHTML = errBox(x); }
+      $e("ckWordsGo").disabled = false;
+    };
+    $e("ckWordsGo").onclick = go;
+    $e("ckWordsText").onkeydown = (e) => { if (e.key === "Enter") { e.preventDefault(); go(); } };
+    bindUse();
+    function bindUse() {
+      if (!$e("ckWordsUse")) return;
+      $e("ckWordsUse").onclick = () => {
+        const r = C.words.data.rule;
+        C.f = { ...C.f, check_type: r.check_type, name: r.name, severity: r.severity, config: { ...r.config },
+          description: r.description || C.f.description, connection_id: String(r.connection_id), database: r.database || C.f.database,
+          schema_name: r.schema_name || C.f.schema_name, table_name: r.table_name || C.f.table_name };
+        C.preview = C.words.data.preview;
+        renderEstate("estate-checks-new").then(() => { const fm = $e("ckForm"); if (fm) fm.scrollIntoView({ behavior: "smooth" }); });
+        toast("Rule put into the form: check it, then Add rule");
+      };
+    }
   }
 
   // ---- suggested checks for the chosen table (profile-based; written by the AI model when one is configured)

@@ -150,6 +150,128 @@ def suggest_checks(connection_id: int, database: str | None, schema: str, table:
     return {"profile": profile, "suggestions": out, "source": source}
 
 
+# ============================================================================ a rule from plain English
+RULE_SYSTEM = (
+    "You are DataTrust AI. Turn ONE data-quality requirement, written in plain words, into ONE read-only data check on the "
+    "given table. You only see the table's column names and types, never its data. "
+    "Allowed check types and config:\n"
+    "freshness {column, max_age_hours}; volume {min_rows, max_drop_pct}; null_rate {column, max_null_pct}; "
+    "uniqueness {columns: [..]}; schema {}; custom_sql {sql, mode: \"no_rows\"}.\n"
+    "Prefer the specific types; use custom_sql for anything else (patterns, ranges, lists of values, comparisons between "
+    "columns). A custom_sql query is ONE read-only SELECT on exactly this table, written with the fully qualified table name "
+    "as given, in the SQL dialect of database_type, and it returns the rows that BREAK the rule (so: passes when it returns "
+    "no rows); select the key and the offending columns. Use only the listed columns, spelled exactly. "
+    "Return JSON {\"name\": short name (max 80 chars), \"check_type\", \"config\", \"severity\": LOW|MEDIUM|HIGH|CRITICAL, "
+    "\"understood\": one sentence saying in plain words exactly what will be checked, \"assumptions\": [short notes on "
+    "choices you made, e.g. case-sensitive match, empty values ignored], \"why\": one sentence why it matters}. "
+    "Severity: HIGH for keys and money, MEDIUM for most, CRITICAL only if wrong data would reach customers. "
+    "If the request is not a check of this table's data (it asks to change or delete data, names another table, or is too "
+    "vague to test), return {\"cannot\": one sentence saying why and what to write instead}.")
+
+
+def rule_from_text(connection_id: int, database: str | None, schema: str, table: str, text: str) -> dict:
+    """A rule described in plain words -> a check definition, test-run once on today's data (nothing is saved).
+    The model sees the table's column names and types only, never rows or values."""
+    from checks import engine, store as checks_store
+    text = " ".join((text or "").split())
+    if not 5 <= len(text) <= 500:
+        raise ValueError("describe the rule in a sentence (5 to 500 characters)")
+    cols = engine.columns(connection_id, database, schema, table)[:120]
+    d = engine._dialect(connection_id)
+    evidence = {"table": f"{schema}.{table}", "fully_qualified_table": d.table(schema, table), "database_type": d.name,
+                "columns": [{"name": c["name"], "type": c["type"]} for c in cols], "request": text}
+    base = {"connection_id": connection_id, "database": database, "schema_name": schema, "table_name": table, "schedule_minutes": 60}
+    got, source, note = None, "phrase", None
+    if llm.provider() != "none":
+        try:
+            got = llm.grounded("rule", f"{schema}.{table}", evidence, RULE_SYSTEM,
+                               "Request and table (JSON):\n" + json.dumps(evidence, default=str))
+            source = f"ai ({got.get('model')})"
+        except llm.Unavailable as e:
+            note = f"The AI model did not answer ({e}); matched common phrasings instead."
+    if got and got.get("cannot"):
+        return {"ok": False, "reason": got["cannot"], "source": source}
+    rule = {k: got.get(k) for k in ("name", "check_type", "config", "severity")} if got and got.get("check_type") else None
+    if rule is None:
+        rule = phrase_rule(text, cols, schema, table, d)
+        source = "phrase" if rule else source
+        if rule:
+            got = {"understood": rule.pop("understood"), "assumptions": rule.pop("assumptions", []), "why": None}
+    if not rule:
+        return {"ok": False, "source": source, "note": note,
+                "reason": ("No AI model is configured, and this sentence does not match a common phrasing. Write it like "
+                           "\"email ends with @gmail.com\", \"order_id is unique\", \"amount is positive\", \"status is never empty\", "
+                           "or build it with the form below.") if llm.provider() == "none" or note else
+                          "The model did not return a usable rule. Try a more specific sentence, or build it with the form below."}
+    try:
+        v = checks_store.validate({**base, **rule, "name": (rule.get("name") or text)[:80]})
+    except (ValueError, TypeError) as e:
+        return {"ok": False, "reason": f"The proposed rule is not valid: {e}", "source": source}
+    known = {c["name"].lower() for c in cols}
+    used = [v["config"].get("column")] + list(v["config"].get("columns") or [])
+    bad = [c for c in used if c and c.lower() not in known]
+    if bad:
+        return {"ok": False, "reason": f"The proposed rule uses a column this table does not have: {', '.join(bad)}.", "source": source}
+    if v["check_type"] == "custom_sql" and table.lower() not in v["config"]["sql"].lower():
+        return {"ok": False, "reason": "The proposed query does not read the chosen table, so it was not run.", "source": source}
+    preview = engine.run({**v, "check_id": None, "state": {}})
+    preview.pop("new_state", None)
+    return {"ok": True, "rule": {**v, "description": (got or {}).get("why") or None}, "understood": (got or {}).get("understood"),
+            "assumptions": (got or {}).get("assumptions") or [], "preview": preview, "source": source, "note": note}
+
+
+def phrase_rule(text: str, cols: list, schema: str, table: str, d) -> dict | None:
+    """Common phrasings without a model: '<column> is unique / is never empty / ends with X / starts with X / is positive /
+    is at least N'. The column must be one of the table's; literals are escaped. None when nothing matches."""
+    import re
+    names = {c["name"].lower(): c["name"] for c in cols}
+    low = text.lower().strip().rstrip(".")
+    t = d.table(schema, table)
+
+    def col_in(s):
+        for w in re.findall(r"[a-z_][a-z0-9_]*", s.lower())[::-1]:      # the last column name mentioned before the verb
+            if w in names:
+                return names[w]
+        return None
+
+    def lit(s):
+        return "'" + s.replace("'", "''") + "'"
+
+    def like(s):                                                        # % and _ in the value are meant literally
+        return s.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
+
+    m = re.match(r"(?:every |each |all )?(.+?) (?:is|are|should be|must be) (?:always )?unique$", low)
+    if m and col_in(m.group(1)):
+        c = col_in(m.group(1))
+        return {"check_type": "uniqueness", "config": {"columns": [c]}, "severity": "HIGH", "name": f"{c} unique in {schema}.{table}",
+                "understood": f"Every {c} appears only once in {schema}.{table}."}
+    m = re.match(r"(?:every |each |all )?(.+?) (?:is|are|should|must)(?: be)? (?:never|not) (?:be )?(?:empty|null|blank|missing)$", low)
+    if m and col_in(m.group(1)):
+        c = col_in(m.group(1))
+        return {"check_type": "null_rate", "config": {"column": c, "max_null_pct": 0}, "severity": "MEDIUM",
+                "name": f"{c} filled in {schema}.{table}", "understood": f"No row of {schema}.{table} has an empty {c}."}
+    m = re.match(r"(?:every |each |all )?(.+?) (?:should |must )?(?:always )?(ends?|starts?|begins?) with ['\"]?(.+?)['\"]?$", text.strip().rstrip("."), re.I)
+    if m and col_in(m.group(1)):
+        c, how, val = col_in(m.group(1)), m.group(2).lower(), m.group(3)
+        pat = f"%{like(val)}" if how.startswith("end") else f"{like(val)}%"
+        sql = f"SELECT * FROM {t} WHERE {d.ident(c)} NOT LIKE {lit(pat)} ESCAPE '\\'"
+        verb = "ends" if how.startswith("end") else "starts"
+        return {"check_type": "custom_sql", "config": {"sql": sql, "mode": "no_rows"}, "severity": "MEDIUM",
+                "name": f"{c} {verb} with {val}"[:80], "understood": f"Every {c} in {schema}.{table} {verb} with \"{val}\".",
+                "assumptions": ["Case-sensitive match.", "Rows where it is empty are not counted as breaking it."]}
+    m = re.match(r"(?:every |each |all )?(.+?) (?:is|are|should be|must be) (?:always )?(?:positive|greater than (?:0|zero)|above (?:0|zero)|> ?0)$", low)
+    if m and col_in(m.group(1)):
+        c = col_in(m.group(1))
+        return {"check_type": "custom_sql", "config": {"sql": f"SELECT * FROM {t} WHERE {d.ident(c)} <= 0", "mode": "no_rows"},
+                "severity": "HIGH", "name": f"{c} is positive", "understood": f"Every {c} in {schema}.{table} is above 0."}
+    m = re.match(r"(?:every |each |all )?(.+?) (?:is|are|should be|must be) (?:at least|>=) (-?\d+(?:\.\d+)?)$", low)
+    if m and col_in(m.group(1)):
+        c, n = col_in(m.group(1)), m.group(2)
+        return {"check_type": "custom_sql", "config": {"sql": f"SELECT * FROM {t} WHERE {d.ident(c)} < {n}", "mode": "no_rows"},
+                "severity": "MEDIUM", "name": f"{c} at least {n}", "understood": f"Every {c} in {schema}.{table} is {n} or more."}
+    return None
+
+
 def _name(i: dict, table: str) -> str:
     c = i.get("config") or {}
     return {"freshness": f"{table} is fresh", "volume": f"{table} row volume", "null_rate": f"{c.get('column')} filled in {table}",

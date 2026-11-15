@@ -60,6 +60,17 @@ def suggest(body: SuggestBody, user: dict = Depends(admin_user)):
     return guard(ai.suggest_checks, body.connection_id, body.database or None, body.schema_name, body.table_name)
 
 
+class RuleText(SuggestBody):
+    text: str
+
+
+@router.post("/from-text")
+def from_text(body: RuleText, user: dict = Depends(admin_user)):
+    """A rule described in plain words, turned into a check and run once on today's data. Nothing is saved."""
+    import ai
+    return guard(ai.rule_from_text, body.connection_id, body.database or None, body.schema_name, body.table_name, body.text)
+
+
 class TableRef(BaseModel):
     schema_name: str
     table_name: str
