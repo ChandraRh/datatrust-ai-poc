@@ -216,8 +216,12 @@ def target_checks(asset: dict, task: dict, cfg: dict, source_columns: list, mapp
         return [_check("TARGET_TABLE", "target", label, "UNKNOWN", None, None,
                        f"No connection to {asset.get('host') or 'the target server'} to check it. Add it on Data estate -> "
                        f"Connections (same host name as the ADF linked service), with a read-only login.")]
-    if not asset.get("table"):
-        return [_check("TARGET_TABLE", "target", label, "UNKNOWN", None, None, "Table name is a runtime expression; not checked.")]
+    unknown = [u for u in asset.get("unresolved") or [] if u in ("schema", "table", "table name") or u.startswith("parameter ")]
+    if not asset.get("table") or unknown or "@" in str(asset.get("table")) or "@" in str(asset.get("schema") or ""):
+        # never look up an expression as if it were a table name: that reports a missing table that is not missing
+        return [_check("TARGET_TABLE", "target", label, "UNKNOWN", None, None,
+                       "The table name is set while the pipeline runs and could not be worked out for this run"
+                       + (f" ({', '.join(unknown)})" if unknown else "") + "; not checked.")]
     checks = []
     with src.connect(db) as conn:
         cols = conn.execute("""SELECT column_name, is_nullable, column_default, data_type FROM information_schema.columns

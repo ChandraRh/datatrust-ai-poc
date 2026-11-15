@@ -71,6 +71,20 @@ def _activity_def(defs: dict, pipeline_name: str, activity_name: str) -> dict | 
     return next((a for a in acts if a["name"] == activity_name), None)
 
 
+def _outputs_before(conn, run: dict, task: dict) -> dict:
+    """activity name -> its output, for the steps of this run that finished before this Copy step started (the latest one
+    when a step ran more than once, e.g. inside a ForEach). Lets a target named by a Lookup be resolved to the real table."""
+    out = {}
+    for r in conn.execute("""SELECT activity_name, output FROM telemetry.task_runs
+                             WHERE run_id = %s AND activity_run_id <> %s AND output IS NOT NULL
+                               AND (run_start IS NULL OR %s::timestamptz IS NULL OR run_start <= %s::timestamptz)
+                             ORDER BY run_start DESC NULLS LAST""",
+                          (run["run_id"], task["activity_run_id"], task.get("run_start"), task.get("run_start"))):
+        if r["activity_name"] not in out:
+            out[r["activity_name"]] = store.loads(r["output"]) if isinstance(r["output"], str) else r["output"]
+    return out
+
+
 def probe_copy(conn, src: dict, defs: dict, run: dict, task: dict, compare_rows: bool, storage_cache: dict) -> int:
     """Source + target checks for one Copy activity run. Returns how many checks were saved."""
     cfg = src["config"]
@@ -78,6 +92,7 @@ def probe_copy(conn, src: dict, defs: dict, run: dict, task: dict, compare_rows:
     if not adef:
         return 0
     ctx = resolve.run_context(run, run["pipeline_name"], cfg.get("factory_name"))
+    ctx["activity_outputs"] = _outputs_before(conn, run, task)       # @activity('LK_...').output.firstRow.target_table
     assets = resolve.copy_assets(adef, defs["dataset"], defs["linkedservice"], ctx)
     checks, columns = [], []
     cred = storage_cache.setdefault("_cred", [])

@@ -84,7 +84,13 @@ def _call(name: str, args: list, ctx: dict):
         if "linkedservice" not in ctx:
             raise Unresolved("linkedService() not known here")
         return ctx["linkedservice"]
-    if n in ("item", "activity", "variables", "trigger"):
+    if n == "activity":                       # a step's output in THIS run, when the collector saved it (e.g. a Lookup's firstRow)
+        outs = ctx.get("activity_outputs") or {}
+        key = next((k for k in outs if args and str(k).lower() == str(args[0]).lower()), None)
+        if key is None or outs[key] is None:
+            raise Unresolved(f"{name}('{args[0] if args else ''}') output is not known for this run")
+        return {"output": outs[key]}
+    if n in ("item", "variables", "trigger"):
         raise Unresolved(f"{name}() is only known while the pipeline runs")
     if n == "concat":
         return "".join("" if a is None else str(a) for a in args)
