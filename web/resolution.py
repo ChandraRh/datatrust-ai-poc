@@ -273,6 +273,14 @@ def _adf(iid: str, open_ids: list) -> tuple:
         return "superseded", f"The same problem showed up again in a newer run of {pipeline}; the incident continues there.", newer
     if run == "-" or pipeline == "-":
         return "check_passes", "DataTrust read the factory again and no longer finds this problem.", None
+    if kind.startswith("CHECK_FAILED."):                  # an after-run check: did checking the same copy again pass?
+        _, check_type, where = (kind.split(".", 2) + ["", ""])[:3]
+        c = appdb.one("""SELECT status, detail FROM telemetry.checks
+                         WHERE run_id = %(r)s AND check_type = %(t)s
+                           AND regexp_replace(COALESCE(asset, ''), '[^A-Za-z0-9_.@-]+', '_', 'g') = %(a)s
+                         ORDER BY checked_at DESC LIMIT 1""", {"r": run, "t": check_type, "a": where})
+        if c.get("status") == "PASS":
+            return "check_passes", f"DataTrust checked that copy again and it passes now: {c.get('detail') or ''}".strip(), None
     ok = appdb.one("""SELECT run_id, run_start FROM telemetry.pipeline_runs
                       WHERE source_id = %(s)s AND pipeline_name = %(p)s AND status = 'Succeeded'
                         AND run_start > COALESCE((SELECT run_start FROM telemetry.pipeline_runs WHERE run_id = %(r)s), '-infinity')

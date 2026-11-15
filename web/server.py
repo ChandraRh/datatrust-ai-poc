@@ -221,6 +221,16 @@ def acknowledge(incident_id: str, user: dict = Depends(estate_routes.current_use
     return {"ok": True}
 
 
+class Recheck(BaseModel):
+    incident_id: str
+
+
+@app.post("/api/recheck")
+def recheck(body: Recheck, user: dict = Depends(estate_routes.current_user)):
+    """Check one incident again now (its rule, its factory, or the pipeline's latest results) and say if it closed."""
+    return _scoped(scopes.recheck, body.incident_id, user["username"])
+
+
 @app.get("/api/investigate/{incident_id}")
 def investigate(incident_id: str, scope: Optional[str] = None):
     return _scoped(scopes.investigate, incident_id, scope)
@@ -264,16 +274,13 @@ class Approval(BaseModel):
     incident_id: str
     title: str = ""
     actions: list = []
-    approved_by: str = "web user"
     note: str = ""
 
 
 @app.post("/api/approve")
 def approve(a: Approval, user: dict = Depends(estate_routes.admin_user)):
-    if not a.actions:
-        raise HTTPException(400, "select at least one action")
-    ds.approve(a.incident_id, a.title, a.actions, a.approved_by, a.note)
-    return {"ok": True}
+    """Recorded under the signed-in user, never a name typed on the page (the approval is an audit record)."""
+    return _scoped(scopes.approve, a.incident_id, a.title, a.actions, a.note, user["username"])
 
 
 class Question(BaseModel):

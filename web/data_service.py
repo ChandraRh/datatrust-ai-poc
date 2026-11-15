@@ -345,7 +345,7 @@ def incidents() -> list:
     when a later pipeline run no longer shows it (that is how 'verified resolved' works)."""
     found = []
     approvals = {a["incident_id"]: a for a in _approvals_sql(
-        """SELECT DISTINCT ON (incident_id) incident_id, approved_by, approved_at, status
+        """SELECT DISTINCT ON (incident_id) incident_id, approved_by, approved_at, status, note
            FROM app.remediation_log ORDER BY incident_id, approved_at DESC""")}
 
     cfg = {k: _setting(k) for k in ("poc.settlement", "poc.rejected", "poc.duplicates", "poc.rows_lost", "poc.layers")}

@@ -699,8 +699,10 @@ async function renderInvestigate(id) {
         <button class="btn light btn-sm" id="invBack" type="button">← Detect</button>
         ${inv.check_id ? `<button class="btn light btn-sm" id="invOpenCheck" type="button">Open the rule</button>` : ""}
         ${inv.run_id ? `<button class="btn light btn-sm" id="invOpenRun" type="button">Open the ADF run</button>` : ""}
+        <button class="btn light btn-sm" data-recheck="${esc(id)}" type="button" title="Run its rule / read the factory / read the pipeline's results again now">Re-check now</button>
         <button class="btn btn-sm" id="invImpact" type="button">See impact &amp; decide →</button>
       </div>
+      <div class="recheck-result" data-recheck-result="${esc(id)}"></div>
     </div>
     <div class="investigation-metrics">${metrics.map(([label, value]) => `<div class="investigation-metric"><span>${esc(label)}</span><b>${esc(value)}</b></div>`).join("")}</div>
     <div class="investigation-root">
@@ -727,6 +729,7 @@ async function renderInvestigate(id) {
     ${goldViews.length ? `<div class="card"><h3>${esc(impact.views_label || "Downstream Gold views")}</h3><div class="investigation-views">${goldViews.map((view) => `<code>${esc(view)}</code>`).join("")}</div></div>` : ""}`;
   $("invBack").addEventListener("click", () => go("detect"));
   $("invImpact").addEventListener("click", () => go("impact", id));
+  bindRecheck($("invBody"));
   if ($("invOpenCheck")) $("invOpenCheck").onclick = () => { CHECKS.open(inv.check_id); document.querySelector('#tabs [data-page="estate-checks"]').click(); };
   if ($("invOpenRun")) $("invOpenRun").onclick = () => { ADF.open(inv.run_id); document.querySelector('#tabs [data-page="estate-adf-runs"]').click(); };
   if (inv.sql) $("invBody").insertAdjacentHTML("beforeend", `<div class="card"><details><summary>SQL the check ran</summary><pre class="code">${esc(inv.sql)}</pre></details></div>`);
@@ -853,11 +856,13 @@ async function renderImpact(id) {
   const inv = await api("/api/investigate/" + encodeURIComponent(id) + "?" + sq());
   if (!inv.found) { $("impBody").innerHTML = "<p>That incident is no longer open.</p>"; return; }
   const im = inv.impact, inc = inv.incident;
-  const tiles = [[im.views_label || "Gold views affected", im.gold_views.length], ["Business date", im.business_date || "–"],
-    ["Rows affected", inc.metrics.payment_difference ?? inc.metrics.n ?? inc.metrics.duplicates ?? "–"],
-    ["Revenue at risk", im.amount_at_risk != null ? inr(im.amount_at_risk) : "–"]];
+  // each kind of source sends the figures that fit it (im.tiles); the POC keeps its money figures
+  const tiles = im.tiles || [{ label: "Gold views affected", value: im.gold_views.length }, { label: "Business date", value: im.business_date || "–" },
+    { label: "Rows affected", value: inc.metrics.payment_difference ?? inc.metrics.n ?? inc.metrics.duplicates ?? "–" },
+    { label: "Revenue at risk", value: im.amount_at_risk != null ? inr(im.amount_at_risk) : "–", tone: im.amount_at_risk ? "bad" : "" }];
   $("impBody").innerHTML = `
-    <div class="kpis" style="grid-template-columns:repeat(4,1fr)">${tiles.map(([l, v], i) => `<div class="kpi ${i === 3 && im.amount_at_risk ? "bad" : ""}"><div class="l">${l}</div><div class="v">${esc(typeof v === "number" ? num(v) : v)}</div></div>`).join("")}</div>
+    <div class="kpis imp-kpis">${tiles.map((k) => `<div class="kpi ${k.tone || ""}"><div class="l">${esc(k.label)}</div>
+      <div class="v">${esc(typeof k.value === "number" ? num(k.value) : k.value)}</div>${k.sub ? `<div class="small muted">${esc(k.sub)}</div>` : ""}</div>`).join("")}</div>
     <div class="grid g-2">
       <div class="card"><h3>What it touches</h3>
         <p><b>${esc(inc.title)}</b></p>
@@ -865,8 +870,10 @@ async function renderImpact(id) {
         <p class="small muted">${im.views_label ? "Everything listed reads the affected data, so it shows the problem too until the fix is loaded." : "Revenue at risk is the exact amount of the gap in the data, not an estimate. Reports built on the views above show the reduced numbers until the fix is loaded."}</p></div>
       <div class="card"><h3>Recommended remediation</h3>
         <div class="actions">${im.actions.map((a) => `<label><input type="checkbox" checked value="${esc(a)}"> ${esc(a)}</label>`).join("")}</div>
-        <div class="field"><input id="approver" placeholder="Approved by (your name)"></div>
-        ${inc.approval ? `<p class="small">Already approved by <b>${esc(inc.approval.approved_by)}</b> at ${esc(inc.approval.approved_at)}. Waiting for the next pipeline run to verify.</p>` : ""}
+        <div class="field"><input id="approveNote" maxlength="500" placeholder="Note (optional), e.g. ticket number or who will fix the source"></div>
+        <p class="small muted">Recorded under your sign-in${est && est.user ? ` (<b>${esc(est.user.username)}</b>)` : ""}.</p>
+        ${inc.approval ? `<p class="small">Already approved by <b>${esc(inc.approval.approved_by)}</b> at ${esc(inc.approval.approved_at)}${inc.approval.note ? ` (${esc(inc.approval.note)})` : ""}.
+          Once it is fixed, use <b>Re-check now</b> (Investigate or Verify) instead of waiting for the next scheduled check.</p>` : ""}
         <button class="btn" id="approveBtn" style="width:100%">Approve remediation</button></div>
     </div>
     <div id="autofixBox"></div>`;
@@ -875,12 +882,12 @@ async function renderImpact(id) {
   renderAutofix(id);
   $("approveBtn").onclick = async () => {
     const actions = [...document.querySelectorAll(".actions input:checked")].map((x) => x.value);
-    const by = $("approver").value.trim() || "web user";
+    const note = $("approveNote").value.trim();
     $("approveBtn").disabled = true;
     try {
-      await api("/api/approve", { method: "POST", headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ incident_id: id, title: inc.title, actions, approved_by: by }) });
-      toast("Approved and logged in audit.remediation_log");
+      const r = await api("/api/approve", { method: "POST", headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ incident_id: id, title: inc.title, actions, note }) });
+      toast(`Approved by ${r.approved_by}`);
       await loadCore();
       go("verify");
     } catch (e) { showError(e.message); $("approveBtn").disabled = false; }
@@ -965,7 +972,8 @@ async function renderVerify() {
     ${unverified.length ? `<div class="banner warn"><h2>${unverified.length} STOPPED SHOWING WITHOUT A VERIFIED FIX</h2>The data no longer shows them, but nothing proves they were fixed: check each one below.</div>` : ""}
     <div class="grid g-2">
       <div class="card"><h3>Remediation log</h3>
-        ${waiting.map((i) => `<div class="check"><span class="grey">⏳</span> <b>${esc(i.title)}</b><div class="small muted">Approved by ${esc(i.approval.approved_by)} at ${esc(i.approval.approved_at)}. Still present in the data: fix the source and re-run the pipeline.</div></div>`).join("")}
+        ${waiting.map((i) => `<div class="check"><span class="grey">⏳</span> <b>${esc(i.title)}</b><div class="small muted">Approved by ${esc(i.approval.approved_by)} at ${esc(i.approval.approved_at)}${i.approval.note ? ` (${esc(i.approval.note)})` : ""}. Still present in the data: fix it at the source, then re-check.</div>
+          <button class="btn light btn-sm" data-recheck="${esc(i.id)}" type="button">Re-check now</button><div class="recheck-result" data-recheck-result="${esc(i.id)}"></div></div>`).join("")}
         ${verified.length ? `<h4 class="verify-h">Verified resolved</h4>${verified.map((r) => item(r, true)).join("")}` : ""}
         ${unverified.length ? `<h4 class="verify-h">Not verified</h4>${unverified.map((r) => item(r, false)).join("")}` : ""}
         ${!waiting.length && !resolved.length ? "<p class='muted'>Nothing approved or resolved in the last 7 days. Approve a fix on page 5; it shows as resolved once the data no longer has the problem.</p>" : ""}
@@ -975,6 +983,29 @@ async function renderVerify() {
         <div class="small muted">${esc((state.overview.scope || {}).name || "")} · open incidents ${open.length}${p ? ` · latest run ${esc(p.batch.batch_id || "–")}: ${p.layers.map((l) => l.layer + " " + l.status).join(", ")}` : ""}</div></div>
     </div>`;
   gauge("gauge3", t.score);
+  bindRecheck($("verifyBody"));
+}
+
+// "Re-check now": run the incident's rule / read the factory / read the pipeline's results again, then say if it closed
+function bindRecheck(root) {
+  if (!root) return;
+  root.querySelectorAll("[data-recheck]").forEach((b) => (b.onclick = async () => {
+    const id = b.dataset.recheck;
+    const out = root.querySelector(`[data-recheck-result="${CSS.escape(id)}"]`);
+    b.disabled = true; b.textContent = "Checking…";
+    if (out) out.innerHTML = `<p class="small muted">Checking again… (an ADF factory takes about 20 s)</p>`;
+    try {
+      const r = await api("/api/recheck", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ incident_id: id }) });
+      const html = r.still_open
+        ? `<div class="banner warn small"><b>Still open.</b> ${esc(r.did)}${r.why && !r.did.includes(r.why) ? `<br>${esc(r.why)}` : ""}</div>`
+        : r.continues_as ? `<div class="banner warn small"><b>Continues in a newer run</b> (${esc(r.continues_as)}). ${esc(r.detail || "")}</div>`
+        : `<div class="banner ${r.verified ? "ok" : "warn"} small"><b>Closed: ${esc(r.resolution)}${r.verified ? "" : " (not verified)"}.</b> ${esc(r.detail || "")}</div>`;
+      if (out) out.innerHTML = html;
+      toast(r.still_open ? "Still open" : `Closed: ${r.resolution}`);
+      if (!r.still_open) { await loadCore(); setTimeout(() => go(state.page), 2500); }   // refresh the counts, keep the message a moment
+    } catch (e) { if (out) out.innerHTML = `<div class="error-box">${esc(e.message)}</div>`; }
+    b.disabled = false; b.textContent = "Re-check now";
+  }));
 }
 
 // ------------------------------------------------------------------ pipeline log

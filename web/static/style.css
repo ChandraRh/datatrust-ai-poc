@@ -673,6 +673,11 @@ tr.clickable { cursor: pointer; } tr.clickable:hover td { background: var(--bran
 .conf { margin-top: 4px; }
 .conf-high, .conf-medium { color: var(--ink-2); }
 .conf-low { color: var(--amber); font-weight: 600; }
+.imp-kpis { grid-template-columns: repeat(4, minmax(0, 1fr)); }
+.imp-kpis .v { overflow-wrap: anywhere; }
+.recheck-result:not(:empty) { margin-top: 8px; }
+@media (max-width: 760px) { .imp-kpis { grid-template-columns: repeat(2, minmax(0, 1fr)); } }
+
 /* ---- Data quality → Built-in checks */
 .bi-card { display: flex; flex-direction: column; gap: 6px; }
 .bi-head { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; }

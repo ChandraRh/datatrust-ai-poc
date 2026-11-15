@@ -175,6 +175,45 @@ def incidents(scope: str | None) -> dict:
     return {"scope": s, "open": found, "resolved": _resolved(s["key"], {i["id"] for i in found})}
 
 
+def approve(incident_id: str, title: str, actions: list, note: str, by: str) -> dict:
+    """An approved remediation, recorded under the signed-in user (never a name typed on the page) and audited."""
+    if not actions:
+        raise ValueError("select at least one action")
+    ds.approve(incident_id, title, actions, by, (note or "").strip()[:500])
+    from estate import store as estate_store
+    estate_store.audit(by, "REMEDIATION_APPROVED", incident_id, "; ".join(map(str, actions))[:500])
+    return {"ok": True, "approved_by": by}
+
+
+def recheck(incident_id: str, by: str) -> dict:
+    """Check one incident again now instead of waiting for the next scheduled run: run its rule, read the factory again,
+    or read the POC pipeline's latest results; then evaluate the source and say whether it closed, and why."""
+    scope = scope_of_incident(incident_id)
+    m = re.match(r"^db(\d+):CHECK-(\d+)$", incident_id)
+    if m:
+        from checks import engine
+        r = engine.run_and_save(int(m.group(2)), f"recheck:{by}")
+        did = f"Ran the rule now: {r.get('status')}. {r.get('message') or ''}".strip()
+    elif incident_id.startswith("adf:"):
+        from adf import collector
+        r = collector.sync(int(scope.split(":")[1]), f"recheck:{by}")
+        did = ("A sync of this factory was already running; its result shows within a minute." if r.get("skipped")
+               else "Read the factory again now (runs, steps and after-run checks).")
+    else:
+        did = "Read the pipeline's latest results again (they change when the pipeline runs or rows are corrected)."
+    cur = incidents(scope)
+    still = next((i for i in cur["open"] if i["id"] == incident_id), None)
+    out = {"incident_id": incident_id, "did": did, "still_open": bool(still)}
+    if still:
+        out["why"] = still.get("summary") or still.get("title")
+        return out
+    st = appdb.one("SELECT resolution, resolution_detail, superseded_by FROM app.incident_state WHERE incident_id = %s",
+                   (incident_id,))
+    label, verified = resolution.label(st.get("resolution"))
+    out.update(resolution=label, verified=verified, detail=st.get("resolution_detail"), continues_as=st.get("superseded_by"))
+    return out
+
+
 def _incidents(s: dict) -> list:
     if s["kind"] == "adf":
         from adf import insights
@@ -211,7 +250,7 @@ def _approvals(found: list) -> None:
     ids = [i["id"] for i in found if not i.get("approval")]
     if not ids:
         return
-    rows = appdb.rows("""SELECT DISTINCT ON (incident_id) incident_id, approved_by, approved_at, status FROM app.remediation_log
+    rows = appdb.rows("""SELECT DISTINCT ON (incident_id) incident_id, approved_by, approved_at, status, note FROM app.remediation_log
                          WHERE incident_id = ANY(%s) ORDER BY incident_id, approved_at DESC""", (ids,))
     by = {r["incident_id"]: r for r in rows}
     for i in found:
@@ -540,6 +579,8 @@ def _investigate_check(s: dict, inc: dict) -> dict:
     where = f"{s['name']}" + (f" · {chk['schema_name']}.{chk['table_name']}" if chk.get("table_name") else "")
     obs = last.get("observed")
     obs_txt = "–" if obs is None else f"{obs:,.0f}" if float(obs).is_integer() else f"{obs:,.4g}"
+    if obs is not None:
+        obs_txt += {"freshness": " h old", "null_rate": " % empty"}.get(chk["check_type"], "")
     # ok = the fact was confirmed by a query (True) or could not be measured (None); a failing check's findings are confirmed facts
     checks = [{"ok": True, "text": last.get("message") or inc["summary"], "source": f"data check '{chk['name']}' on {where}"},
               {"ok": None if obs is None else True, "text": f"Expected {last.get('expected') or 'see rule'}; measured {obs_txt}",
@@ -569,7 +610,15 @@ def _investigate_check(s: dict, inc: dict) -> dict:
         chain.insert(0, f"Why it matters: {chk['description']}")
     impact = {"entity": f"{chk['schema_name']}.{chk['table_name']}" if chk.get("table_name") else chk["name"], "gold_views": views,
               "views_label": "Views that read this table", "business_date": None, "amount_at_risk": None,
-              "actions": ACTIONS.get(chk["check_type"], ["Investigate the evidence", "Fix at the source", "Re-run the check"])}
+              "actions": ACTIONS.get(chk["check_type"], ["Investigate the evidence", "Fix at the source", "Re-run the check"]),
+              "tiles": [{"label": "Views that read this table", "value": len(views),
+                         "sub": "PostgreSQL catalog" if views or s["type"] == "PostgreSQL" else "not read for this database type"},
+                        {"label": "Measured", "value": obs_txt, "sub": f"expected {last.get('expected') or 'see the rule'}",
+                         "tone": "bad" if last.get("status") == "FAIL" else "warn"},
+                        {"label": "Same result", "value": f"{streak} run{'s' if streak != 1 else ''} in a row",
+                         "sub": f"rule runs every {chk.get('schedule_minutes') or 60} min"},
+                        {"label": "Last passed", "value": str(last_pass["run_at"])[:16] if last_pass else "never",
+                         "sub": "since the rule was added" if not last_pass else "", "tone": None if last_pass else "warn"}]}
     return {"found": True, "incident": inc, "checks": checks, "root_cause": root, "chain": chain, "sample": sample, "impact": impact,
             "sql": last.get("sql_text"), "check_id": cid}
 
@@ -601,13 +650,24 @@ def _investigate_adf(s: dict, inc: dict) -> dict:
             ([" › ".join(cause["path"])] if isinstance(cause, dict) and cause.get("path") else []) + [i["title"]]
     impact = {"entity": i.get("pipeline") or s["name"], "gold_views": [], "views_label": "Tables this pipeline writes",
               "business_date": None, "amount_at_risk": None, "actions": i.get("fixes") or ["Open the run in ADF runs and follow the cause"]}
+    run = {}
     try:
         from adf import insights
         if i.get("pipeline"):
+            pd = insights.pipeline_detail(s["id"], i["pipeline"])
             impact["gold_views"] = sorted({(e["target"].get("name") or e["target"].get("uri") or "?")
-                                           for e in insights.pipeline_detail(s["id"], i["pipeline"]).get("lineage", [])
-                                           if isinstance(e.get("target"), dict)})
+                                           for e in pd.get("lineage", []) if isinstance(e.get("target"), dict)})
+            run = next((r for r in pd.get("runs") or [] if r.get("run_id") == i.get("run_id")), {})
+            impact["health"] = pd.get("health")
     except Exception:                                                 # noqa: BLE001
         pass
+    impact["tiles"] = [{"label": "Tables this pipeline writes", "value": len(impact["gold_views"]),
+                        "sub": "named at run time: from recent runs" if not impact["gold_views"] else ""},
+                       {"label": "Run", "value": str(run.get("run_start") or "–")[:16],
+                        "sub": run.get("status") or ("factory-wide" if not i.get("pipeline") else "")},
+                       {"label": "Rows that run loaded", "value": int(run["rows_written"]) if run.get("rows_written") is not None else "–",
+                        "sub": f"{int(run['rows_skipped']):,} skipped" if run.get("rows_skipped") else ""},
+                       {"label": "Pipeline health", "value": impact.get("health") or "–",
+                        "tone": {"Healthy": None, "Needs attention": "warn"}.get(impact.get("health"), "bad")}]
     return {"found": True, "incident": inc, "checks": checks, "root_cause": root or i["summary"], "chain": chain, "sample": [],
             "impact": impact, "run_id": i.get("run_id")}

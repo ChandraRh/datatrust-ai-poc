@@ -24,6 +24,7 @@ Issue rules (each is resolved automatically when the condition is gone):
 """
 from __future__ import annotations
 
+import re
 import statistics
 from datetime import datetime, timezone
 
@@ -135,10 +136,17 @@ def _median(values):
 
 
 # ============================================================================ issues
-def _issue(sev, kind, src, pipeline, title, summary, run_id=None, cause=None, fixes=None, evidence=None, system=None):
-    return {"id": f"adf:{src['source_id']}:{pipeline or '-'}:{kind}:{run_id or '-'}", "severity": sev, "type": kind,
+def _issue(sev, kind, src, pipeline, title, summary, run_id=None, cause=None, fixes=None, evidence=None, system=None, key=None):
+    """key: what makes this problem distinct within its kind and run (a failed after-run check: which check, on which
+    table or file), so several problems of one run are several incidents instead of hiding behind one id."""
+    part = f"{kind}.{_id_part(key)}" if key else kind
+    return {"id": f"adf:{src['source_id']}:{pipeline or '-'}:{part}:{run_id or '-'}", "severity": sev, "type": kind,
             "source_id": src["source_id"], "factory": src["name"], "pipeline": pipeline, "title": title, "summary": summary,
             "run_id": run_id, "cause": cause, "fixes": fixes or [], "evidence": evidence or [], "system": system}
+
+
+def _id_part(v) -> str:
+    return re.sub(r"[^A-Za-z0-9_.@-]+", "_", str(v))[:120]        # no ':' (id separator) and no '/' (ids go in URLs)
 
 
 def _child_lookup(run_id: str):
@@ -329,9 +337,12 @@ def _pipeline_issues(src: dict, name: str, runs: list, defs: dict) -> list:
                 if c["activity_run_id"] in failed_steps:
                     continue                                 # part of that step's failure, shown as evidence there
                 label = CHECK_LABEL.get(c["check_type"], c["check_type"])
-                out.append(_issue(sev, "CHECK_FAILED", src, name, f"{name}: {label} check {'failed' if c['status'] == 'FAIL' else 'found a difference'}",
+                where = c.get("asset") or c.get("activity_name") or c.get("activity_run_id") or "?"
+                out.append(_issue(sev, "CHECK_FAILED", src, name,
+                                  f"{name}: {label} check {'failed' if c['status'] == 'FAIL' else 'found a difference'} on {where}",
                                   c["detail"] or "", newest["run_id"], evidence=[f"expected {c['expected']}, found {c['observed']}"]
-                                  if c["expected"] else [], system=diagnose.SOURCE if c["side"] == "source" else diagnose.TARGET))
+                                  if c["expected"] else [], system=diagnose.SOURCE if c["side"] == "source" else diagnose.TARGET,
+                                  key=f"{c['check_type']}.{where}"))
     return out
 
 

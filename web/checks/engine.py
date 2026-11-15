@@ -7,6 +7,7 @@ Every number comes from a query; nothing is estimated.
 """
 from __future__ import annotations
 
+import os
 import statistics
 import time
 from contextlib import closing
@@ -37,19 +38,46 @@ def _plain(v):
     return v
 
 
+QUERY_SECONDS = max(5, int(os.getenv("CHECKS_QUERY_SECONDS", "60")))   # one time limit for every query a rule runs
+
+
+class TooSlow(ValueError):
+    pass
+
+
+def _too_slow() -> TooSlow:
+    return TooSlow(f"the query took longer than {QUERY_SECONDS} s (the time limit for rules) and was stopped on the database. "
+                   "Make it lighter: add a filter (where), count only recent rows (volume: last 24 h), or index the column it "
+                   "reads. The limit is CHECKS_QUERY_SECONDS.")
+
+
+def _is_timeout(e: Exception) -> bool:
+    s = f"{type(e).__name__} {e}".lower()
+    return "querycanceled" in s or "statement timeout" in s or "hyt00" in s or "query timeout expired" in s
+
+
 def query(connection_id: int, database: str | None, sql: str, params=(), max_rows: int = 1000) -> list:
-    """Rows as dicts. PostgreSQL: a read-only session. SQL Server: inside a transaction that is always rolled back."""
+    """Rows as dicts. PostgreSQL: a read-only session. SQL Server: inside a transaction that is always rolled back.
+    Either way the query is stopped on the database after QUERY_SECONDS."""
     src = _source(connection_id)
     kind = src.cfg["source_type"]
     if kind == "postgresql":
-        with closing(src.connect(database)) as c:                    # read_only=True: default_transaction_read_only + 10 s timeout
-            cur = c.execute(sql, params or None)
+        with closing(src.connect(database)) as c:                    # read_only=True: default_transaction_read_only
+            c.execute(f"SET statement_timeout = '{QUERY_SECONDS}s'")
+            try:
+                cur = c.execute(sql, params or None)
+            except Exception as e:                                   # noqa: BLE001
+                raise _too_slow() if _is_timeout(e) else e
             return [dict(r) for r in cur.fetchmany(max_rows)] if cur.description else []
     if kind == "sqlserver":
         with closing(src.connect(database, read_only=False)) as c:  # autocommit off -> rollback below undoes anything
+            c.timeout = QUERY_SECONDS
             try:
                 cur = c.cursor()
-                cur.execute(sql, params or ())
+                try:
+                    cur.execute(sql, params or ())
+                except Exception as e:                               # noqa: BLE001
+                    raise _too_slow() if _is_timeout(e) else e
                 while cur.description is None and cur.nextset():
                     pass
                 if cur.description is None:
