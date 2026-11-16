@@ -481,7 +481,7 @@
               <td class="num">${r.warnings}</td><td class="num ${r.errors ? "bad" : ""}">${r.errors}</td></tr>`).join("")}</tbody></table></div>`
             : `<p class="muted">No rules yet. <b>Add rule</b>: pick a table, then <b>Suggest checks</b> measures it and proposes rules that fit it.</p>`}</div>
         ${d.rules.length ? `<div class="card"><h3>Every rule</h3><div class="tablewrap" style="max-height:none"><table><thead><tr><th>Rule</th><th>Applies to</th><th>Severity</th><th>Now</th><th>Last runs</th><th></th></tr></thead><tbody>
-          ${d.rules.map((r) => `<tr><td><b>${esc(r.name)}</b><div class="small muted">${esc(r.rule)}</div>${r.repeats_pipeline ? `<div class="small muted">Repeats a pipeline finding, so it does not lower the score twice.</div>` : ""}
+          ${d.rules.map((r) => `<tr><td><b>${esc(r.name)}</b><div class="small muted">${esc(r.rule)}</div>${r.repeats_pipeline ? `<div class="small muted">Repeats a built-in check, so it does not lower the score twice.</div>` : ""}
               ${r.sql ? `<pre class="code small">${esc(r.sql)}</pre>` : ""}</td>
             <td class="small"><code>${esc(r.applies_to)}</code></td><td>${sevChip(r.severity)}</td><td>${stChip(r.status)}<div class="small muted">${esc(r.message || "")}</div></td>
             <td><span class="ck-dots">${(r.history || []).map((h) => `<i class="${DOT[h] || "grey"}" title="${esc(h)}"></i>`).join("")}</span></td>
@@ -526,7 +526,7 @@
         const d = await api("/api/quality/rules?" + sq());
         const sec = rulesSection(d, "By table");
         const own = body.bind;
-        body.html += `<h2 class="dq-h2">Data checks on this database</h2><p class="small muted">Scheduled checks on the POC database's tables, in addition to the pipeline rules above.</p>` + sec.html;
+        body.html += `<h2 class="dq-h2">DataTrust rules on this database</h2><p class="small muted">Rules DataTrust runs itself, on a schedule, on the POC database's tables. The silver rules above are different: the POC pipeline applies them when it loads silver.</p>` + sec.html;
         body.bind = () => { own && own(); sec.bind(); };
       }
       body.html = sourceNote(state.overview.scope, page === "estate-dq-rules"
