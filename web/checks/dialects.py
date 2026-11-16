@@ -8,7 +8,7 @@ import re
 READ_ONLY_VIOLATION = re.compile(
     r"\b(insert|update|delete|merge|upsert|drop|alter|create|truncate|grant|revoke|exec|execute|call|copy|vacuum|"
     r"reindex|into|commit|rollback|dbcc|backup|restore|shutdown|kill)\b",
-    re.I)                                    # second line of defence: PostgreSQL runs checks read-only, SQL Server rolls back
+    re.I)                                    # second line of defence: PostgreSQL runs checks read-only, SQL Server and Snowflake roll back
 
 
 def clean_select(sql: str) -> str:
@@ -105,11 +105,26 @@ class SqlServer(Dialect):
         return f"SELECT TOP {int(n)} * FROM ({select}) AS dt_q"
 
 
-DIALECTS = {"postgresql": Postgres(), "sqlserver": SqlServer()}
+class Snowflake(Dialect):
+    name = "snowflake"
+    param = "%s"
+    SYSTEM_SCHEMAS = ("information_schema",)
+
+    def ident(self, name: str) -> str:
+        return '"' + str(name).replace('"', '""') + '"'      # exact case: names come from the catalog (usually UPPER)
+
+    def limit(self, select: str, n: int) -> str:
+        return f"SELECT * FROM ({select}) AS dt_q LIMIT {int(n)}"
+
+    def since(self, column: str, hours: int) -> str:
+        return f"{self.ident(column)} >= DATEADD(hour, -{int(hours)}, CURRENT_TIMESTAMP())"
+
+
+DIALECTS = {"postgresql": Postgres(), "sqlserver": SqlServer(), "snowflake": Snowflake()}
 
 
 def for_type(source_type: str) -> Dialect:
     d = DIALECTS.get(source_type)
     if not d:
-        raise ValueError(f"checks are not available for {source_type} yet (PostgreSQL and SQL Server are supported)")
+        raise ValueError(f"checks are not available for {source_type} yet (PostgreSQL, SQL Server and Snowflake are supported)")
     return d

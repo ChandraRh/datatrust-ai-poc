@@ -84,11 +84,14 @@ def _connections() -> list:
     return estate_store.list_connections()
 
 
+DB_TYPES = {"postgresql": "PostgreSQL", "sqlserver": "SQL Server", "snowflake": "Snowflake"}   # sources rules can run on
+
+
 def list_scopes() -> list:
     poc = _poc_connection_id()
     out = [{"key": f"db:{c['connection_id']}", "kind": "db", "id": c["connection_id"], "name": c["name"],
-            "type": {"postgresql": "PostgreSQL", "sqlserver": "SQL Server"}[c["source_type"]], "poc": c["connection_id"] == poc}
-           for c in _connections() if c["source_type"] in ("postgresql", "sqlserver")]
+            "type": DB_TYPES[c["source_type"]], "poc": c["connection_id"] == poc}
+           for c in _connections() if c["source_type"] in DB_TYPES]
     try:
         from adf import insights
         out += [{"key": f"adf:{s['source_id']}", "kind": "adf", "id": s["source_id"], "name": s["name"], "type": "Azure Data Factory",

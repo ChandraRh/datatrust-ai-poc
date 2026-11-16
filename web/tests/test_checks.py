@@ -63,7 +63,7 @@ class SqlSafetyTests(unittest.TestCase):
         self.assertEqual(MS.limit("WITH x AS (SELECT 1) SELECT * FROM x", 5), "WITH x AS (SELECT 1) SELECT * FROM x")
         self.assertIn("?", MS.columns_sql())
         with self.assertRaises(ValueError):
-            dialects.for_type("snowflake")
+            dialects.for_type("saphana")                     # no rules for SAP HANA yet
 
 
 class CheckTypeTests(unittest.TestCase):

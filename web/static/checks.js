@@ -234,7 +234,7 @@
   const area = (id, label, val, ph) => `<label class="field wide"><span>${label}</span><textarea id="${id}" rows="5" spellcheck="false" placeholder="${esc(ph || "")}">${esc(val ?? "")}</textarea></label>`;
 
   async function sourcePickers(prefix, cid, db, conns, withTable) {
-    const sqlConns = conns.filter((x) => ["postgresql", "sqlserver"].includes(x.source_type));
+    const sqlConns = conns.filter((x) => ["postgresql", "sqlserver", "snowflake"].includes(x.source_type));
     const connOpts = `<option value="">Choose…</option>` + sqlConns.map((x) =>
       `<option value="${x.connection_id}" ${String(cid ?? "") === String(x.connection_id) ? "selected" : ""}>${esc(x.name)}</option>`).join("");
     let html = sel(`${prefix}Conn`, "Connection", connOpts, "PostgreSQL or SQL Server, from Data estate → Connections");

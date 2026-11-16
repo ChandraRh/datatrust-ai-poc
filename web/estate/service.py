@@ -7,10 +7,11 @@ import re
 from . import store
 from .postgres_connector import PRIVILEGES, PostgresSource
 from .source_types import SOURCE_TYPES, test_connection
+from .snowflake_connector import PRIVILEGES as SNOWFLAKE_PRIVILEGES, SnowflakeSource
 from .sqlserver_connector import PRIVILEGES as SQLSERVER_PRIVILEGES, SqlServerSource
 
-CONNECTORS = {"postgresql": PostgresSource, "sqlserver": SqlServerSource}     # add SnowflakeSource / HanaSource here later
-PRIVILEGES_BY_TYPE = {"postgresql": PRIVILEGES, "sqlserver": SQLSERVER_PRIVILEGES}
+CONNECTORS = {"postgresql": PostgresSource, "sqlserver": SqlServerSource, "snowflake": SnowflakeSource}   # add HanaSource here later
+PRIVILEGES_BY_TYPE = {"postgresql": PRIVILEGES, "sqlserver": SQLSERVER_PRIVILEGES, "snowflake": SNOWFLAKE_PRIVILEGES}
 PG_NAMES = {"databases": "pg_database", "schemas": "pg_namespace", "objects": "pg_class, pg_proc", "columns": "pg_attribute, pg_index",
             "roles": "pg_roles", "grants": "pg_class.relacl, pg_namespace.nspacl", "changes": "dt_audit.ddl_log",
             "failures": "audit.error_log", "health": "pg_stat_database"}

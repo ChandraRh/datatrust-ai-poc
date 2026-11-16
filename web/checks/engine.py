@@ -53,11 +53,12 @@ def _too_slow() -> TooSlow:
 
 def _is_timeout(e: Exception) -> bool:
     s = f"{type(e).__name__} {e}".lower()
-    return "querycanceled" in s or "statement timeout" in s or "hyt00" in s or "query timeout expired" in s
+    return ("querycanceled" in s or "statement timeout" in s or "hyt00" in s or "query timeout expired" in s
+            or "000630" in s or "reached its statement or warehouse timeout" in s)
 
 
 def query(connection_id: int, database: str | None, sql: str, params=(), max_rows: int = 1000) -> list:
-    """Rows as dicts. PostgreSQL: a read-only session. SQL Server: inside a transaction that is always rolled back.
+    """Rows as dicts. PostgreSQL: a read-only session. SQL Server and Snowflake: inside a transaction that is always rolled back.
     Either way the query is stopped on the database after QUERY_SECONDS."""
     src = _source(connection_id)
     kind = src.cfg["source_type"]
@@ -86,6 +87,22 @@ def query(connection_id: int, database: str | None, sql: str, params=(), max_row
                 return [dict(zip(cols, r)) for r in cur.fetchmany(max_rows)]
             finally:
                 c.rollback()
+    if kind == "snowflake":
+        import snowflake.connector
+        from estate.snowflake_connector import lower_keys
+        c = src.connect(database, read_only=False, seconds=QUERY_SECONDS)   # Snowflake stops the statement after QUERY_SECONDS
+        try:
+            cur = c.cursor(snowflake.connector.DictCursor)
+            try:
+                cur.execute(sql, params or None)
+            except Exception as e:                                   # noqa: BLE001
+                raise _too_slow() if _is_timeout(e) else e
+            return [lower_keys(r) for r in cur.fetchmany(max_rows)] if cur.description else []
+        finally:
+            try:
+                c.rollback()                                         # autocommit off: nothing a query did is kept
+            finally:
+                c.close()
     raise ValueError(f"checks are not available for {kind} yet")
 
 

@@ -218,8 +218,9 @@ function wizardStep2(type, existing = null) {
     <div class="form-grid">
       <label>Name shown in the portal<input id="wzName" value="${esc(existing ? existing.name : "")}" placeholder="e.g. Finance ${esc(t.label)}"></label>
       ${t.fields.map((f) => `<label>${esc(f.label)}${f.required ? " *" : ""}<input data-key="${f.key}" value="${esc(current(f.key, f.default))}" placeholder="${esc(f.placeholder || "")}"></label>`).join("")}
-      <label>Password variable (.env or cloud secret) *<input id="wzPwEnv" value="${esc(envName)}"></label>
+      <label>${esc(t.password_label || "Password variable (.env or cloud secret)")} *<input id="wzPwEnv" value="${esc(envName)}"></label>
     </div>
+    ${t.password_hint ? `<p class="small muted">${esc(t.password_hint)}</p>` : ""}
     <p class="small muted">Laptop: put the password in <code>.env</code> as <code>${envName}=...</code> (no restart needed). Cloud: DevOps adds it as a secret
       environment variable with that name. The portal stores only the variable name, never the password.
       Driver: <code>${esc(t.driver)}</code></p>
