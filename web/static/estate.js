@@ -28,10 +28,8 @@ function showUserBadge() {
   const lo = $e("estLogout");
   if (lo) lo.onclick = async (e) => {
     e.preventDefault();
-    await fetch("/api/auth/logout", { method: "POST", credentials: "same-origin" });
-    est.user = null;
-    showUserBadge();
-    renderEstate(state.page);
+    await fetch("/api/auth/logout", { method: "POST", credentials: "same-origin" }).catch(() => {});
+    location.replace("/login");                 // leave the dashboard; replace() so Back does not return to it
   };
 }
 
@@ -105,8 +103,9 @@ async function renderEstate(page) {
       if (!est.user) return loginForm(el, page);
     }
     el.innerHTML = "<p class='muted'>Loading…</p>";
-    if (page === "estate-people" || page.startsWith("estate-dq-") || page.startsWith("estate-adf-") || page.startsWith("estate-checks")) {   // no source to pick
-      const body = await (page === "estate-people" ? window.Connect.page() : page.startsWith("estate-adf-") ? window.ADF.page(page)
+    if (page === "estate-people" || page === "estate-history" || page.startsWith("estate-dq-") || page.startsWith("estate-adf-") || page.startsWith("estate-checks")) {   // no source to pick
+      const body = await (page === "estate-people" ? window.Connect.page() : page === "estate-history" ? window.HISTORY.page()
+        : page.startsWith("estate-adf-") ? window.ADF.page(page)
         : page.startsWith("estate-checks") ? window.CHECKS.page(page) : window.DQ.page(page));
       el.innerHTML = body.html;
       body.bind();
@@ -146,7 +145,7 @@ async function pageConnections() {
       <td>${d.tracking ? `<span class="chip ok">tracking on</span>` : d.tracking === false ? (admin ? `<button class="btn light btn-sm" data-track="${esc(d.name)}">Enable tracking</button>` : `<span class="chip grey">off</span>`) : ""}</td></tr>`).join("");
   const list = est.connections.map((c) => `<tr><td>${esc(c.name)}</td><td><span class="chip grey">${esc(typeLabel(c.source_type))}</span></td>
       <td>${c.username ? esc(c.username) : "Windows login"}@${esc(c.host)}${c.source_type === "snowflake" || !c.port ? "" : ":" + c.port}${c.database ? "/" + esc(c.database) : ""}</td>
-      <td>${admin ? esc(c.password_env || "") : "•••"}</td><td>${esc(c.created_by || "")}</td>
+      <td title="Hidden">••••••••</td><td>${esc(c.created_by || "")}</td>
       <td class="nowrap">${admin ? `<button class="btn light btn-sm" data-edit="${c.connection_id}">Edit</button>` : ""}
         ${admin && est.connections.length > 1 ? `<button class="btn light btn-sm" data-del="${c.connection_id}">Remove</button>` : ""}</td></tr>`).join("");
   const thisSource = o.limited
@@ -156,7 +155,7 @@ async function pageConnections() {
        <div class="tablewrap"><table><thead><tr><th>Database</th><th>Owner</th><th>Size</th><th>Can connect</th><th>Who-changed-what</th></tr></thead><tbody>${rows}</tbody></table></div>
        <p class="small muted">${o.tracking_note ? esc(o.tracking_note) : "Tracking installs schema <code>dt_audit</code> and two event triggers in that database, so every CREATE / ALTER / DROP / GRANT is logged with user and time. Needs a superuser login."}</p>`;
   return {
-    html: `<div class="card"><h3>Connected sources</h3><div class="tablewrap"><table><thead><tr><th>Name</th><th>Type</th><th>Login</th><th>Password from .env</th><th>Added by</th><th></th></tr></thead><tbody>${list}</tbody></table></div>
+    html: `<div class="card"><h3>Connected sources</h3><div class="tablewrap"><table><thead><tr><th>Name</th><th>Type</th><th>Login</th><th>Password</th><th>Added by</th><th></th></tr></thead><tbody>${list}</tbody></table></div>
         ${admin ? `<button class="btn" id="wzOpen" style="margin-top:14px">+ Add a source</button>` : ""}</div>
       <div class="card"><h3>This source</h3>${thisSource}</div>
       ${admin ? `<div class="card hidden" id="wizard"></div>` : ""}`,
@@ -203,40 +202,51 @@ function wizardStep1() {
   w.querySelectorAll(".tile").forEach((b) => (b.onclick = () => wizardStep2(b.dataset.type)));
   $e("wzCancel").onclick = () => w.classList.add("hidden");
 }
+const EYE = `<svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"
+  stroke-linejoin="round" aria-hidden="true"><path d="M2 12s3.5-7 10-7 10 7 10 7-3.5 7-10 7S2 12 2 12z"/><circle cx="12" cy="12" r="3"/></svg>`;
+const EYE_OFF = `<svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"
+  stroke-linejoin="round" aria-hidden="true"><path d="M17.9 17.9A10.4 10.4 0 0 1 12 19c-6.5 0-10-7-10-7a18 18 0 0 1 4.1-5.1M9.9 5.2A9.6 9.6 0 0 1 12 5c6.5 0 10 7 10 7a18 18 0 0 1-2.2 3.2M14.1 14.1a3 3 0 1 1-4.2-4.2M2 2l20 20"/></svg>`;
 function wizardStep2(type, existing = null) {
   // existing: a connection row -> edit it in place (same id, so its rules, coverage and history stay); the type stays
   const t = est.types[type], w = $e("wizard");
-  const envName = existing ? existing.password_env : "CONN_" + t.label.toUpperCase().replace(/[^A-Z0-9]+/g, "_") + "_PASSWORD";
   const current = (k, dflt) => {
     if (!existing) return dflt || "";
     const v = ["host", "port", "database", "username"].includes(k) ? existing[k] : (existing.settings || {})[k];
     return v == null || (k === "port" && !v) ? "" : String(v);
   };
   w.innerHTML = `<h3>${existing ? `Edit ${esc(existing.name)}` : `Add a ${esc(t.label)} source`}</h3>${existing ? "" : wizardSteps(2)}
-    ${existing ? `<p class="small muted">${esc(t.label)} source. Its rules, coverage and history stay with it. To change the password itself, change
-      <code>${esc(existing.password_env)}</code> in <code>.env</code> (no restart needed); the portal only stores the variable's name.</p>` : ""}
+    ${existing ? `<p class="small muted">${esc(t.label)} source. Its rules, coverage and history stay with it.</p>` : ""}
     <div class="form-grid">
       <label>Name shown in the portal<input id="wzName" value="${esc(existing ? existing.name : "")}" placeholder="e.g. Finance ${esc(t.label)}"></label>
       ${t.fields.map((f) => `<label>${esc(f.label)}${f.required ? " *" : ""}<input data-key="${f.key}" value="${esc(current(f.key, f.default))}" placeholder="${esc(f.placeholder || "")}"></label>`).join("")}
-      <label>${esc(t.password_label || "Password variable (.env or cloud secret)")} *<input id="wzPwEnv" value="${esc(envName)}"></label>
+      <label>${esc(t.password_label || "Password")}${existing ? "" : " *"}<span class="pw-field"><input id="wzPw" type="password"
+        autocomplete="new-password" placeholder="${existing ? "Leave empty to keep the current password" : ""}"><button type="button"
+        class="pw-eye" id="wzPwEye" aria-label="Show password" title="Show password">${EYE}</button></span></label>
     </div>
     ${t.password_hint ? `<p class="small muted">${esc(t.password_hint)}</p>` : ""}
-    <p class="small muted">Laptop: put the password in <code>.env</code> as <code>${envName}=...</code> (no restart needed). Cloud: DevOps adds it as a secret
-      environment variable with that name. The portal stores only the variable name, never the password.
-      Driver: <code>${esc(t.driver)}</code></p>
     <div id="wzResult"></div>
     <button class="btn light" id="wzBack">${existing ? "Cancel" : "Back"}</button> <button class="btn" id="wzTest">Test connection</button>
     <button class="btn" id="wzSave" ${existing ? "" : "disabled"}>${existing ? "Save changes" : "Save source"}</button>`;
   const collect = () => {
-    const body = { source_type: type, name: $e("wzName").value.trim() || t.label, password_env: $e("wzPwEnv").value.trim(), settings: {} };
+    // the password goes to the server only; on edit an empty box keeps the saved one (password_env says which, for Test)
+    const body = { source_type: type, name: $e("wzName").value.trim() || t.label, password: $e("wzPw").value,
+                   password_env: existing ? existing.password_env || "" : "", settings: {} };
     w.querySelectorAll("input[data-key]").forEach((i) => {
       const k = i.dataset.key, v = i.value.trim();
       if (["host", "port", "database", "username"].includes(k)) body[k] = k === "port" ? (v ? Number(v) : null) : v;
       else body.settings[k] = v;
     });
     const missing = t.fields.filter((f) => f.required && !w.querySelector(`input[data-key=${f.key}]`).value.trim()).map((f) => f.label);
-    if (!body.password_env) missing.push(".env variable");
+    const noPassword = (type === "sqlserver" && !body.username) || (type === "snowflake" && body.settings.private_key_file);
+    if (!existing && !body.password && !noPassword) missing.push("Password");
     return { body, missing };
+  };
+  $e("wzPwEye").onclick = () => {
+    const i = $e("wzPw"), show = i.type === "password";
+    i.type = show ? "text" : "password";
+    $e("wzPwEye").innerHTML = show ? EYE_OFF : EYE;
+    $e("wzPwEye").setAttribute("aria-label", show ? "Hide password" : "Show password");
+    $e("wzPwEye").title = show ? "Hide password" : "Show password";
   };
   $e("wzBack").onclick = existing ? () => w.classList.add("hidden") : wizardStep1;
   $e("wzTest").onclick = async () => {
@@ -439,7 +449,7 @@ async function pageAccess() {
           : "Object grants automatically add CONNECT on the database and USAGE on the schema."}</p>
         <div id="arResult"></div></div></div>
       <div class="card"><h3>Pending approval (${pending.length})</h3>${pending.map(reqRow).join("") || "<p class='muted'>Nothing waiting.</p>"}</div>
-      <div class="card"><h3>Request history</h3>${objTable(history.map((r) => ({ id: r.request_id, type: REQ_LABEL[r.request_type] || r.request_type, grantee: r.grantee, database: r.database, status: r.status, requested_by: r.requested_by, decided_by: r.decided_by, decided_at: r.decided_at, error: r.error })))
+      <div class="card"><div class="draft-head"><h3 style="margin:0">Request history</h3>${admin ? `<a class="small" style="margin-left:auto" href="#estate-history=access">View all history →</a>` : ""}</div>${objTable(history.map((r) => ({ id: r.request_id, type: REQ_LABEL[r.request_type] || r.request_type, grantee: r.grantee, database: r.database, status: r.status, requested_by: r.requested_by, decided_by: r.decided_by, decided_at: r.decided_at, error: r.error })))
         || "<p class='muted'>No requests yet.</p>"}</div>
       ${admin ? `<div class="card"><h3>Portal users</h3><div id="puList"></div>
         <div class="form-grid"><input id="puName" type="email" placeholder="user email"><input id="puPw" type="password" placeholder="password (min 12)">

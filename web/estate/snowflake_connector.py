@@ -134,13 +134,13 @@ class SnowflakeSource:
             args.update(authenticator="SNOWFLAKE_JWT", private_key_file=key_file)
             passphrase = None
             try:
-                passphrase = store.resolve_password(self.cfg["password_env"]) if self.cfg.get("password_env") else None
+                passphrase = store.password_of(self.cfg) if (self.cfg.get("password") or self.cfg.get("password_env")) else None
             except ValueError:
                 passphrase = None                                  # an unencrypted key needs no passphrase
             if passphrase:
                 args["private_key_password"] = passphrase
         else:
-            args["password"] = store.resolve_password(self.cfg["password_env"])
+            args["password"] = store.password_of(self.cfg)
         return args
 
     def connect(self, database: str = None, read_only: bool = True, seconds: int = None):

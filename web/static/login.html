@@ -3,31 +3,48 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <meta name="theme-color" content="#063852">
-  <title>Sign in | DataTrust</title>
+  <meta name="theme-color" content="#003A55">
+  <title>Sign in | DataTrust AI</title>
+  <link rel="preload" href="/static/vendor/fonts/inter-latin-wght-normal.woff2" as="font" type="font/woff2" crossorigin>
   <link rel="stylesheet" href="/static/login.css">
   <script src="/static/login.js" defer></script>
 </head>
 <body>
   <main class="auth-shell">
-    <section class="brand-panel" aria-label="About DataTrust">
-      <a class="brand" href="/login" aria-label="DataTrust home">
-        <span class="brand-symbol" aria-hidden="true"><i></i><i></i><i></i></span>
-        <span>Data<span>Trust</span></span>
+    <section class="brand-panel" aria-label="About DataTrust AI">
+      <div class="panel-bg" aria-hidden="true"></div>
+      <a class="brand" href="/" aria-label="DataTrust AI home">
+        <span class="brand-mark" aria-hidden="true"><svg viewBox="0 0 24 24"><path d="M12 3l7 3v5c0 4.6-3 8.4-7 10-4-1.6-7-5.4-7-10V6z"/><path d="M8.8 12.2l2.2 2.2 4.4-4.6"/></svg></span>
+        <b>DataTrust <em>AI</em></b>
       </a>
+
       <div class="brand-copy">
-        <span class="eyebrow">DATA YOU CAN TRUST</span>
-        <h1>Clarity for your data.<br>Confidence in every decision.</h1>
-        <p>Monitor data quality, investigate issues, and understand the health of your pipelines in one place.</p>
+        <span class="eyebrow">Data observability · quality · governance</span>
+        <h1>Know whether you can <span class="hl">trust your data</span>, and why.</h1>
+        <ul class="features">
+          <li><span class="fi"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M3 12h4l3-8 4 16 3-8h4"/></svg></span>
+            <div><b>One trust score for every source</b><span>Databases, pipelines and Azure Data Factory, scored the same way.</span></div></li>
+          <li><span class="fi"><svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="11" cy="11" r="6"/><path d="M20 20l-4.5-4.5"/></svg></span>
+            <div><b>Root cause with evidence</b><span>Trace every wrong number back to the file or rule that caused it.</span></div></li>
+          <li><span class="fi"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M20 6L9 17l-5-5"/></svg></span>
+            <div><b>Fixes you approve and verify</b><span>Nothing changes without approval; issues close on a clean run.</span></div></li>
+        </ul>
       </div>
-      <div class="panel-footer"><span class="status-dot"></span> Your data workspace, securely connected</div>
+
+      <div class="panel-footer">
+        <span><i class="status-dot"></i>Secure sign-in</span><span>Role-based access</span><span>Full audit trail</span>
+      </div>
     </section>
 
     <section class="form-panel">
-      <div class="mobile-brand"><span class="brand-symbol" aria-hidden="true"><i></i><i></i><i></i></span>Data<span>Trust</span></div>
+      <div class="form-top">
+        <a class="mobile-brand" href="/" aria-label="DataTrust AI home"><span class="brand-mark" aria-hidden="true"><svg viewBox="0 0 24 24"><path d="M12 3l7 3v5c0 4.6-3 8.4-7 10-4-1.6-7-5.4-7-10V6z"/><path d="M8.8 12.2l2.2 2.2 4.4-4.6"/></svg></span><b>DataTrust <em>AI</em></b></a>
+        <a class="back-home" href="/"><span aria-hidden="true">←</span> Back to home</a>
+      </div>
+
       <div class="form-wrap">
         <header class="form-heading">
-          <div class="eyebrow">WELCOME TO DATATRUST</div>
+          <div class="eyebrow">Welcome to DataTrust AI</div>
           <h2 id="formTitle">Sign in to your workspace</h2>
           <p id="formSubtitle">Use your work email or username to continue.</p>
         </header>
@@ -39,15 +56,15 @@
           <label for="loginEmail">Email address or username</label>
           <input id="loginEmail" name="email" type="text" autocomplete="username" placeholder="you@company.com or admin" required>
           <div class="password-label"><label for="loginPassword">Password</label><button type="button" class="text-button" data-view="forgot">Forgot password?</button></div>
-          <input id="loginPassword" name="password" type="password" autocomplete="current-password" placeholder="Enter your password" required>
+          <div class="pw"><input id="loginPassword" name="password" type="password" autocomplete="current-password" placeholder="Enter your password" required><button type="button" class="pw-toggle" aria-controls="loginPassword" aria-pressed="false">Show</button></div>
           <button class="primary-button" type="submit"><span>Sign in</span><b aria-hidden="true">→</b></button>
         </form>
 
         <form id="signupForm" class="auth-form" hidden>
-          <label for="signupEmail">Email address</label>
+          <label for="signupEmail">Work email address</label>
           <input id="signupEmail" name="email" type="email" autocomplete="email" placeholder="you@company.com" required>
           <label for="signupPassword">Create password</label>
-          <input id="signupPassword" name="password" type="password" autocomplete="new-password" minlength="12" placeholder="At least 12 characters" required>
+          <div class="pw"><input id="signupPassword" name="password" type="password" autocomplete="new-password" minlength="12" placeholder="At least 12 characters" required><button type="button" class="pw-toggle" aria-controls="signupPassword" aria-pressed="false">Show</button></div>
           <p class="hint">Use at least 12 characters. We’ll email you a verification link.</p>
           <button class="primary-button" type="submit"><span>Create account</span><b aria-hidden="true">→</b></button>
         </form>
@@ -60,7 +77,7 @@
 
         <form id="resetForm" class="auth-form" hidden>
           <label for="resetPassword">New password</label>
-          <input id="resetPassword" name="password" type="password" autocomplete="new-password" minlength="12" placeholder="At least 12 characters" required>
+          <div class="pw"><input id="resetPassword" name="password" type="password" autocomplete="new-password" minlength="12" placeholder="At least 12 characters" required><button type="button" class="pw-toggle" aria-controls="resetPassword" aria-pressed="false">Show</button></div>
           <button class="primary-button" type="submit"><span>Set new password</span><b aria-hidden="true">→</b></button>
         </form>
 

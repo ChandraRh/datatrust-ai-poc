@@ -84,7 +84,8 @@ class NewConnection(BaseModel):
     port: Optional[int] = None
     database: str = ""
     username: str
-    password_env: str
+    password: str = ""            # typed in the form: kept in .env (never in the database); empty on edit = keep the current one
+    password_env: str = ""        # older clients: the NAME of a .env variable
     settings: dict = {}
 
 
@@ -97,7 +98,7 @@ def source_types(user: dict = Depends(current_user)):
 @router.post("/connections/test")
 def test_connection(body: NewConnection, user: dict = Depends(admin_user)):
     return service.test_new(body.source_type, body.host, body.port, body.database, body.username,
-                            body.password_env, body.settings)
+                            body.password_env, body.settings, body.password)
 
 
 @router.get("/connections")
@@ -111,16 +112,24 @@ def connections(user: dict = Depends(current_user)):
 
 @router.post("/connections")
 def add_connection(body: NewConnection, user: dict = Depends(admin_user)):
+    env = body.password_env
+    if body.password or not env:
+        env = guard(store.keep_password, body.name, body.password, "", None) if body.password else             "CONN_" + "".join(c if c.isalnum() else "_" for c in (body.name or "SOURCE").upper()).strip("_") + "_PASSWORD"
     cid = guard(store.add_connection, body.name, body.host, body.port, body.database, body.username,
-                body.password_env, user["username"], body.source_type, body.settings)
+                env, user["username"], body.source_type, body.settings)
     return {"connection_id": cid, "overview": service.overview(cid)}
 
 
 @router.put("/connections/{cid}")
 def update_connection(cid: int, body: NewConnection, user: dict = Depends(admin_user)):
-    """Edit a source in place (same id: its rules, coverage and history stay). Its type cannot change."""
+    """Edit a source in place (same id: its rules, coverage and history stay). Its type cannot change.
+    An empty password keeps the current one."""
+    env = guard(store.get_connection, cid)["password_env"]
+    if body.password:
+        env = guard(store.keep_password, body.name, body.password, env, cid)
+        store.audit(user["username"], "CONNECTION_PASSWORD_CHANGED", f"{cid} {body.name}", "")
     guard(store.update_connection, cid, body.name, body.host, body.port, body.database, body.username,
-          body.password_env, user["username"], body.settings)
+          env, user["username"], body.settings)
     try:                                                   # forget what was cached for the old details
         from checks import coverage
         coverage._count_cache.pop(cid, None)

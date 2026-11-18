@@ -52,7 +52,7 @@ class PostgresSource:
     # ------------------------------------------------------------------ connections
     def connect(self, database: str = None, read_only: bool = True):
         c = psycopg.connect(host=self.cfg["host"], port=self.cfg["port"], dbname=database or self.cfg["database"],
-                            user=self.cfg["username"], password=store.resolve_password(self.cfg["password_env"]),
+                            user=self.cfg["username"], password=store.password_of(self.cfg),
                             row_factory=dict_row, connect_timeout=5, autocommit=read_only,
                             application_name="datatrust-estate-portal")
         if read_only:

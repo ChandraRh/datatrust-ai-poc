@@ -61,8 +61,9 @@ def login_page(request: Request):
         return RedirectResponse("/app", status_code=303)
     if estate_store.read_session(request.cookies.get("dt_session", "")):
         return RedirectResponse("/app", status_code=303)
-    return HTMLResponse((HERE / "static" / "login.html").read_text(encoding="utf-8"),
-                        headers={"Cache-Control": "no-store"})
+    page = _page("login.html")                       # stamps login.css / login.js so an update is never served stale
+    page.headers["Cache-Control"] = "no-store"
+    return page
 
 
 @app.exception_handler(Exception)
@@ -83,6 +84,9 @@ try:                                                    # DQ Rule Studio + Rejec
     dq.ensure_tables()
 except Exception as e:
     print(f"!! DQ Rule Studio / Rejected records not ready: {e}")
+
+import history_routes  # noqa: E402  Audit & approvals page (admins): reads the tables above, has none of its own
+app.include_router(history_routes.router)
 
 try:                                                    # Azure Data Factory connector (own tables, own API, collector thread)
     from adf import collector as adf_collector, routes as adf_routes, store as adf_store
@@ -153,8 +157,11 @@ def landing():
 
 
 @app.get("/app")
-def index():
-    """The dashboard. Existing alert links with dashboard fragments are redirected by landing.html."""
+def index(request: Request):
+    """The dashboard; needs a portal sign-in (unless PORTAL_AUTH_ENABLED=false). Signed out -> /login. The browser keeps
+    the #fragment across the redirect, so an alert link such as /app#investigate=INC-1 opens that page after sign-in."""
+    if estate_store.auth_enabled() and not estate_store.read_session(request.cookies.get("dt_session", "")):
+        return RedirectResponse("/login", status_code=303)
     return _page("index.html")
 
 

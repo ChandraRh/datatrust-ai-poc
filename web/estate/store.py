@@ -10,6 +10,7 @@ import hashlib
 import hmac
 import json
 import os
+import re
 import secrets
 import sys
 import time
@@ -444,12 +445,43 @@ def delete_connection(connection_id: int, by: str):
     audit(by, "CONNECTION_REMOVED", str(connection_id), "")
 
 
+def password_of(cfg: dict) -> str:
+    """The password to connect with: one just typed in the form (testing before saving), else the saved one."""
+    return cfg["password"] if cfg.get("password") else resolve_password(cfg.get("password_env") or "")
+
+
+def keep_password(name: str, password: str, current_env: str = "", connection_id: int = None) -> str:
+    """Store a password typed in the portal in .env and return the variable name the connection keeps.
+    The portal database only ever holds the name. A connection reuses its own CONN_* variable; a shared or
+    non-portal one (e.g. PG_PASSWORD, which the app itself uses) is never overwritten: it gets a new name."""
+    from dotenv import set_key
+    if "\n" in password or "\r" in password:
+        raise ValueError("the password cannot contain a line break")
+    with db() as conn:
+        rows = conn.execute("SELECT connection_id, password_env FROM portal.connections").fetchall()
+    used = {r["password_env"] for r in rows}
+    shared = any(r["password_env"] == current_env and r["connection_id"] != connection_id for r in rows)
+    own = bool(connection_id) and current_env.startswith("CONN_") and current_env.replace("_", "").isalnum() and not shared
+    env = current_env if own else None
+    if not env:
+        base = "CONN_" + (re.sub(r"[^A-Z0-9]+", "_", (name or "SOURCE").upper()).strip("_") or "SOURCE") + "_PASSWORD"
+        env, n = base, 2
+        while env in used:
+            env, n = f"{base[:-9]}_{n}_PASSWORD", n + 1
+    path = ROOT / ".env"
+    path.touch(exist_ok=True)
+    set_key(str(path), env, password, quote_mode="always")
+    return env
+
+
 def resolve_password(password_env: str) -> str:
     """Read the password from .env every time (a newly added variable works without a restart)."""
     from dotenv import dotenv_values
     value = dotenv_values(ROOT / ".env").get(password_env) or os.getenv(password_env)
     if value is None and password_env == "PG_PASSWORD":
         value = config.PG_PASSWORD                     # the POC's own database (default from config.py)
+    if not password_env:
+        raise ValueError("no password was entered for this source")
     if value is None:
         raise ValueError(f"{password_env} is not set (add it to .env, or as an environment variable / secret in the cloud)")
     return value

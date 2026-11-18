@@ -222,7 +222,18 @@ function drawStacked(id, labels, series, opts = {}) {
 
 // ------------------------------------------------------------------ navigation
 document.querySelectorAll("#tabs button").forEach((b) => b.addEventListener("click", () => go(b.dataset.page)));
+// the address bar follows the page (/app#detect, /app#investigate=<id>), so refresh, Back and a copied link land on it
+let restoringLink = false, lastLink = null;
+function hashOf() { return decodeURIComponent(location.hash.slice(1)).match(/^([\w-]+)(?:=(.+))?$/); }
+function setUrl(page, arg) {
+  if (restoringLink) return;                                       // the URL already says where we are
+  const a = typeof arg === "string" || typeof arg === "number" ? String(arg) : "";
+  const cur = hashOf();
+  if (cur ? cur[1] === page && (!a || cur[2] === a) : page === "observe" && !a) return;   // same page (e.g. auto refresh)
+  history.pushState(null, "", "#" + page + (a ? "=" + encodeURIComponent(a) : ""));
+}
 function go(page, arg) {
+  setUrl(page, arg);
   state.page = page;
   const navPage = page.startsWith("estate-checks") ? "estate-dq-rules" : page;   // a rule page belongs to DQ Rule Studio in the menu
   document.querySelectorAll("#tabs button").forEach((b) => b.classList.toggle("active", b.dataset.page === navPage));
@@ -1052,7 +1063,8 @@ async function renderVerify() {
     ${verified.length ? `<div class="banner ok"><h2>${verified.length} INCIDENT(S) VERIFIED RESOLVED</h2>${verified.map((r) => `✓ ${esc(r.incident_title)}: ${esc(r.resolution_label.toLowerCase())}.`).join("<br>")}</div>` : ""}
     ${unverified.length ? `<div class="banner warn"><h2>${unverified.length} STOPPED SHOWING WITHOUT A VERIFIED FIX</h2>The data no longer shows them, but nothing proves they were fixed: check each one below.</div>` : ""}
     <div class="grid g-2">
-      <div class="card"><h3>Remediation log</h3>
+      <div class="card"><div class="draft-head"><h3 style="margin:0">Remediation log</h3>
+          <a class="small" style="margin-left:auto" href="#estate-history=remediation" title="Admins: every approved fix, not only the last 7 days">View all history →</a></div>
         ${waiting.map((i) => `<div class="check"><span class="grey">⏳</span> <b>${esc(i.title)}</b><div class="small muted">Approved by ${esc(i.approval.approved_by)} at ${esc(i.approval.approved_at)}${i.approval.note ? ` (${esc(i.approval.note)})` : ""}. Still present in the data: fix it at the source, then re-check.</div>
           <button class="btn light btn-sm" data-recheck="${esc(i.id)}" type="button">Re-check now</button><div class="recheck-result" data-recheck-result="${esc(i.id)}"></div></div>`).join("")}
         ${verified.length ? `<h4 class="verify-h">Verified resolved</h4>${verified.map((r) => item(r, true)).join("")}` : ""}
@@ -1233,8 +1245,13 @@ async function askQuestion(q) {
 })();
 // links from alerts / e-mails: #investigate=<incident id>, #impact=<id>, #verify, #estate-people ...
 async function openFromLink() {
-  const m = decodeURIComponent(location.hash.slice(1)).match(/^([\w-]+)(?:=(.+))?$/);
-  if (!m || !document.getElementById("page-" + m[1])) return;
+  const m = hashOf();
+  if (!m || !document.getElementById("page-" + m[1])) {
+    if (!location.hash && state.page && state.page !== "observe") { restoringLink = true; try { go("observe"); } finally { restoringLink = false; } }
+    return;
+  }
+  if (m[0] === lastLink && state.page === (m[1].startsWith("estate-checks") ? state.page : m[1])) return;   // Back fires popstate + hashchange
+  lastLink = m[0];
   if (["investigate", "impact"].includes(m[1]) && m[2]) {        // an alert link: show the incident's own source first
     const sc = scopeOfIncident(m[2]);
     if (sc && sc !== state.scope) await setScope(sc);
@@ -1242,16 +1259,21 @@ async function openFromLink() {
   if (m[2] && /^(db|adf):\d+$/.test(m[2])) {                     // #observe=db:3 / #detect=adf:3: a page of a given source
     if (m[2] !== state.scope) await setScope(m[2]);
     const tab = document.querySelector(`#tabs button[data-page="${m[1]}"]`);
-    if (m[1].startsWith("estate-") && tab) tab.click(); else go(m[1]);   // estate pages draw on a menu click (estate.js)
-    history.replaceState(null, "", location.pathname);
+    restoringLink = true;
+    try { if (m[1].startsWith("estate-") && tab) tab.click(); else go(m[1]); }   // estate pages draw on a menu click (estate.js)
+    finally { restoringLink = false; }
     return;
   }
   const btn = document.querySelector(`#tabs button[data-page="${m[1]}"]`);
+  restoringLink = true;
+  try {
   if (m[1] === "estate-adf-runs" && m[2] && window.ADF) { ADF.open(m[2]); btn.click(); }   // #estate-adf-runs=<ADF run ID>
   else if (m[1] === "estate-dq-rejected" && m[2] && window.DQ) DQ.open(m[2]);   // #estate-dq-rejected=2026-10-08
+  else if (m[1] === "estate-history" && m[2] && window.HISTORY) { HISTORY.filter(m[2]); btn.click(); }   // #estate-history=access
   else if (m[1] === "estate-checks" && m[2] && window.CHECKS) { CHECKS.open(m[2]); btn.click(); }        // #estate-checks=<check id>
   else if (m[1] === "estate-checks-new" && m[2] && window.CHECKS) CHECKS.edit(m[2]);                     // #estate-checks-new=<id>: edit
   else if (m[2]) go(m[1], m[2]); else if (btn) btn.click();
-  history.replaceState(null, "", location.pathname);
+  } finally { restoringLink = false; }
 }
-window.addEventListener("hashchange", openFromLink);
+window.addEventListener("hashchange", openFromLink);                 // a link to #page inside the app
+window.addEventListener("popstate", openFromLink);                   // Back / Forward between pages

@@ -740,6 +740,12 @@ def requests_list(status: str = None) -> list:
     return out
 
 
+def _audit(by: str, status: str, req: dict, detail: str) -> None:
+    """Every re-insert decision also goes to the portal audit log (Audit & approvals page), like access decisions."""
+    from estate import store as estate_store
+    estate_store.audit(by, f"REINSERT_{status}", f"request {req['request_id']} {req['entity']}", detail)
+
+
 def decide(request_id: int, decision: str, by: str) -> dict:
     req = ds.one("SELECT * FROM audit.dq_reprocess WHERE request_id = %(i)s", {"i": request_id})
     if not req:
@@ -751,19 +757,24 @@ def decide(request_id: int, decision: str, by: str) -> dict:
             conn.execute("UPDATE audit.dq_reprocess SET status = 'REJECTED', decided_by = %s, decided_at = now() WHERE request_id = %s",
                          (by, request_id))
             conn.commit()
+        _audit(by, "REJECTED", req, f"requested by {req['requested_by']}")
         return {"status": "REJECTED"}
     if decision != "approve":
         raise ValueError("Decision must be approve or reject.")
     try:
-        return _apply(req, by)
+        out = _apply(req, by)
     except ValueError:
         raise
     except Exception as e:
+        reason = f"{type(e).__name__}: {str(e).splitlines()[0]}"
         with ds.connect(read_only=False) as conn:
             conn.execute("UPDATE audit.dq_reprocess SET status = 'FAILED', result = %s, decided_by = %s, decided_at = now() "
-                         "WHERE request_id = %s", (f"{type(e).__name__}: {str(e).splitlines()[0]}"[:500], by, request_id))
+                         "WHERE request_id = %s", (reason[:500], by, request_id))
             conn.commit()
-        raise ValueError(f"Nothing was changed (one transaction): {type(e).__name__}: {str(e).splitlines()[0]}")
+        _audit(by, "FAILED", req, reason)
+        raise ValueError(f"Nothing was changed (one transaction): {reason}")
+    _audit(by, out.get("status") or "APPLIED", req, out.get("result") or "")
+    return out
 
 
 def _apply(req: dict, by: str) -> dict:

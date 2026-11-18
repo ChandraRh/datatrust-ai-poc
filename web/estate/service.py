@@ -60,11 +60,11 @@ def overview(connection_id: int) -> dict:
     return {"ok": True, "label": label, **info, "databases": dbs, "tracking_note": getattr(src, "TRACKING_NOTE", None)}
 
 
-def test_new(source_type, host, port, database, username, password_env, settings) -> dict:
+def test_new(source_type, host, port, database, username, password_env, settings, password="") -> dict:
     """Test a source before saving it."""
     from .source_types import DEFAULT_PORT
     cfg = {"source_type": source_type, "host": host, "port": int(port or DEFAULT_PORT.get(source_type, 0)),
-           "database": database, "username": username, "password_env": password_env, "settings": settings or {}}
+           "database": database, "username": username, "password_env": password_env, "password": password, "settings": settings or {}}
     try:
         return {"ok": True, **test_connection(cfg)}
     except Exception as e:

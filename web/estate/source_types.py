@@ -19,10 +19,9 @@ SOURCE_TYPES = {
     },
     "snowflake": {
         "label": "Snowflake", "browse": True, "driver": "snowflake-connector-python (pip install snowflake-connector-python)",
-        "password_label": "Password or key passphrase variable (.env or cloud secret)",
-        "password_hint": ("Password login: put the password in .env under this name. Key-pair login (recommended for a service "
-                          "user): fill in the private key file; this variable then holds the key's passphrase (leave it unset for "
-                          "an unencrypted key)."),
+        "password_label": "Password or key passphrase",
+        "password_hint": ("Password login: enter the user's password. Key-pair login (recommended for a service user): fill in "
+                          "the private key file and enter the key's passphrase here (leave it empty for an unencrypted key)."),
         "fields": [
             {"key": "host", "label": "Account identifier", "placeholder": "e.g. myorg-myaccount (from your Snowflake URL)", "required": True},
             {"key": "username", "label": "Login user", "placeholder": "e.g. DATATRUST_SVC", "required": True},
@@ -61,7 +60,7 @@ def test_connection(cfg: dict) -> dict:
     """Connect once and read the version. cfg = connection row (+ settings). Raises with a readable message."""
     t = cfg["source_type"]
     windows_login = t == "sqlserver" and not (cfg.get("username") or "").strip()
-    password = None if windows_login or t == "snowflake" else store.resolve_password(cfg["password_env"])
+    password = None if windows_login or t == "snowflake" else store.password_of(cfg)
     s = cfg.get("settings") or {}
     if t == "postgresql":
         from .postgres_connector import PostgresSource

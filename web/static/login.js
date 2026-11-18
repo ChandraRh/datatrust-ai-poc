@@ -51,6 +51,15 @@ function setView(view) {
 document.addEventListener("click", (event) => {
   const button = event.target.closest("[data-view]");
   if (button) setView(button.dataset.view);
+  const toggle = event.target.closest(".pw-toggle");
+  if (toggle) {
+    const input = document.getElementById(toggle.getAttribute("aria-controls"));
+    const show = input.type === "password";
+    input.type = show ? "text" : "password";
+    toggle.textContent = show ? "Hide" : "Show";
+    toggle.setAttribute("aria-pressed", String(show));
+    input.focus();
+  }
 });
 
 async function submitForm(form, path, payload, successView, successMessage) {
@@ -71,7 +80,9 @@ async function submitForm(form, path, payload, successView, successMessage) {
     const body = await response.json();
     if (!response.ok) throw new Error(body.detail || "Something went wrong. Please try again.");
     if (path === "login") {
-      location.assign("/app");
+      // back to the dashboard page that was asked for (e.g. /app#detect kept its #fragment through the redirect here)
+      const page = /^#(observe|detect|investigate|lineage|impact|verify|ask|pipeline|estate-[\w-]+)(=|$)/.test(location.hash) ? location.hash : "";
+      location.assign("/app" + page);
       return;
     }
     if (path === "reset") {

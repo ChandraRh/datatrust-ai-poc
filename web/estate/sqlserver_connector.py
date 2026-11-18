@@ -137,7 +137,7 @@ class SqlServerSource:
         except ImportError:
             raise ValueError("SQL Server driver not installed: pip install pyodbc (and Microsoft ODBC Driver 18 for SQL Server)")
         windows = not (self.cfg.get("username") or "").strip()
-        password = None if windows else store.resolve_password(self.cfg["password_env"])
+        password = None if windows else store.password_of(self.cfg)
         c = pyodbc.connect(conn_str(self.cfg, database, password), autocommit=read_only, timeout=10)
         c.timeout = 15 if read_only else 60                    # seconds per statement
         c.cursor().execute("SET LOCK_TIMEOUT 10000")

@@ -170,7 +170,7 @@ class AuthRouteTests(unittest.TestCase):
         self.assertEqual(user, {"username": "local", "role": "admin"})
         self.assertEqual(session, {"user": user})
 
-    def test_dashboard_stays_public_while_estate_api_requires_sign_in(self):
+    def test_landing_stays_public_while_dashboard_and_estate_api_require_sign_in(self):
         # importing the server must not start its background loops in a test (no Google Chat posts, no syncs, no checks)
         with patch.dict(os.environ, {"ALERTS_ENABLED": "false", "ADF_COLLECTOR_IN_WEB": "false", "CHECKS_IN_WEB": "false"}):
             import server
@@ -178,14 +178,27 @@ class AuthRouteTests(unittest.TestCase):
         with patch.object(server.estate_store, "auth_enabled", return_value=True), \
                 patch.object(server.estate_store, "read_session", return_value=None):
             app_client = TestClient(server.app, follow_redirects=False)
-            dashboard = app_client.get("/")
+            landing = app_client.get("/")
+            dashboard = app_client.get("/app")
             estate_session = app_client.get("/api/estate/session")
             estate_connections = app_client.get("/api/estate/connections")
 
-        self.assertEqual(dashboard.status_code, 200)
+        self.assertEqual(landing.status_code, 200)
+        self.assertEqual(dashboard.status_code, 303)
+        self.assertEqual(dashboard.headers["location"], "/login")
         self.assertEqual(estate_session.status_code, 200)
         self.assertIsNone(estate_session.json()["user"])
         self.assertEqual(estate_connections.status_code, 401)
+
+    def test_signed_in_user_gets_the_dashboard(self):
+        with patch.dict(os.environ, {"ALERTS_ENABLED": "false", "ADF_COLLECTOR_IN_WEB": "false", "CHECKS_IN_WEB": "false"}):
+            import server
+
+        with patch.object(server.estate_store, "auth_enabled", return_value=True), \
+                patch.object(server.estate_store, "read_session", return_value={"username": "admin", "role": "admin"}):
+            dashboard = TestClient(server.app, follow_redirects=False).get("/app")
+
+        self.assertEqual(dashboard.status_code, 200)
 
 
 if __name__ == "__main__":

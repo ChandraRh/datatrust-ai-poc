@@ -47,7 +47,7 @@
         <span class="small muted">by ${esc(r.requested_by)} · ${when(r.requested_at)}${r.note ? " · " + esc(r.note) : ""}</span></div>
         <div class="small">${Object.keys(r.changes).length ? "Change: " + Object.entries(r.changes).map(([k, v]) => `<code>${esc(k)}</code> → <b>${esc(v)}</b>`).join(", ") : "No value changes (passes the current rules)"}
         · keys: <span class="mono">${esc(r.items.slice(0, 6).map((x) => x.record_key).join(", "))}${r.items.length > 6 ? " …" : ""}</span></div>
-        ${r.result ? `<div class="small muted">${esc(r.result)}${r.decided_by ? ` · ${esc(r.decided_by)} ${when(r.decided_at)}` : ""}</div>` : ""}
+        ${r.result || r.decided_by ? `<div class="small muted">${esc(r.result || "")}${r.decided_by ? `${r.result ? " · " : ""}${r.status === "REJECTED" ? "rejected" : "decided"} by <b>${esc(r.decided_by)}</b> ${when(r.decided_at)}` : ""}</div>` : ""}
         ${r.status === "PENDING" ? (isAdmin() ? `<div class="pacts"><button class="btn btn-sm" data-approve="${r.request_id}">Approve &amp; re-insert</button> <button class="btn light btn-sm" data-reject="${r.request_id}">Reject</button></div>` : `<div class="small muted">Waiting for an admin.</div>`) : ""}</div>`;
     return {
       html: `<div class="kpis rj-kpis">
@@ -76,7 +76,9 @@
             <th>Date</th><th>Table</th><th>Record key</th><th>Rule (cause)</th>${history ? "<th>Run</th><th>What happened</th>" : "<th>Failing value</th><th>Amount</th><th>Seen</th><th>Status</th>"}</tr></thead>
             <tbody>${rowsHtml || `<tr><td colspan="9" class="muted">No records for these filters.</td></tr>`}</tbody></table></div>
           <div id="rjPanel"></div></div>
-        ${reqs.filter((r) => r.status !== "PENDING").length ? `<div class="card"><h3>Recent re-insert requests</h3>${reqs.filter((r) => r.status !== "PENDING").slice(0, 8).map(reqRow).join("")}</div>` : ""}`,
+        ${reqs.filter((r) => r.status !== "PENDING").length ? `<div class="card"><div class="draft-head"><h3 style="margin:0">Recent re-insert requests</h3>
+          ${isAdmin() ? `<a class="small" style="margin-left:auto" href="#estate-history=reinsert">View all history →</a>` : ""}</div>
+          ${reqs.filter((r) => r.status !== "PENDING").slice(0, 8).map(reqRow).join("")}</div>` : ""}`,
       bind: bindRejected,
     };
   }
@@ -245,7 +247,7 @@
   }
 
   // ================================================================ DQ RULE STUDIO
-  const rs = { data: null, form: null, entity: "payments" };
+  const rs = { data: null, form: null, open: false, entity: "payments" };   // open: the rule form is shown (New rule / Edit / Use)
   const PARAMS = {
     RANGE: [["min", "Minimum", "number"], ["max", "Maximum", "number"]],
     IN_LIST: [["values", "Allowed values (comma separated)", "text"]],
@@ -274,7 +276,7 @@
             <div class="tablewrap rs-wrap"><table class="rs-table"><thead><tr><th>Rule</th><th>Check</th><th>Action</th><th>Rows</th><th>Active</th><th></th></tr></thead><tbody>${rows || `<tr><td colspan="6" class="muted">No rules for this table.</td></tr>`}</tbody></table></div>
             <div class="pacts"><button class="btn btn-sm" id="rsNew">+ New rule</button><button class="btn light btn-sm" id="rsSuggest">✨ Suggest rules from the data</button></div>
             <div id="rsSuggestions"></div></div>
-          <div class="card" id="rsEditor"></div>
+          <div class="card hidden" id="rsEditor"></div>
         </div>
         <div class="card"><h3>Rule changes</h3><p class="small muted">Every change is recorded (audit.dq_rule_changes). Changes are used from the next silver run.</p>
           <div class="tablewrap"><table><thead><tr><th>When</th><th>Table</th><th>Rule</th><th>Change</th><th>By</th></tr></thead><tbody>${ch || `<tr><td colspan="5" class="muted">No changes yet. The 17 built-in rules are the ones the pipeline always had.</td></tr>`}</tbody></table></div></div>`,
@@ -284,7 +286,7 @@
 
   function bindRules() {
     const root = $e("body-estate-dq-rules");
-    root.querySelectorAll("[data-ent]").forEach((b) => (b.onclick = () => { rs.entity = b.dataset.ent; rs.form = null; renderEstate("estate-dq-rules"); }));
+    root.querySelectorAll("[data-ent]").forEach((b) => (b.onclick = () => { rs.entity = b.dataset.ent; rs.form = null; rs.open = false; renderEstate("estate-dq-rules"); }));
     root.querySelectorAll("[data-edit]").forEach((b) => (b.onclick = () => {
       editor(rs.data.rules.find((r) => r.rule_id === +b.dataset.edit));
       $e("rsEditor").scrollIntoView({ behavior: "smooth", block: "start" });
@@ -312,14 +314,21 @@
         }));
       } catch (e) { box.innerHTML = `<div class="error-box">${esc(e.message)}</div>`; }
     };
-    editor(rs.form);
+    if (rs.open) editor(rs.form);                  // the form stays open across a refresh only if someone opened it
+  }
+
+  function closeEditor() {
+    rs.open = false; rs.form = null;
+    const box = $e("rsEditor");
+    if (box) { box.innerHTML = ""; box.classList.add("hidden"); }
   }
 
   function editor(rule) {
     const d = rs.data, admin = isAdmin();
-    rs.form = rule;
+    rs.form = rule; rs.open = true;
     const r = Object.assign({ entity: rs.entity, rule_type: "NOT_NULL", column_name: "", params: {}, action: "REJECT", active: true, rule_name: "", description: "" }, rule || {});
     const box = $e("rsEditor");
+    box.classList.remove("hidden");
     const cols = d.columns[r.entity] || [];
     const pfields = (t, p) => (PARAMS[t] || []).map(([k, lbl, typ]) => `<label>${lbl}<input data-p="${k}" type="${typ}" step="any" value="${esc(Array.isArray(p[k]) ? p[k].join(", ") : p[k] ?? "")}"></label>`).join("")
       + (t !== "NOT_NULL" ? `<label class="inline"><input type="checkbox" data-p="allow_empty" ${p.allow_empty ? "checked" : ""}> Empty value is OK</label>` : "");
@@ -334,8 +343,9 @@
         <div id="rsParams" class="rs-params">${pfields(r.rule_type, r.params || {})}</div>
         <label>Rule name<input id="rsName" value="${esc(r.rule_name)}" placeholder="e.g. FEE_IN_RANGE" ${r.built_in ? "disabled" : ""}></label>
         <label class="wide">Description<input id="rsDesc" value="${esc(r.description || "")}" placeholder="what it protects, for the people reading the rejected list"></label></div>
-      <div class="pacts"><button class="btn light btn-sm" id="rsTest">Test on today's data</button>${admin ? `<button class="btn btn-sm" id="rsSave">${r.rule_id ? "Save changes" : "Save rule"}</button>` : `<span class="small muted">Only an admin can save rules.</span>`}</div>
+      <div class="pacts"><button class="btn light btn-sm" id="rsTest">Test on today's data</button>${admin ? `<button class="btn btn-sm" id="rsSave">${r.rule_id ? "Save changes" : "Save rule"}</button>` : `<span class="small muted">Only an admin can save rules.</span>`}<button class="btn light btn-sm" id="rsCancel">Cancel</button></div>
       <div id="rsResult"></div>`;
+    $e("rsCancel").onclick = closeEditor;
     const val = () => {
       const params = {};
       box.querySelectorAll("[data-p]").forEach((i) => (params[i.dataset.p] = i.type === "checkbox" ? i.checked : i.value));
@@ -373,7 +383,7 @@
       try {
         const res = await dqpost("/rules", val());
         toast(`Saved: ${res.text}. Used from the next silver run.`);
-        rs.entity = $e("rsEnt").value; rs.form = null;
+        rs.entity = $e("rsEnt").value; rs.form = null; rs.open = false;   // saved: the form closes
         const rc = await dqapi(`/recheck?entity=${rs.entity}`).catch(() => null);
         await renderEstate("estate-dq-rules");
         if (rc && rc.count) $e("rsResult").innerHTML = `<div class="draft"><b>${num(rc.count)} held-back ${esc(ENT_LABEL[rs.entity] || rs.entity)} row(s) now pass all rules.</b>

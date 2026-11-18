@@ -124,12 +124,15 @@ def ask(question: str, history: list = None, scope: str | None = None) -> dict:
         if sc["poc"]:
             return agent.rules_agent(question)
         return _plain_answer(sc)
-    tools = TOOLS + (agent.TOOLS if sc["poc"] else [])
+    own = {t[0] for t in TOOLS}
+    # the POC tools that this list does not already have (get_incidents / investigate_incident exist in both, and a model
+    # API such as Gemini rejects the whole request when one tool name is declared twice); the general ones are used
+    tools = TOOLS + ([t for t in agent.TOOLS if t[0] not in own] if sc["poc"] else [])
     base = runner_for(sc["key"])
     poc_names = {t[0] for t in agent.TOOLS}
 
     def run(name, args):
-        return agent._safe_tool(name, args) if name in poc_names and name not in {t[0] for t in TOOLS} else base(name, args)
+        return agent._safe_tool(name, args) if name in poc_names and name not in own else base(name, args)
     try:
         out = agent.llm_agent(question, history or [], tools=tools, runner=run, system=_system(sc))
     except Exception as e:                                            # noqa: BLE001

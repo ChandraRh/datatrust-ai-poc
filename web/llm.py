@@ -110,6 +110,13 @@ def describe_error(e: Exception) -> str:
         return "The AI model rejected the API key (check GEMINI_API_KEY / ANTHROPIC_API_KEY in .env)."
     if code and code >= 500:
         return "The AI model's service is having problems right now. Try again shortly."
+    if code == 400:                                    # a bad request: the API says what was wrong, e.g. a duplicate tool
+        try:
+            why = (resp.json().get("error") or {}).get("message") or ""
+        except ValueError:
+            why = ""
+        if why:
+            return f"The AI model refused the request (400: {why[:200]})"
     return f"The AI model did not answer ({type(e).__name__}: {str(e)[:160]})"
 
 
