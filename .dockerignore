@@ -12,3 +12,10 @@ streaming/
 .vscode/
 datatrust-ai/
 node_modules/
+web/tests/
+infra/
+*.pptx
+*.pdf
+docs/
+*.md
+!web/README.md

@@ -1,6 +1,7 @@
 # Deploying the DataTrust AI web app (for the DevOps team)
 
 For Azure-specific resource setup and deployment steps, see the shareable [Azure deployment guide](./AZURE_DEPLOYMENT_GUIDE.md).
+For a one-script deployment to Azure Container Apps, see [infra/README.md](./infra/README.md).
 
 The website and ADLS ETL worker are separate containers/services. The website reads PostgreSQL; the
 worker watches ADLS for complete batches, runs the PySpark ETL, and writes results and run logs to
