@@ -734,6 +734,12 @@ def _investigate_check(s: dict, inc: dict) -> dict:
                  [{"change": "added", "column": c} for c in d.get("added", [])]
     views = _downstream(s["id"], chk) if chk.get("table_name") else []
     root = f"{chk['name']}: {last.get('message') or inc['summary']}"
+    who = who_changed(s["id"], chk, last_pass["run_at"] if last_pass else None) if chk.get("table_name") else None
+    if who:
+        checks.append(who["check"])
+        if who["changes"] and chk["check_type"] == "schema":             # the person behind a schema change is the root cause
+            c = who["changes"][0]
+            root += f" Changed by {c['who'] or 'an unknown login'} at {c['at'][:16]} ({c['action'].lower()} {c['object']})."
     chain = [f"{s['type']} connection {s['name']}" + (f", database {chk['database']}" if chk.get("database") else ""),
              f"{'table ' + chk['schema_name'] + '.' + chk['table_name'] if chk.get('table_name') else 'query'}",
              f"rule: {last.get('expected') or chk['check_type']}", last.get("message") or inc["summary"]]
@@ -751,7 +757,50 @@ def _investigate_check(s: dict, inc: dict) -> dict:
                         {"label": "Last passed", "value": str(last_pass["run_at"])[:16] if last_pass else "never",
                          "sub": "since the rule was added" if not last_pass else "", "tone": None if last_pass else "warn"}]}
     return {"found": True, "incident": inc, "checks": checks, "root_cause": root, "chain": chain, "sample": sample, "impact": impact,
-            "sql": last.get("sql_text"), "check_id": cid}
+            "sql": last.get("sql_text"), "check_id": cid, "changed_by": who}
+
+
+def who_changed(connection_id: int, chk: dict, since=None, now: datetime | None = None) -> dict | None:
+    """Who changed the rule's table, from the database's change log (Schema changes page), since the rule last passed
+    (or the last 30 days when it never has). Gives a ready evidence line too: what was found, or why it can't be known."""
+    from estate import schema_changes, store as estate_store
+    target = f"{chk['schema_name']}.{chk['table_name']}".lower()
+    now = now or datetime.now(timezone.utc)
+    if isinstance(since, str):
+        since = datetime.fromisoformat(since)
+    if since is not None and since.tzinfo is None:
+        since = since.astimezone()                                              # a time without a zone is this server's
+    start = (since - timedelta(hours=1)) if since else now - timedelta(days=30)   # a little before the last pass
+    days = max(1, min(365, (now - start).days + 1))
+    src = "Schema changes (the database's change log)"
+    try:
+        database = chk.get("database") or estate_store.get_connection(connection_id).get("database") or ""
+        d = schema_changes.schema_changes(connection_id, database, days, False, target, None, now=now)
+    except Exception as e:                                                      # noqa: BLE001  evidence, never a failure
+        return {"changes": [], "tracking": None, "check": {"ok": None, "text": f"Who changed {target} could not be read: {str(e)[:120]}", "source": src}}
+    if d.get("unreachable"):
+        return {"changes": [], "tracking": None, "check": {"ok": None, "text": f"Who changed {target} could not be read: the database is not reachable.", "source": src}}
+    if not d.get("tracking"):
+        return {"changes": [], "tracking": False, "check": {"ok": None, "text": f"Who changed {target} is unknown: change tracking is off for this database "
+                                                        "(turn it on under Data estate → Connections).", "source": src}}
+
+    acts_on = [f"alter table {target}", f"alter table if exists {target}", f"alter table only {target}", f"drop table {target}",
+               f"drop table if exists {target}", f"truncate {target}", f"truncate table {target}", f" on {target}"]
+
+    def about(r):
+        """A change to the table itself (or one of its columns, indexes or triggers). A view that only reads the table is not one."""
+        obj, sql = r["object"].lower(), " ".join((r["sql"] or "").lower().replace('"', "").split())
+        return obj == target or obj.startswith(target + ".") or any(a in sql for a in acts_on)
+    rows = [r for r in d["rows"] if about(r) and schema_changes._when(r["at"]) >= start]
+    changes = [{k: r[k] for k in ("at", "who", "action", "object", "app", "sql", "times")} for r in rows[:5]]
+    window = f"since the rule last passed ({since.isoformat(sep=' ', timespec='minutes')[:16]})" if since else "in the last 30 days"
+    if changes:
+        c = changes[0]
+        more = f", and {len(rows) - 1} more change(s)" if len(rows) > 1 else ""
+        check = {"ok": True, "text": f"{c['who'] or 'An unknown login'} changed {target} at {c['at'][:16]}: {c['action'].lower()}{more}.", "source": src}
+    else:
+        check = {"ok": True, "text": f"Nobody changed the structure of {target} {window}.", "source": src}
+    return {"changes": changes, "tracking": True, "window": window, "check": check}
 
 
 def _downstream(connection_id: int, chk: dict) -> list:

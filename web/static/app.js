@@ -805,6 +805,7 @@ async function renderInvestigate(id) {
       </div>
     </div>
     ${adfErrorCard(inv)}
+    ${whoChangedCard(inv)}
     <div class="grid g-2">
       <div class="card">
         <div class="investigation-section-head"><div><h3>Evidence checks</h3><p class="small muted">Each check includes the data source used.</p></div>
@@ -1144,6 +1145,23 @@ async function renderResolvedHistory() {
   $("rhVer").onchange = () => apply(read());
   $("rhQ").onkeydown = (e) => { if (e.key === "Enter") apply(read()); };
   $("rhClear").onclick = () => apply({ ...RH_EMPTY, all: rh.f.all, date_from: isoDaysAgo(30) });
+}
+
+// A rule incident on a table: who changed that table's structure since the rule last passed (Schema changes log)
+function whoChangedCard(inv) {
+  const w = inv.changed_by;
+  if (!w || !(w.changes || []).length) return "";
+  const tone = (a) => (/^(Dropped|Emptied)/.test(a) ? "bad" : /^(Changed|Renamed)/.test(a) ? "warn" : "ok");
+  return `<div class="card who-card"><div class="draft-head"><h3 style="margin:0">Who changed it</h3>
+      <span class="small muted">${esc(w.window || "")}</span><span class="grow"></span>
+      <a class="small" href="#estate-activity">All schema changes →</a></div>
+    <div class="tablewrap"><table><thead><tr><th>When</th><th>Who</th><th>What</th><th>Object</th><th>From</th><th></th></tr></thead><tbody>
+    ${w.changes.map((c) => `<tr><td class="small" style="white-space:nowrap">${esc(String(c.at).slice(0, 16))}${c.times > 1 ? `<div class="muted">×${c.times}</div>` : ""}</td>
+      <td><b>${esc(c.who || "unknown")}</b></td><td><span class="chip ${tone(c.action)}">${esc(c.action)}</span></td><td><code>${esc(c.object)}</code></td>
+      <td class="small muted">${esc(c.app || "–")}</td>
+      <td>${c.sql ? `<details class="sc-sql"><summary class="small">statement</summary><pre class="code small">${esc(c.sql)}</pre></details>` : ""}</td></tr>`).join("")}
+    </tbody></table></div>
+    <p class="small muted">From the database's change log. Contact the person before changing the rule or accepting the new schema.</p></div>`;
 }
 
 // An ADF error no rule recognised, in plain words (ai.explain_adf_error); the original message stays one click away
