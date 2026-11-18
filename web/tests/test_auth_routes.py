@@ -172,7 +172,7 @@ class AuthRouteTests(unittest.TestCase):
 
     def test_landing_stays_public_while_dashboard_and_estate_api_require_sign_in(self):
         # importing the server must not start its background loops in a test (no Google Chat posts, no syncs, no checks)
-        with patch.dict(os.environ, {"ALERTS_ENABLED": "false", "ADF_COLLECTOR_IN_WEB": "false", "CHECKS_IN_WEB": "false"}):
+        with patch.dict(os.environ, {"ALERTS_ENABLED": "false", "ADF_COLLECTOR_IN_WEB": "false", "CHECKS_IN_WEB": "false", "RETENTION_IN_WEB": "false"}):
             import server
 
         with patch.object(server.estate_store, "auth_enabled", return_value=True), \
@@ -191,7 +191,7 @@ class AuthRouteTests(unittest.TestCase):
         self.assertEqual(estate_connections.status_code, 401)
 
     def test_signed_in_user_gets_the_dashboard(self):
-        with patch.dict(os.environ, {"ALERTS_ENABLED": "false", "ADF_COLLECTOR_IN_WEB": "false", "CHECKS_IN_WEB": "false"}):
+        with patch.dict(os.environ, {"ALERTS_ENABLED": "false", "ADF_COLLECTOR_IN_WEB": "false", "CHECKS_IN_WEB": "false", "RETENTION_IN_WEB": "false"}):
             import server
 
         with patch.object(server.estate_store, "auth_enabled", return_value=True), \

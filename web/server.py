@@ -128,6 +128,13 @@ try:                                                    # Data checks on any con
 except Exception as e:
     print(f"!! Data checks not ready: {e}")
 
+try:                                                    # retention: remove DataTrust's own run history older than RETENTION_DAYS
+    import retention
+    if retention.start_background():
+        print(f"Retention: on (keeps {retention.days()} days of results and ADF run history; audit trail kept forever)")
+except Exception as e:
+    print(f"!! Retention not started: {e}")
+
 try:                                                    # Google Chat alerts (only when GOOGLE_CHAT_WEBHOOK_URL is set)
     import alerts
     if alerts.start_background():

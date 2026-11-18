@@ -64,7 +64,7 @@ class ResolvedHistoryTests(unittest.TestCase):
 class RoutesTests(unittest.TestCase):
     def test_json_and_csv(self):
         # importing the server must not start its background loops in a test (no Google Chat posts, no syncs, no checks)
-        with patch.dict("os.environ", {"ALERTS_ENABLED": "false", "ADF_COLLECTOR_IN_WEB": "false", "CHECKS_IN_WEB": "false"}):
+        with patch.dict("os.environ", {"ALERTS_ENABLED": "false", "ADF_COLLECTOR_IN_WEB": "false", "CHECKS_IN_WEB": "false", "RETENTION_IN_WEB": "false"}):
             import server
         c = TestClient(server.app)
         data = {"rows": [{"incident_id": "RECON-2026-10-08", "title": "Revenue gap", "severity": "HIGH", "source": "DataTrust POC",
