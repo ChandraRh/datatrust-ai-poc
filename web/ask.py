@@ -30,6 +30,11 @@ TOOLS = [
      {**S, "schema": {"type": "string"}, "table": {"type": "string"}}, ["schema", "table"]),
     ("query_source", "Run ONE read-only SELECT on a database source (at most 200 rows). Use fully qualified table names.",
      {**S, "sql": {"type": "string"}}, ["sql"]),
+    ("get_schema_changes", "Who created, changed or dropped which table or view of a database source, when and with which statement "
+                           "(needs change tracking). Filter by table name, person, and the last N days.",
+     {**S, "table": {"type": "string"}, "person": {"type": "string"}, "days": {"type": "integer"}}, []),
+    ("get_access", "Who has access to a database source: each login and role, the schemas it can read and change, and risks "
+                   "(superuser, can change gold, password never expires, rights granted to everyone / PUBLIC). Read-only.", S, []),
 ]
 
 
@@ -96,6 +101,23 @@ def _run(name: str, a: dict, selected: str):
         d = dialects.for_type(src.cfg["source_type"])
         rows = engine.query(sc["id"], db, d.limit(dialects.clean_select(a["sql"]), 200), max_rows=200)
         return [{k: engine._plain(v) for k, v in r.items()} for r in rows]
+    if name in ("get_schema_changes", "get_access"):
+        _need(sc, "db")
+        from estate import service
+        db = service.source(sc["id"]).cfg.get("database")
+        if name == "get_schema_changes":
+            from estate import schema_changes
+            d = schema_changes.schema_changes(sc["id"], db, int(a.get("days") or 90), False, a.get("table"), a.get("person"))
+            if d.get("unreachable") or not d.get("tracking"):
+                return {"tracking": d.get("tracking"), "note": d.get("unreachable") or "Change tracking is off for this database: "
+                        "turn it on under Data estate → Connections."}
+            return {"days": d["days"], "counts": d["counts"],
+                    "changes": _trim(d["rows"], ("at", "who", "action", "object", "times", "app"), 40)}
+        from estate import access_review
+        r = access_review.review(sc["id"], db)
+        return {"counts": r.get("counts"), "granted_to_everyone": r.get("public"),
+                "logins_and_roles": _trim(r.get("people"), ("name", "kind", "reads", "writes", "risks", "member_of"), 60),
+                "note": r.get("note")}
     raise ValueError(f"unknown tool {name}")
 
 

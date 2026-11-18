@@ -216,9 +216,10 @@
     document.querySelector('#tabs [data-page="estate-checks-new"]').click();
   }
   const blank = () => ({ name: "", check_type: "freshness", database: "",
-    connection_id: /^db:\d+$/.test(state.scope || "") ? state.scope.slice(3) : "",       // start on the selected source
+    connection_id: scopeConn(),                                   // the selected source (sourcePickers keeps it there)
     schema_name: "", table_name: "", severity: "MEDIUM",
-    schedule_minutes: 60, enabled: true, description: "", config: { left: { label: "source" }, right: { label: "target" }, match: "both" } });
+    schedule_minutes: 60, enabled: true, description: "",
+    config: { left: { label: "source", connection_id: scopeConn() }, right: { label: "target" }, match: "both" } });
 
   async function cached(key, fn) { if (!(key in C.cache)) C.cache[key] = await fn().catch((e) => ({ error: e.message })); return C.cache[key]; }
   const dbsOf = (cid) => cached(`db|${cid}`, () => eapi(`/connections/${cid}/overview`).then((o) => (o.ok ? o.databases.filter((d) => d.can_connect).map((d) => d.name) : { error: o.error })));
@@ -233,16 +234,45 @@
   const inp = (id, label, val, ph, help, type = "text") => `<label class="field"><span>${label}</span><input id="${id}" type="${type}" value="${esc(val ?? "")}" placeholder="${esc(ph || "")}" autocomplete="off">${help ? `<span class="small muted">${help}</span>` : ""}</label>`;
   const area = (id, label, val, ph) => `<label class="field wide"><span>${label}</span><textarea id="${id}" rows="5" spellcheck="false" placeholder="${esc(ph || "")}">${esc(val ?? "")}</textarea></label>`;
 
+  // the database a rule may be on. One source at a time, like every other page: a new rule goes on the source picked at the
+  // top, an edited rule stays on its own database. Only a reconciliation's second query may read another database.
+  const scopeConn = () => (/^db:\d+$/.test(state.scope || "") ? state.scope.slice(3) : "");
+  function lockFor(prefix) {
+    if (prefix === "right") return "";
+    if (C.editing) return String((prefix === "left" ? (C.f.config.left || {}).connection_id : C.f.connection_id) || "");
+    return scopeConn();
+  }
+
   async function sourcePickers(prefix, cid, db, conns, withTable) {
     const sqlConns = conns.filter((x) => ["postgresql", "sqlserver", "snowflake"].includes(x.source_type));
-    const connOpts = `<option value="">Choose…</option>` + sqlConns.map((x) =>
-      `<option value="${x.connection_id}" ${String(cid ?? "") === String(x.connection_id) ? "selected" : ""}>${esc(x.name)}</option>`).join("");
-    let html = sel(`${prefix}Conn`, "Connection", connOpts, "PostgreSQL or SQL Server, from Data estate → Connections");
+    const lock = lockFor(prefix), locked = lock && sqlConns.find((x) => String(x.connection_id) === lock);
+    let html;
+    if (locked) {
+      cid = lock;
+      html = sel(`${prefix}Conn`, "Connection", `<option value="${locked.connection_id}" selected>${esc(locked.name)}</option>`,
+        C.editing ? "A rule stays on its own database." : "The source picked at the top of the page. To add a rule to another database, pick it there.")
+        .replace("<select ", "<select disabled ");
+    } else {
+      const connOpts = `<option value="">Choose…</option>` + sqlConns.map((x) =>
+        `<option value="${x.connection_id}" ${String(cid ?? "") === String(x.connection_id) ? "selected" : ""}>${esc(x.name)}</option>`).join("");
+      html = sel(`${prefix}Conn`, "Connection", connOpts, prefix === "right"
+        ? "Any connected database: totals can be compared across databases" : "PostgreSQL, SQL Server or Snowflake, from Data estate → Connections");
+    }
     if (!cid) return html;
-    const dbs = await dbsOf(cid);
     const def = (sqlConns.find((x) => String(x.connection_id) === String(cid)) || {}).database;
-    html += dbs.error ? `<div class="error-box small">${esc(dbs.error)}</div>` : sel(`${prefix}Db`, "Database", opt(dbs, db || def, "Choose…"));
-    if (!withTable || dbs.error || !(db || def)) return html;
+    // a source is the connection's own database (the POC is datatrust_poc, not every database on its server); the server
+    // refuses another one too (checks/store.own_database). Only the second query of a reconciliation may pick freely.
+    if (prefix !== "right" && def) {
+      if (prefix === "f") C.f.database = def; else C.f.config.left.database = def;
+      html += sel(`${prefix}Db`, "Database", `<option value="${esc(def)}" selected>${esc(def)}</option>`,
+        "This source's own database. Another database on the same server is added as its own connection.").replace("<select ", "<select disabled ");
+      db = def;
+    } else {
+      const dbs = await dbsOf(cid);
+      if (dbs.error) return html + `<div class="error-box small">${esc(dbs.error)}</div>`;
+      html += sel(`${prefix}Db`, "Database", opt(dbs, db || def, "Choose…"));
+    }
+    if (!withTable || !(db || def)) return html;
     const f = C.f, d = db || def;
     const schemas = await schemasOf(cid, d);
     html += sel("fSchema", "Schema", opt(schemas.error ? [] : schemas, f.schema_name, "Choose…"));
@@ -257,6 +287,12 @@
     if (!isAdmin()) return { html: `<div class="card"><p class="muted">Only an admin can add or change checks.</p></div>`, bind() {} };
     const f = (C.f = C.f || blank());
     f.config = f.config || {};
+    const sc = scopeConn();
+    if (!C.editing && sc && String(f.connection_id || "") !== sc) {        // the source was changed at the top since the form opened
+      Object.assign(f, { connection_id: sc, database: "", schema_name: "", table_name: "" });
+      f.config.left = { ...(f.config.left || {}), connection_id: sc, database: "" };
+      C.suggest = null; C.words = null; C.preview = null;
+    }
     const conns = await eapi("/connections").catch(() => []);
     const t = f.check_type, c = f.config;
     let specific = "";

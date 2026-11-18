@@ -51,7 +51,7 @@
           <div class="mcol"><h4>Data estate</h4><ul>
             <li><a href="/app#estate-connections"><b>Connections</b><span>Connect and test your databases</span></a></li>
             <li><a href="/app#estate-catalog"><b>Catalog</b><span>Schemas, tables and columns</span></a></li>
-            <li><a href="/app#estate-activity"><b>Changes &amp; failures</b><span>What changed and what failed</span></a></li>
+            <li><a href="/app#estate-activity"><b>Schema changes</b><span>Who changed which table, and when</span></a></li>
             <li><a href="/app#estate-access"><b>Access</b><span>Request and approve access</span></a></li></ul></div>
         </div>
       </div>
@@ -79,7 +79,7 @@
 <!-- HERO -->
 <section class="hero">
   <div class="hero-bg" aria-hidden="true"></div>
-  <div class="wrap hero-grid solo">
+  <div class="wrap hero-grid">
     <div class="hero-text">
       <p class="pill"><span class="pill-dot"></span>Data observability · Data quality · Governance</p>
       <h1>Trusted data for <span class="hl">every decision</span></h1>
@@ -94,6 +94,31 @@
         <li><svg viewBox="0 0 20 20" aria-hidden="true"><path d="m4 10 4 4 8-8"/></svg>Full audit trail</li>
       </ul>
     </div>
+
+    <!-- a fixed example of what the app shows (no live data on this public page) -->
+    <figure class="shot" aria-label="Example: a source scored 74 out of 100, at risk, with the incident behind it and its fix">
+      <div class="shot-bar"><span class="shot-dot" aria-hidden="true"></span><b>Payments warehouse</b><span class="shot-tag">Example</span></div>
+      <div class="shot-body">
+        <div class="ring" aria-hidden="true">
+          <svg viewBox="0 0 120 120"><circle cx="60" cy="60" r="52" class="ring-bg"/><circle cx="60" cy="60" r="52" class="ring-fg"/></svg>
+          <div class="ring-in"><b>74</b><span>/ 100</span></div>
+        </div>
+        <div class="shot-score"><span class="chip bad">At risk</span>
+          <ul class="bars">
+            <li><span>Freshness</span><i style="--v:100%"></i><b>100</b></li>
+            <li><span>Volume</span><i style="--v:90%"></i><b>90</b></li>
+            <li><span>Validity</span><i class="mid" style="--v:60%"></i><b>60</b></li>
+            <li><span>Uniqueness</span><i style="--v:100%"></i><b>100</b></li>
+            <li><span>Reconciliation</span><i class="bad" style="--v:20%"></i><b>20</b></li>
+          </ul></div>
+      </div>
+      <div class="shot-inc"><em class="sev HIGH">HIGH</em>
+        <div><b>Revenue gap on 30 Oct: ₹6,401.15 short</b>
+          <span>9 payments held back by the rule <code>currency required</code>. Each one's currency is on its own order.</span></div></div>
+      <ol class="shot-steps">
+        <li class="done">Detected</li><li class="done">Root cause proven</li><li class="done">Fix approved</li><li class="now">Verified on the next run</li>
+      </ol>
+    </figure>
   </div>
 </section>
 
@@ -102,7 +127,7 @@
   <div class="wrap">
     <p>Works with the data estate you already run</p>
     <ul>
-      <li>PostgreSQL</li><li>SQL Server</li><li>Snowflake</li><li>SAP HANA</li><li>Azure Data Factory</li>
+      <li>PostgreSQL</li><li>SQL Server</li><li>Snowflake</li><li>Azure Data Factory</li>
       <li>Azure Data Lake</li><li>Apache Spark</li><li>Apache Kafka</li><li>Google Chat</li>
     </ul>
   </div>
@@ -112,7 +137,7 @@
 <section class="wrap stats" aria-label="At a glance">
   <div class="stat rv"><b>7</b><span>quality subjects in one trust score</span></div>
   <div class="stat rv"><b>6</b><span>steps from detection to a verified fix</span></div>
-  <div class="stat rv"><b>4</b><span>database engines, plus Azure Data Factory</span></div>
+  <div class="stat rv"><b>3</b><span>database engines, plus Azure Data Factory</span></div>
   <div class="stat rv"><b>1</b><span>scoring model for every kind of source</span></div>
 </section>
 
@@ -161,6 +186,34 @@
   </div>
 </section>
 
+<!-- WHAT IT CATCHES: fixed examples, the problems planted in the sample data DataTrust is tested on -->
+<section class="sec catches" id="catches">
+  <div class="wrap">
+    <div class="head rv"><p class="eyebrow">What it catches</p><h2>Problems that quietly shrink your numbers</h2>
+      <p class="sub">Each of these passes a normal pipeline run. DataTrust AI finds it, proves the cause and sizes it in money. Examples from the sample data it is tested on.</p></div>
+    <div class="cgrid">
+      <article class="ccard rv"><em class="sev HIGH">HIGH</em><h3>Empty currency</h3>
+        <p>9 payments arrive with no currency and are held back. Revenue is ₹6,401.15 short of what the gateway settled.</p>
+        <span class="cfix">Fix: the currency is taken from each payment's own order, after an admin approves.</span></article>
+      <article class="ccard rv"><em class="sev HIGH">HIGH</em><h3>Typo in a status</h3>
+        <p>3 payments say <code>CAPTRED</code> instead of <code>CAPTURED</code>. They never reach the report, which is ₹3,186.00 short.</p>
+        <span class="cfix">Found by: the status rule, with every held-back row listed.</span></article>
+      <article class="ccard rv"><em class="sev MEDIUM">MEDIUM</em><h3>Negative amounts</h3>
+        <p>4 orders arrive with a sign error and are held back before they distort revenue.</p>
+        <span class="cfix">Fix: the amount actually paid, shown row by row before anything changes.</span></article>
+      <article class="ccard rv"><em class="sev LOW">LOW</em><h3>Duplicate payments</h3>
+        <p>6 payments are sent twice. The copies are removed and settlement still matches.</p>
+        <span class="cfix">Found by: the unique-key rule.</span></article>
+      <article class="ccard rv"><em class="sev CRITICAL">CRITICAL</em><h3>A pipeline that keeps failing</h3>
+        <p>An Azure Data Factory pipeline fails five runs in a row. The Azure error is explained in plain words, with what to do next.</p>
+        <span class="cfix">Found by: the run checks on every factory.</span></article>
+      <article class="ccard rv"><em class="sev MEDIUM">MEDIUM</em><h3>Columns that drifted</h3>
+        <p>A copy succeeds, but the file and the target table no longer have the same columns.</p>
+        <span class="cfix">Found by: the after-run check on source and target.</span></article>
+    </div>
+  </div>
+</section>
+
 <!-- HOW IT WORKS -->
 <section class="sec band" id="how">
   <div class="wrap">
@@ -172,9 +225,9 @@
       <div class="farrow" aria-hidden="true"></div>
       <div class="fnode"><b>Bronze</b><span>Raw, as received</span></div>
       <div class="farrow" aria-hidden="true"></div>
-      <div class="fnode"><b>Silver</b><span>Rules applied</span></div>
+      <div class="fnode bad"><em>9 payments held back</em><b>Silver</b><span>Rules applied</span></div>
       <div class="farrow" aria-hidden="true"></div>
-      <div class="fnode"><b>Gold</b><span>Reports</span></div>
+      <div class="fnode warn"><em>₹6,401.15 short of settlement</em><b>Gold</b><span>Reports</span></div>
       <div class="farrow" aria-hidden="true"></div>
       <div class="fnode ai"><b>DataTrust AI</b><span>Watching every layer</span></div>
     </div>
@@ -221,7 +274,7 @@
 <section class="sec" id="security">
   <div class="wrap">
     <div class="head rv"><p class="eyebrow">Enterprise ready</p><h2>Built for governed data teams</h2>
-      <p class="sub">DataTrust AI observes your systems without taking control of them. Nothing changes on a source without a person approving it.</p></div>
+      <p class="sub">Its checks only read. The changes it can make, a data fix or an access grant, show the exact SQL first and run only after an admin approves.</p></div>
     <div class="sgrid">
       <article class="scard rv"><span class="sic"><svg viewBox="0 0 24 24" aria-hidden="true"><rect x="4" y="10" width="16" height="11" rx="2"/><path d="M8 10V7a4 4 0 0 1 8 0v3"/></svg></span>
         <h3>Secure sign-in</h3><p>Email sign-in with verification, Google sign-in, and sessions held in HTTP-only cookies.</p></article>

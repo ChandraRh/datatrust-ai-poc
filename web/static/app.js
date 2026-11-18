@@ -40,7 +40,8 @@ async function setScope(key) {
   state.version = null;
   if ($("scopePick")) $("scopePick").value = key;
   await checkVersion(true);
-  if (state.page.startsWith("estate-dq-") && window.renderEstate) return renderEstate(state.page);   // these pages follow the source too
+  const follows = ["estate-activity", "estate-connections", "estate-catalog", "estate-access"];   // Data estate pages follow it too
+  if ((state.page.startsWith("estate-dq-") || follows.includes(state.page)) && window.renderEstate) return renderEstate(state.page);
   if (state.page.startsWith("estate-")) toast(`Observe to Verify now show ${($("scopePick").selectedOptions[0] || {}).textContent || key}`);
 }
 
@@ -1235,9 +1236,10 @@ async function renderPipeline() {
 const EXAMPLES = ["What is the total revenue?", "Revenue last 7 days by day", "Revenue this month by payment method",
   "Revenue last month", "Revenue last quarter", "Revenue by region", "Is any data missing from source to target?",
   "Why is 2026-10-27 a mismatch?", "Which rows were rejected?", "What is the trust score?",
-  "Did the last pipeline run succeed?", "Top 5 customers this month", "Show history of customer C00781"];
+  "Did the last pipeline run succeed?", "Top 5 customers this month", "Show history of customer C00781",
+  "Who changed silver.payments?", "Who can change the gold tables?"];
 const EXAMPLES_DB = ["Which data checks are failing, and why?", "What is the worst open incident?", "Which tables are watched?",
-  "What tables are in this database?", "How many rows were loaded today?", "What should I check first?"];
+  "What tables are in this database?", "Who changed a table in the last week?", "Who has access to this database?", "What should I check first?"];
 const EXAMPLES_ADF = ["Did any pipeline fail in the last day, and why?", "Which pipeline is the least reliable?", "How many rows were loaded this week?",
   "Is any pipeline's data stale?", "What does the newest failed run say?", "What should I check first?"];
 async function renderAsk() {
@@ -1335,6 +1337,7 @@ async function openFromLink() {
   try {
   if (m[1] === "estate-adf-runs" && m[2] && window.ADF) { ADF.open(m[2]); btn.click(); }   // #estate-adf-runs=<ADF run ID>
   else if (m[1] === "estate-dq-rejected" && m[2] && window.DQ) DQ.open(m[2]);   // #estate-dq-rejected=2026-10-08
+  else if (m[1] === "estate-ask") go("ask");                     // Estate assistant was folded into Ask DataTrust AI
   else if (m[1] === "estate-history" && m[2] && window.HISTORY) { HISTORY.filter(m[2]); btn.click(); }   // #estate-history=access
   else if (m[1] === "estate-checks" && m[2] && window.CHECKS) { CHECKS.open(m[2]); btn.click(); }        // #estate-checks=<check id>
   else if (m[1] === "estate-checks-new" && m[2] && window.CHECKS) CHECKS.edit(m[2]);                     // #estate-checks-new=<id>: edit

@@ -186,6 +186,21 @@ def changes(cid: int, database: str, object_name: Optional[str] = None, username
             "changes": guard(src.changes, database, object_name or None, username or None)}
 
 
+@router.get("/connections/{cid}/db/{database}/schema-changes")
+def schema_changes(cid: int, database: str, days: int = 30, internal: bool = False, object_name: Optional[str] = None,
+                   username: Optional[str] = None, user: dict = Depends(current_user)):
+    """Schema changes page: who changed which table or view in this source's own database, over the last N days."""
+    from . import schema_changes as sc
+    return guard(sc.schema_changes, cid, database, days, internal, object_name, username)
+
+
+@router.get("/connections/{cid}/db/{database}/access-review")
+def access_review(cid: int, database: str, user: dict = Depends(current_user)):
+    """Access page, "Who has access": read-only review of logins and roles, with risks flagged."""
+    from . import access_review as ar
+    return guard(ar.review, cid, database)
+
+
 @router.get("/connections/{cid}/db/{database}/failures")
 def failures(cid: int, database: str, user: dict = Depends(current_user)):
     return guard(service.source(cid).failures, database)

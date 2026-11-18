@@ -71,9 +71,8 @@
   <div class="nav-group"><div class="nav-title">Data estate</div>
     <button data-page="estate-connections" title="Connections"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 7c0-1.7 3.6-3 8-3s8 1.3 8 3-3.6 3-8 3-8-1.3-8-3z"/><path d="M4 7v10c0 1.7 3.6 3 8 3s8-1.3 8-3V7"/><path d="M4 12c0 1.7 3.6 3 8 3s8-1.3 8-3"/></svg><span class="label">Connections</span></button>
     <button data-page="estate-catalog" title="Catalog"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M3 4h7v7H3zM14 4h7v7h-7zM3 15h7v5H3zM14 15h7v5h-7z"/></svg><span class="label">Catalog</span></button>
-    <button data-page="estate-activity" title="Changes &amp; failures"><svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="8"/><path d="M12 8v4l3 2"/></svg><span class="label">Changes &amp; failures</span></button>
+    <button data-page="estate-activity" title="Schema changes"><svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="8"/><path d="M12 8v4l3 2"/></svg><span class="label">Schema changes</span></button>
     <button data-page="estate-access" title="Access"><svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="9" cy="8" r="3"/><path d="M3 20c0-3.3 2.7-6 6-6s6 2.7 6 6"/><path d="M17 11l2 2 3-4"/></svg><span class="label">Access</span></button>
-    <button data-page="estate-ask" title="Estate assistant"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M21 12a8 8 0 0 1-11.6 7.1L4 20l1.1-4.6A8 8 0 1 1 21 12z"/><path d="M9 11h6"/></svg><span class="label">Estate assistant</span></button>
   </div>
   <div class="nav-group"><div class="nav-title">Collaborate</div>
     <button data-page="estate-people" title="Connect"><svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="9" cy="8" r="3"/><path d="M3 20c0-3.3 2.7-6 6-6 1.3 0 2.5.4 3.5 1.1"/><path d="M15 13h5a1 1 0 0 1 1 1v3a1 1 0 0 1-1 1h-1l-2 2v-2h-2a1 1 0 0 1-1-1v-3a1 1 0 0 1 1-1z"/></svg><span class="label">Connect</span></button>
@@ -198,7 +197,7 @@
   <!-- DATA ESTATE: Connections -->
   <section id="page-estate-connections" class="page hidden">
     <h1>Connections</h1>
-    <p class="sub">Every database or warehouse the portal watches. Browsing is read-only; changes need an admin.</p>
+    <p class="sub">Every database or warehouse the portal watches. Browsing only reads; adding or changing a source needs an admin.</p>
     <div id="body-estate-connections"></div>
   </section>
 
@@ -209,10 +208,10 @@
     <div id="body-estate-catalog"></div>
   </section>
 
-  <!-- DATA ESTATE: Changes &amp; failures -->
+  <!-- DATA ESTATE: Schema changes (estate.js pageActivity) -->
   <section id="page-estate-activity" class="page hidden">
-    <h1>Changes &amp; failures</h1>
-    <p class="sub">Who changed which object, when and from where; what failed.</p>
+    <h1>Schema changes</h1>
+    <p class="sub">Who created, changed or dropped which table or view in this source, when, from where, and the statement itself.</p>
     <div id="body-estate-activity"></div>
   </section>
 

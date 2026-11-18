@@ -90,7 +90,7 @@ def validate(body: dict) -> dict:
         if not str(body.get("connection_id") or "").isdigit():
             raise ValueError("choose the connection to check")
         out["connection_id"] = int(body["connection_id"])
-        out["database"] = (body.get("database") or "").strip() or None
+        out["database"] = own_database(out["connection_id"], body.get("database"))
     if t in TABLE_TYPES:
         for k in ("schema_name", "table_name"):
             v = (body.get(k) or "").strip()
@@ -115,7 +115,22 @@ def validate(body: dict) -> dict:
             if not str(s.get("connection_id") or "").isdigit() or not (s.get("sql") or "").strip():
                 raise ValueError(f"the {side} side needs a connection and a query")
             s["connection_id"] = int(s["connection_id"])
+            if side == "left":                         # the rule's own side; the second query may read any database
+                s["database"] = own_database(s["connection_id"], s.get("database")) or ""
     return out
+
+
+def own_database(connection_id: int, database) -> str | None:
+    """A rule belongs to one source, and a source is a connection's own database (the POC is datatrust_poc, not every
+    database on its server). Another database on the same server is refused: add it as its own connection, so it gets
+    its own trust score. A connection saved without a database (some SQL Server logins) accepts any."""
+    from estate import store as estate_store
+    own = (estate_store.get_connection(connection_id).get("database") or "").strip()
+    asked = (database or "").strip()
+    if own and asked and asked.lower() != own.lower():
+        raise ValueError(f"This source is the database {own}, so its rules check {own}. To watch {asked}, add it as its own "
+                         "connection under Data estate → Connections and pick it at the top of the page.")
+    return asked or own or None
 
 
 # ============================================================================ definitions

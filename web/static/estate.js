@@ -65,31 +65,31 @@ function loginForm(el, page) {
   field("estP").onkeydown = (event) => { if (event.key === "Enter") submit(); };
 }
 
-// ------------------------------------------------------------------ connection / database picker (top of every estate page)
+// ------------------------------------------------------------------ the source of every estate page
+// One source at a time, like every other page: Connections (details), Catalog and Access show the source picked at the
+// top, and its own database (the POC is datatrust_poc, not every database on its server). No second picker here.
+function scopeConnId() { const m = /^db:(\d+)$/.exec(state.scope || ""); return m ? Number(m[1]) : null; }
 async function contextBar(page) {
   if (!est.connections.length) est.connections = await eapi("/connections");
-  if (!est.conn && est.connections.length) est.conn = est.connections[0].connection_id;
+  const conn = est.connections.find((c) => c.connection_id === scopeConnId());
+  if (!conn) { est.conn = null; est.overview = null; return { none: true, html: "" }; }
+  if (est.conn !== conn.connection_id) { est.conn = conn.connection_id; est.overview = null; est.catalog = {}; est.privileges = null; }
   // re-read the source every 30 s (and on "Refresh"), so databases created in SSMS / pgAdmin show up without a restart
-  if (!est.overview || est.overview.cid !== est.conn || Date.now() - (est.overviewAt || 0) > 30000) {
+  if (!est.overview || Date.now() - (est.overviewAt || 0) > 30000) {
     est.overview = { cid: est.conn, ...(await eapi(`/connections/${est.conn}/overview`)) };
     est.overviewAt = Date.now();
-    const own = est.connections.find((c) => c.connection_id === est.conn);
-    est.db = (est.overview.databases || []).some((d) => d.name === est.db) ? est.db : own ? own.database : null;
-    est.catalog = {};
   }
-  const conns = est.connections.map((c) => `<option value="${c.connection_id}" ${c.connection_id === est.conn ? "selected" : ""}>${esc(c.name)}</option>`).join("");
-  const dbs = (est.overview.databases || []).filter((d) => d.can_connect).map((d) => `<option ${d.name === est.db ? "selected" : ""}>${esc(d.name)}</option>`).join("");
-  return `<div class="ctx"><label>Source <select id="ctxConn_${page}">${conns}</select></label>
-          <label>Database <select id="ctxDb_${page}">${dbs}</select></label>
-          ${est.overview.ok ? `<span class="chip ok">connected</span>` : `<span class="chip bad">not reachable</span>`}
-          <button class="btn light btn-sm" id="ctxRefresh_${page}" title="Read the database list again">↻ Refresh</button></div>`;
+  const usable = (est.overview.databases || []).filter((d) => d.can_connect).map((d) => d.name);
+  const db = conn.database || usable[0] || null;                  // a login saved without a database: its first one
+  if (db !== est.db) { est.db = db; est.catalog = {}; }
+  return { none: false, html: `<div class="ctx"><span><b>${esc(conn.name)}</b>${est.db ? ` · database <code>${esc(est.db)}</code>` : ""}
+      <span class="small muted">· the source picked at the top of the page</span></span>
+      ${est.overview.ok ? `<span class="chip ok">connected</span>` : `<span class="chip bad">not reachable</span>`}
+      <button class="btn light btn-sm" id="ctxRefresh_${page}" title="Read this source again">↻ Refresh</button></div>` };
 }
 function bindContext(page) {
-  const c = $e("ctxConn_" + page), d = $e("ctxDb_" + page);
-  if (c) c.onchange = () => { est.conn = Number(c.value); est.overview = null; renderEstate(page); };
-  if (d) d.onchange = () => { est.db = d.value; est.catalog = {}; renderEstate(page); };
   const r = $e("ctxRefresh_" + page);
-  if (r) r.onclick = () => { est.overview = null; renderEstate(page); };
+  if (r) r.onclick = () => { est.overview = null; est.connections = []; renderEstate(page); };
 }
 
 // ------------------------------------------------------------------ router
@@ -103,6 +103,7 @@ async function renderEstate(page) {
       if (!est.user) return loginForm(el, page);
     }
     el.innerHTML = "<p class='muted'>Loading…</p>";
+    if (page === "estate-activity") { const body = await pageActivity(); el.innerHTML = body.html; body.bind(); return; }
     if (page === "estate-people" || page === "estate-history" || page.startsWith("estate-dq-") || page.startsWith("estate-adf-") || page.startsWith("estate-checks")) {   // no source to pick
       const body = await (page === "estate-people" ? window.Connect.page() : page === "estate-history" ? window.HISTORY.page()
         : page.startsWith("estate-adf-") ? window.ADF.page(page)
@@ -111,15 +112,20 @@ async function renderEstate(page) {
       body.bind();
       return;
     }
-    const bar = await contextBar(page);
-    if (est.overview.limited && page !== "estate-connections") {
+    const ctx = await contextBar(page), bar = ctx.html;
+    if (ctx.none && page !== "estate-connections") {
+      el.innerHTML = `<div class="card"><h3>Pick a database at the top</h3><p class="muted">${page === "estate-catalog" ? "The catalog" : "Access"} shows one database source at a time:
+        the one picked in <b>Source</b> at the top of the page. ${scopeConnId() ? "That source is not a connection any more." : "A Data Factory has no catalog or logins of its own here; see <a href=\"#estate-adf-overview\">ADF pipelines</a>."}</p></div>`;
+      return;
+    }
+    if (!ctx.none && est.overview.limited && page !== "estate-connections") {
       el.innerHTML = bar + `<div class="card"><h3>${esc(est.overview.label)} source</h3>
         <p>This source is ${est.overview.ok ? "connected" : "added but not reachable"}. Browsing its catalog, changes and access arrives with the
         ${esc(est.overview.label)} connector, the next build step. PostgreSQL sources can be browsed today.</p></div>`;
       bindContext(page);
       return;
     }
-    const body = await ({ "estate-connections": pageConnections, "estate-catalog": pageCatalog, "estate-activity": pageActivity,
+    const body = await ({ "estate-connections": pageConnections, "estate-catalog": pageCatalog,
       "estate-access": pageAccess, "estate-ask": pageAsk })[page]();
     el.innerHTML = bar + body.html;
     bindContext(page);
@@ -140,7 +146,7 @@ async function pageConnections() {
   const o = est.overview, admin = est.user.role === "admin";
   if (!est.types) est.types = await eapi("/source-types");
   const typeLabel = (t) => (est.types[t] ? est.types[t].label : t);
-  const rows = (o.databases || []).map((d) => `<tr><td>${esc(d.name)}</td><td>${esc(d.owner)}</td><td class="num">${fmtBytes(d.size_bytes)}</td>
+  const rows = ((o && o.databases) || []).map((d) => `<tr><td>${esc(d.name)}</td><td>${esc(d.owner)}</td><td class="num">${fmtBytes(d.size_bytes)}</td>
       <td>${d.can_connect ? "yes" : "no"}</td>
       <td>${d.tracking ? `<span class="chip ok">tracking on</span>` : d.tracking === false ? (admin ? `<button class="btn light btn-sm" data-track="${esc(d.name)}">Enable tracking</button>` : `<span class="chip grey">off</span>`) : ""}</td></tr>`).join("");
   const list = est.connections.map((c) => `<tr><td>${esc(c.name)}</td><td><span class="chip grey">${esc(typeLabel(c.source_type))}</span></td>
@@ -148,7 +154,8 @@ async function pageConnections() {
       <td title="Hidden">••••••••</td><td>${esc(c.created_by || "")}</td>
       <td class="nowrap">${admin ? `<button class="btn light btn-sm" data-edit="${c.connection_id}">Edit</button>` : ""}
         ${admin && est.connections.length > 1 ? `<button class="btn light btn-sm" data-del="${c.connection_id}">Remove</button>` : ""}</td></tr>`).join("");
-  const thisSource = o.limited
+  const thisSource = !o ? `<p class="muted">Pick a database in <b>Source</b> at the top to see its databases and turn on change tracking.</p>`
+    : o.limited
     ? `<p>${o.ok ? `<span class="chip ok">connected</span> ${esc(o.version || "")}<br><span class="small muted">as <b>${esc(o.login_user || "")}</b></span>` : `<span class="bad">${esc(o.error)}</span>`}</p>
        <p class="small muted">Browsing ${esc(o.label)} (catalog, changes, access) arrives with its connector, the next build step.</p>`
     : `${o.ok ? `<p>${esc(o.version)}<br><span class="small muted">connected as <b>${esc(o.login_user)}</b></span></p>` : `<p class="bad">${esc(o.error)}</p>`}
@@ -157,7 +164,7 @@ async function pageConnections() {
   return {
     html: `<div class="card"><h3>Connected sources</h3><div class="tablewrap"><table><thead><tr><th>Name</th><th>Type</th><th>Login</th><th>Password</th><th>Added by</th><th></th></tr></thead><tbody>${list}</tbody></table></div>
         ${admin ? `<button class="btn" id="wzOpen" style="margin-top:14px">+ Add a source</button>` : ""}</div>
-      <div class="card"><h3>This source</h3>${thisSource}</div>
+      <div class="card"><h3>${o ? esc((est.connections.find((c) => c.connection_id === est.conn) || {}).name || "This source") : "This source"}</h3>${thisSource}</div>
       ${admin ? `<div class="card hidden" id="wizard"></div>` : ""}`,
     bind() {
       document.querySelectorAll("[data-track]").forEach((b) => (b.onclick = async () => {
@@ -268,8 +275,8 @@ function wizardStep2(type, existing = null) {
       try {
         const r = await eapi(`/connections/${existing.connection_id}`, { method: "PUT", body: JSON.stringify(body) });
         toast(`${body.name} saved` + (r.overview.ok ? "" : " (not reachable yet)"));
-        if (typeof initScopes === "function") initScopes();          // the Source picker at the top shows the new name
-        est.connections = []; est.conn = existing.connection_id; est.overview = null;
+        est.connections = []; est.overview = null;
+        if (typeof initScopes === "function") await initScopes();    // the Source picker at the top shows the new name
         renderEstate("estate-connections");
       } catch (e) { $e("wzResult").innerHTML = `<div class="error-box">${esc(e.message)}</div>`; }
       return;
@@ -278,8 +285,9 @@ function wizardStep2(type, existing = null) {
       const r = await post("/connections", body);
       w.querySelector(".steps").outerHTML = wizardSteps(4);
       toast(`${t.label} source saved` + (r.overview.ok ? "" : " (not reachable yet)"));
-      if (typeof initScopes === "function") initScopes();            // and appears in the Source picker at the top
-      est.connections = []; est.conn = r.connection_id; est.overview = null;
+      est.connections = []; est.overview = null;
+      if (typeof initScopes === "function") await initScopes();      // and appears in the Source picker at the top
+      if (typeof setScope === "function" && (state.scopes || []).some((x) => x.key === `db:${r.connection_id}`)) await setScope(`db:${r.connection_id}`);
       renderEstate("estate-connections");
     } catch (e) { $e("wzResult").innerHTML = `<div class="error-box">${esc(e.message)}</div>`; }
   };
@@ -360,32 +368,73 @@ async function showObject(schema, name, type) {
 }
 
 // ------------------------------------------------------------------ 3. changes & failures
+// Schema changes: who created, changed or dropped which table or view in the source picked at the top, and how.
+// DataTrust's own housekeeping is hidden unless asked for; repeats in the same minute are one row (estate/schema_changes.py).
+const act = { days: 30, internal: false, q: "", user: "" };
+const ACT_DAYS = [[7, "7 days"], [30, "30 days"], [90, "90 days"], [365, "a year"]];
 async function pageActivity() {
-  const base = `/connections/${est.conn}/db/${encodeURIComponent(est.db)}`;
-  const [ch, f] = await Promise.all([eapi(base + "/changes"), eapi(base + "/failures")]);
-  const h = f.health || {};
+  const scope = (/^db:(\d+)$/.exec(state.scope || "") || [])[1];
+  const none = (msg) => ({ html: `<div class="card"><h3>Schema changes</h3><p class="muted">${msg}</p></div>`, bind() {} });
+  if (!scope) return none(`Schema changes are recorded for databases. Pick a database at the top of the page.
+    For a Data Factory, see <a href="#estate-adf-runs">ADF runs</a>: each run lists its steps and what changed in the target.`);
+  const conn = (await eapi("/connections")).find((c) => String(c.connection_id) === scope);
+  if (!conn) return none("This source is not a connection any more. Pick another source at the top.");
+  if (!conn.database) return none(`<b>${esc(conn.name)}</b> has no database of its own set. Edit it under <a href="#estate-connections">Connections</a> and choose one.`);
+  const p = new URLSearchParams({ days: act.days, internal: act.internal });
+  if (act.q) p.set("object_name", act.q);
+  if (act.user) p.set("username", act.user);
+  const d = await eapi(`/connections/${scope}/db/${encodeURIComponent(conn.database)}/schema-changes?${p}`);
+  const where = `<b>${esc(d.source)}</b> · database <code>${esc(d.database)}</code>`;
+  if (d.unreachable) {
+    return { html: `<div class="card"><h3>Can't reach this source</h3><p>DataTrust could not connect to ${where}, so its schema changes can't be read right now.
+      Check that the server is running and reachable, then <button class="btn light btn-sm" id="scRetry">Try again</button></p>
+      <details class="small"><summary>The error</summary><pre class="code small">${esc(d.unreachable)}</pre></details></div>`,
+      bind() { $e("scRetry").onclick = () => renderEstate("estate-activity"); } };
+  }
+  if (!d.tracking) {
+    return { html: `<div class="card"><h3>Change tracking is off</h3><p>${where} does not record schema changes yet.
+      ${est.user && est.user.role === "admin" ? `Turn it on under <a href="#estate-connections">Connections</a> (<b>Enable tracking</b> next to the database).`
+        : "An admin can turn it on under Connections."}</p>
+      <p class="small muted">Tracking adds a small log (schema <code>dt_audit</code>) and a trigger to that database. From then on every CREATE, ALTER and DROP
+        is recorded with who, when, from which application and the statement itself.</p></div>`, bind() {} };
+  }
+  const c = d.counts || {};
+  const kpi = (cls, l, v, sub) => `<div class="kpi ${cls}"><div class="l">${l}</div><div class="v">${num(v)}</div><div class="small muted">${sub}</div></div>`;
+  const when = (t) => `<span style="white-space:nowrap">${esc(String(t).slice(0, 16))}</span>`;
+  const rows = d.rows.map((r, i) => `<tr>
+      <td class="small">${when(r.at)}${r.times > 1 ? `<div class="muted">×${r.times} in that minute</div>` : ""}</td>
+      <td>${esc(r.who || "–")}</td>
+      <td><span class="chip ${r.tone}">${esc(r.action)}</span>${r.datatrust ? ` <span class="chip grey" title="DataTrust's own tables">DataTrust</span>` : ""}</td>
+      <td><code>${esc(r.object)}</code></td>
+      <td class="small muted">${esc(r.app || (r.client && !/^(::1|127\.0\.0\.1)/.test(r.client) ? r.client : "this server"))}</td>
+      <td>${r.sql ? `<details class="sc-sql"><summary class="small">statement</summary><pre class="code small">${esc(r.sql)}</pre></details>` : ""}</td></tr>`).join("");
   return {
-    html: `<div class="kpis" style="grid-template-columns:repeat(4,1fr)">
-        <div class="kpi"><div class="l">Changes logged</div><div class="v">${ch.tracking ? num(ch.changes.length) : "off"}</div></div>
-        <div class="kpi ${f.pipeline.length ? "bad" : ""}"><div class="l">Pipeline failures</div><div class="v">${num(f.pipeline.length)}</div></div>
-        ${h.rollbacks == null && h.lock_timeouts != null
-          ? `<div class="kpi ${h.lock_timeouts ? "warn" : ""}"><div class="l">Lock timeouts</div><div class="v">${num(h.lock_timeouts)}</div></div>`
-          : `<div class="kpi"><div class="l">Rollbacks</div><div class="v">${num(h.rollbacks)}</div></div>`}
-        <div class="kpi ${h.deadlocks ? "bad" : ""}"><div class="l">Deadlocks</div><div class="v">${num(h.deadlocks)}</div></div></div>
-      <div class="card"><h3>Who changed what</h3>
-        ${ch.tracking ? `<div class="field"><input id="chObj" placeholder="filter: object, e.g. silver.payments"><input id="chUser" placeholder="filter: user"><button class="btn light" id="chGo">Filter</button></div>
-        <div id="chTable">${objTable(ch.changes, ["event_time", "username", "command_tag", "object_type", "object_identity", "client_addr", "application"]) || "<p class='muted'>No changes recorded yet.</p>"}</div>`
-        : `<p>Change tracking is off for <b>${esc(est.db)}</b>. An admin can enable it on the <b>Connections</b> page.</p>`}</div>
-      <div class="card"><h3>What failed</h3>${objTable(f.pipeline) || "<p class='muted'>No failures recorded in this database.</p>"}
-        <p class="small muted">Source: ${f.note ? esc(f.note) : "DataTrust pipeline log (audit.error_log) when the database has it, plus PostgreSQL counters"} (counters since ${esc(h.stats_reset || "server start")}).</p></div>
-      ${f.jobs && f.jobs.length ? `<div class="card"><h3>Failed SQL Agent jobs</h3>${objTable(f.jobs)}</div>` : ""}
-      ${f.warnings && f.warnings.length ? `<div class="card"><h3>Data quality warnings</h3>${objTable(f.warnings)}</div>` : ""}`,
+    html: `<div class="card sc-head"><div>${where}<div class="small muted">The source picked at the top of the page.</div></div>
+        <div class="seg" role="tablist">${ACT_DAYS.map(([n, l]) => `<button type="button" data-days="${n}" class="${act.days === n ? "active" : ""}">${l}</button>`).join("")}</div></div>
+      <div class="kpis" style="grid-template-columns:repeat(4,1fr)">
+        ${kpi("", "Changes", c.changes, `in the last ${ACT_DAYS.find(([n]) => n === act.days)[1]}`)}
+        ${kpi("", "Tables and views", c.objects, "changed")}
+        ${kpi(c.dropped ? "bad" : "", "Dropped or emptied", c.dropped, "data may be gone")}
+        ${kpi("", "People", c.people, "made these changes")}</div>
+      <div class="card"><div class="draft-head"><h3 style="margin:0">Who changed what</h3><span class="small muted">newest first</span></div>
+        <div class="rj-filters">
+          <label class="grow">Table or view<input id="scObj" placeholder="e.g. silver.payments" value="${esc(act.q)}"></label>
+          <label>Person<input id="scUser" placeholder="exact login name" value="${esc(act.user)}"></label>
+          <label class="sc-check"><input type="checkbox" id="scInt" ${act.internal ? "checked" : ""}> Show DataTrust's own changes${d.hidden_internal ? ` (${num(d.hidden_internal)} hidden)` : ""}</label>
+          <span class="rj-actions"><button class="btn btn-sm" id="scGo">Show</button><button class="btn light btn-sm" id="scClear">Clear</button></span></div>
+        ${d.truncated ? `<p class="small muted">Only the newest entries of the log were read. Narrow the period or search for a table.</p>` : ""}
+        <div class="tablewrap" style="max-height:620px"><table class="sc-table"><thead><tr><th>When</th><th>Who</th><th>What</th><th>Table or view</th><th>From</th><th></th></tr></thead>
+          <tbody>${rows || `<tr><td colspan="6" class="muted">No schema changes ${act.q || act.user ? "match these filters" : "in this period"}.${!act.internal && d.hidden_internal ? " DataTrust's own housekeeping is hidden." : ""}</td></tr>`}</tbody></table></div>
+        <p class="small muted">DataTrust's own housekeeping (its tables in portal, monitor, app and telemetry, adjusted at every start) is hidden unless you ask for it.
+          A schema change that breaks a rule also appears on <a href="#detect">Detect</a>. Pipeline failures are on <a href="#pipeline">Pipeline log</a> and <a href="#estate-adf-runs">ADF runs</a>.</p></div>
+      ${d.jobs && d.jobs.length ? `<div class="card"><h3>Failed SQL Agent jobs</h3><p class="small muted">Jobs on this SQL Server that failed. No other page shows these.</p>${objTable(d.jobs)}</div>` : ""}`,
     bind() {
-      const g = $e("chGo");
-      if (g) g.onclick = async () => {
-        const r = await eapi(`${base}/changes?object_name=${encodeURIComponent($e("chObj").value)}&username=${encodeURIComponent($e("chUser").value)}`);
-        $e("chTable").innerHTML = objTable(r.changes, ["event_time", "username", "command_tag", "object_type", "object_identity", "client_addr", "application"]) || "<p class='muted'>No match.</p>";
-      };
+      const read = () => { act.q = $e("scObj").value.trim(); act.user = $e("scUser").value.trim(); act.internal = $e("scInt").checked; };
+      const go = () => { read(); renderEstate("estate-activity"); };
+      document.querySelectorAll("[data-days]").forEach((b) => (b.onclick = () => { read(); act.days = Number(b.dataset.days); renderEstate("estate-activity"); }));
+      $e("scGo").onclick = go; $e("scInt").onchange = go;
+      ["scObj", "scUser"].forEach((id) => ($e(id).onkeydown = (e) => { if (e.key === "Enter") go(); }));
+      $e("scClear").onclick = () => { Object.assign(act, { q: "", user: "", internal: false }); renderEstate("estate-activity"); };
     },
   };
 }
@@ -416,7 +465,8 @@ async function pageAccess() {
   const schemaOpts = schemas.map((s) => `<option>${esc(s.name)}</option>`).join("");
   const grantees = (admin ? roles.map((r) => r.name).concat(["PUBLIC"]) : [est.user.username]).map((n) => `<option>${esc(n)}</option>`).join("");
   return {
-    html: `<div class="card ask-access"><h3>Describe what you need <span class="chip grey">no SQL needed</span></h3>
+    html: `<div class="card" id="axReview"><h3>Who has access</h3><p class="small muted">Reading the logins and roles of ${esc(est.db)}…</p></div>
+      <div class="card ask-access"><h3>Describe what you need <span class="chip grey">no SQL needed</span></h3>
         <p class="small muted">Write it in plain words. The portal prepares the request and shows the exact SQL; nothing runs until an admin approves.</p>
         <div class="askform ask-access-form"><input id="aaText" autocomplete="off" placeholder="e.g. Give test_nalyst read access to the gold schema"><button id="aaGo">Prepare request</button></div>
         <div class="sugg">${ASK_EXAMPLES(mssql).map((q) => `<button data-aa="${esc(q)}">${esc(q)}</button>`).join("")}</div>
@@ -458,7 +508,40 @@ async function pageAccess() {
     bind: bindAccess,
   };
 }
+// "Who has access": read-only review of this source's logins and roles, risks first (estate/access_review.py)
+const AX_RISK = { superuser: ["bad", "Superuser", "Can do anything on this server, including dropping tables."],
+  writes_gold: ["bad", "Can change gold", "Can change the gold tables the reports read. Usually only the pipeline should."],
+  no_expiry: ["warn", "Never expires", "A login whose password never expires."] };
+async function loadAccessReview() {
+  const el = $e("axReview");
+  if (!el) return;
+  const conn = est.conn, db = est.db;
+  let d;
+  try { d = await eapi(`/connections/${conn}/db/${encodeURIComponent(db)}/access-review`); }
+  catch (e) { if ($e("axReview")) el.innerHTML = `<h3>Who has access</h3><div class="error-box">${esc(e.message)}</div>`; return; }
+  if (!$e("axReview") || est.conn !== conn || est.db !== db) return;     // the page moved on meanwhile
+  if (!d.available) { el.innerHTML = `<h3>Who has access</h3><p class="muted">${esc(d.note)}</p>`; return; }
+  const c = d.counts, list = (a) => (a.length ? a.map((x) => `<code>${esc(x)}</code>`).join(" ") : `<span class="muted">–</span>`);
+  const kpi = (cls, l, v, sub) => `<div class="kpi ${cls}"><div class="l">${l}</div><div class="v">${num(v)}</div><div class="small muted">${sub}</div></div>`;
+  const rows = d.people.map((p) => `<tr>
+      <td><b>${esc(p.name)}</b><div class="small muted">${esc(p.kind)}${p.member_of.length ? ` · member of ${p.member_of.map(esc).join(", ")}` : ""}</div></td>
+      <td class="small">${list(p.reads)}</td><td class="small">${list(p.writes)}</td>
+      <td>${p.risks.map((k) => `<span class="chip ${AX_RISK[k][0]}" title="${esc(AX_RISK[k][2])}">${AX_RISK[k][1]}</span>`).join(" ") || `<span class="small muted">–</span>`}</td></tr>`).join("");
+  el.innerHTML = `<div class="draft-head"><h3 style="margin:0">Who has access</h3><span class="small muted">${esc(d.database)} · read-only review, nothing is changed</span></div>
+    <div class="kpis" style="grid-template-columns:repeat(4,1fr);margin-top:12px">
+      ${kpi(c.superusers ? "bad" : "", "Superusers", c.superusers, "can do anything")}
+      ${kpi(c.write_gold ? "bad" : "", "Can change gold", c.write_gold, "besides superusers")}
+      ${kpi(c.public_schemas ? "warn" : "", "Open to everyone", c.public_schemas, "schemas granted to PUBLIC")}
+      ${kpi(c.no_expiry ? "warn" : "", "Never expire", c.no_expiry, "logins without an expiry date")}</div>
+    ${d.public.length ? `<div class="banner warn small"><b>Granted to everyone (PUBLIC):</b> every login on this server has these rights.
+      ${d.public.map((x) => `<code>${esc(x.schema)}</code> ${esc(x.privileges.join(", ").toLowerCase())}`).join(" · ")}</div>` : ""}
+    <div class="tablewrap"><table class="ax-table"><thead><tr><th>Login or role</th><th>Can read</th><th>Can change</th><th>Worth a look</th></tr></thead>
+      <tbody>${rows || `<tr><td colspan="4" class="muted">No logins or roles found.</td></tr>`}</tbody></table></div>
+    <p class="small muted">Schemas where the login or role has its own rights (or owns objects); <code>(all)</code> means every schema. Rights that come through a group role
+      show on that group's row. Click a name under <b>Users and roles</b> below for every table.${d.truncated ? " Only the first 60 logins and roles are reviewed." : ""}</p>`;
+}
 function bindAccess() {
+  loadAccessReview();
   const admin = est.user.role === "admin";
   document.querySelectorAll("tr[data-role]").forEach((tr) => (tr.onclick = async () => {
     const a = await eapi(`/connections/${est.conn}/db/${encodeURIComponent(est.db)}/roles/${encodeURIComponent(tr.dataset.role)}/access`);

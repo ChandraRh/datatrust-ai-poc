@@ -552,6 +552,19 @@ tr.clickable { cursor: pointer; } tr.clickable:hover td { background: var(--bran
 .ha-table td { vertical-align: top; }
 .ha-now { margin-top: 4px; }
 .ha-wait { display: flex; align-items: center; gap: 10px; }
+
+/* Access: who has access */
+.ax-table td { vertical-align: top; }
+.ax-table code { display: inline-block; margin: 0 4px 3px 0; }
+
+/* Schema changes */
+.sc-head { display: flex; align-items: center; justify-content: space-between; gap: 16px; flex-wrap: wrap; }
+.sc-table td { vertical-align: top; }
+.sc-table code { word-break: break-all; }
+.sc-sql summary { cursor: pointer; color: var(--brand); white-space: nowrap; }
+.sc-sql pre { max-width: 520px; white-space: pre-wrap; margin: 6px 0 0; }
+.rj-filters label.sc-check { flex-direction: row; align-items: center; gap: 6px; text-transform: none; letter-spacing: 0; font-size: 13px;
+  font-weight: 500; color: var(--ink); align-self: center; }
 .ha-wait .grow { flex: 1; min-width: 0; }
 .rj-bulk { display: inline-flex; gap: 8px; align-items: center; margin-left: auto; padding: 4px 6px 4px 12px; background: var(--brand-50); border-radius: 999px; }
 .rj-table td.cb, .rj-table th.cb { width: 28px; }
