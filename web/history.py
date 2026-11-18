@@ -19,6 +19,12 @@ ACCESS_LABEL = {"GRANT": "Grant", "REVOKE": "Revoke", "CREATE_USER": "Add team m
 # what a status means on this page: decided (approved / rejected / failed) or still waiting
 DECISION = {"PENDING": "pending", "APPLIED": "approved", "APPROVED": "approved", "QUEUED": "approved", "CLOSED": "closed",
             "REJECTED": "rejected", "FAILED": "failed"}
+DECISION_LABEL = {"pending": "Waiting", "approved": "Approved", "rejected": "Rejected", "failed": "Failed", "closed": "Closed"}
+# what happened after the decision, in plain words: the stored status means something different per kind
+OUTCOME = {("access", "APPLIED"): "done in the database", ("access", "FAILED"): "the database refused it",
+           ("reinsert", "APPLIED"): "rows loaded", ("reinsert", "QUEUED"): "rows load on the next pipeline run",
+           ("reinsert", "CLOSED"): "nothing left to do", ("reinsert", "FAILED"): "the rows could not be loaded",
+           ("remediation", "APPLIED"): "the data was fixed", ("remediation", "APPROVED"): "plan approved; people do the steps"}
 LIMIT = 2000                                    # rows read per source; the page filters further
 
 
@@ -67,26 +73,50 @@ def _remediation() -> list:
     import appdb
     if not appdb.table_exists("app.remediation_log"):
         return []
-    rows = appdb.rows("""SELECT remediation_id, incident_id, incident_title, actions, approved_by, note, status, approved_at
-                         FROM app.remediation_log ORDER BY remediation_id DESC LIMIT %s""", (LIMIT,))
+    state = appdb.table_exists("app.incident_state")
+    rows = appdb.rows(f"""SELECT l.remediation_id, l.incident_id, l.incident_title, l.actions, l.approved_by, l.note, l.status,
+                                 l.approved_at, {"s.incident_id AS tracked, s.resolved_at, s.resolution" if state else "NULL AS tracked, NULL AS resolved_at, NULL AS resolution"}
+                          FROM app.remediation_log l
+                          {"LEFT JOIN app.incident_state s ON s.incident_id = l.incident_id" if state else ""}
+                          ORDER BY l.remediation_id DESC LIMIT %s""", (LIMIT,))
     # an approved fix has no separate request: the admin who approved it is also who asked for it
     return [{"kind": "remediation", "ref": r["incident_id"], "what": r["incident_title"] or r["incident_id"],
              "detail": " · ".join(x for x in (r["actions"], r["note"]) if x),
              "status": r["status"] or "APPROVED", "requested_by": r["approved_by"], "requested_at": _ts(r["approved_at"]),
-             "decided_by": r["approved_by"], "decided_at": _ts(r["approved_at"]), "link": "verify"} for r in rows]
+             "decided_by": r["approved_by"], "decided_at": _ts(r["approved_at"]), "link": "verify",
+             "result": _result(r["tracked"], r["resolved_at"], r["resolution"])} for r in rows]
+
+
+def _result(tracked, resolved_at, reason) -> dict:
+    """What became of the incident after the fix was approved: still open, or resolved and why (web/resolution.py)."""
+    if not tracked:                                  # approved before DataTrust kept incident life cycles
+        return {"state": "unknown", "label": "Not tracked"}
+    if not resolved_at:
+        return {"state": "open", "label": "Still open"}
+    if reason == "superseded":                       # the same failure continues in a newer run, under a new id
+        return {"state": "open", "label": "Still failing in a newer run"}
+    import resolution
+    name, ok = resolution.label(reason)
+    return {"state": "verified" if ok else "unverified", "label": name, "at": _ts(resolved_at)}
 
 
 def approvals(kind: str = None, decision: str = None, person: str = None, date_from: str = None, date_to: str = None,
               q: str = None) -> dict:
-    """All decisions, newest first. decision: pending / approved / rejected / failed / closed. person matches who asked
-    or who decided. Dates compare with when it was decided (or asked, while pending)."""
-    wanted = [k.strip() for k in (kind or "").split(",") if k.strip()]          # one kind, or several: "access,reinsert"
+    """The decision log: every decision of every kind, newest first, in one shape.
+
+    kind      access / reinsert / remediation, or several "access,reinsert" (the page's tabs); empty = all
+    decision  pending / approved / rejected / failed / closed
+    person    matches who asked or who decided;  dates compare with when it was decided (or asked, while pending)
+
+    Returns the filtered rows, plus what the page shows around them, all read in one pass:
+      totals    summary tiles: everything on record, whatever the filters
+      by_kind   the tab counts: the other filters applied, but not the kind (so each tab says what it would show)
+      waiting   every request still waiting for a decision, whatever the filters"""
+    wanted = [k.strip() for k in (kind or "").split(",") if k.strip()]
     if any(k not in KINDS for k in wanted):
         raise ValueError(f"kind must be one of {', '.join(KINDS)}")
     rows, errors = [], []
     for k, fn in (("access", _access), ("reinsert", _reinsert), ("remediation", _remediation)):
-        if wanted and k not in wanted:
-            continue
         try:
             rows += fn()
         except Exception as e:                                           # noqa: BLE001  one source never hides the others
@@ -94,7 +124,18 @@ def approvals(kind: str = None, decision: str = None, person: str = None, date_f
     for r in rows:
         r["kind_label"] = KINDS[r["kind"]]
         r["decision"] = DECISION.get(r["status"], (r["status"] or "").lower())
+        r["decision_label"] = DECISION_LABEL.get(r["decision"], (r["status"] or "").capitalize())
+        r["outcome"] = OUTCOME.get((r["kind"], r["status"]), "")
+        r["result_label"] = (r.get("result") or {}).get("label", "")     # incident fixes: what became of the incident
         r["at"] = r["decided_at"] or r["requested_at"]
+        # four-eyes check: the same person asked and decided. Incident fixes have no separate request, so never count.
+        asked, decided = (r["requested_by"] or "").strip().lower(), (r["decided_by"] or "").strip().lower()
+        r["self_approved"] = r["kind"] != "remediation" and r["decision"] == "approved" and bool(asked) and asked == decided
+    # totals for the summary tiles: everything read, before the filters below narrow the list
+    totals = {d: sum(r["decision"] == d for r in rows) for d in ("pending", "approved", "rejected", "failed")}
+    totals["self_approved"] = sum(r["self_approved"] for r in rows)
+    totals["pending_by_kind"] = {k: sum(r["decision"] == "pending" and r["kind"] == k for r in rows) for k in KINDS}
+    waiting = sorted((r for r in rows if r["decision"] == "pending"), key=lambda r: r["requested_at"] or "")   # oldest first
     p, needle = (person or "").strip().lower(), (q or "").strip().lower()
     rows = [r for r in rows
             if (not decision or r["decision"] == decision)
@@ -102,15 +143,19 @@ def approvals(kind: str = None, decision: str = None, person: str = None, date_f
             and (not date_from or (r["at"] or "")[:10] >= date_from)
             and (not date_to or (r["at"] or "")[:10] <= date_to)
             and (not needle or needle in " ".join(str(r[k] or "") for k in ("ref", "what", "detail")).lower())]
+    by_kind = {k: sum(r["kind"] == k for r in rows) for k in KINDS}
+    rows = [r for r in rows if not wanted or r["kind"] in wanted]
     rows.sort(key=lambda r: r["at"] or "", reverse=True)
     counts = {d: sum(r["decision"] == d for r in rows) for d in ("pending", "approved", "rejected", "failed")}
-    return {"rows": rows, "counts": counts, "errors": errors}
+    return {"rows": rows, "counts": counts, "totals": totals, "by_kind": by_kind, "waiting": waiting[:50], "errors": errors}
 
 
 def to_csv(rows: list, columns: list) -> str:
+    """columns: (field, header) pairs, so the file has headers people can read."""
     buf = io.StringIO()
     w = csv.writer(buf)
-    w.writerow(columns)
+    w.writerow([label for _, label in columns])
     for r in rows:
-        w.writerow(["" if r.get(c) is None else r.get(c) for c in columns])
+        w.writerow(["" if r.get(c) is None else ("yes" if r.get(c) is True else "" if r.get(c) is False else r.get(c))
+                    for c, _ in columns])
     return buf.getvalue()

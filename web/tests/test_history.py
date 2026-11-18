@@ -49,21 +49,27 @@ class ApprovalsTests(unittest.TestCase):
             self.assertEqual([r["ref"] for r in history.approvals(date_from="2026-11-11", date_to="2026-11-12")["rows"]], ["#3"])
             self.assertEqual([r["ref"] for r in history.approvals(q="currency")["rows"]], ["#3"])
 
-    def test_kind_filter_reads_only_that_source(self):
+    def test_kind_is_a_tab_the_tiles_and_tab_counts_stay_whole(self):
         with sources():
             out = history.approvals(kind="remediation")
-            history._access.assert_not_called()
         self.assertEqual([r["kind"] for r in out["rows"]], ["remediation"])
+        self.assertEqual(out["by_kind"], {"access": 1, "reinsert": 2, "remediation": 1})   # every tab's count
+        self.assertEqual(out["totals"]["approved"], 2)                                     # tiles: all kinds
+        with sources():
+            self.assertEqual(sorted({r["kind"] for r in history.approvals(kind="access,reinsert")["rows"]}), ["access", "reinsert"])
         with self.assertRaises(ValueError):
             history.approvals(kind="nonsense")
 
-    def test_requests_block_reads_access_and_reinsert_but_not_incident_fixes(self):
+    def test_tab_counts_follow_the_other_filters(self):
         with sources():
-            out = history.approvals(kind="access,reinsert")
-            history._remediation.assert_not_called()
-        self.assertEqual(sorted({r["kind"] for r in out["rows"]}), ["access", "reinsert"])
-        with self.assertRaises(ValueError):
-            history.approvals(kind="access,nonsense")
+            out = history.approvals(decision="approved")
+        self.assertEqual(out["by_kind"], {"access": 0, "reinsert": 1, "remediation": 1})
+
+    def test_waiting_lists_every_pending_request_whatever_the_filters(self):
+        with sources():
+            out = history.approvals(kind="remediation", decision="rejected")
+        self.assertEqual([r["ref"] for r in out["waiting"]], ["#4"])
+        self.assertEqual(out["rows"], [])
 
     def test_one_broken_source_does_not_hide_the_others(self):
         def broken():
@@ -73,10 +79,41 @@ class ApprovalsTests(unittest.TestCase):
         self.assertEqual(len(out["rows"]), 3)
         self.assertIn("Access request", out["errors"][0])
 
-    def test_csv_has_a_header_and_one_line_per_row(self):
-        text = history.to_csv(ACCESS, history_routes.APPROVAL_COLUMNS)
-        self.assertEqual(len(text.strip().splitlines()), 2)
-        self.assertTrue(text.startswith("kind_label,ref,what,status"))
+    def test_csv_has_readable_headers_and_one_line_per_row(self):
+        with sources():
+            rows = history.approvals(kind="access")["rows"]
+        text = history.to_csv(rows, history_routes.APPROVAL_COLUMNS)
+        lines = text.strip().splitlines()
+        self.assertEqual(len(lines), 2)
+        self.assertTrue(lines[0].startswith("Type,Reference,What,Decision,Outcome"))
+        self.assertIn("Access request,#7", lines[1])
+        self.assertIn("Rejected", lines[1])
+
+    def test_decision_label_and_outcome_follow_the_kind(self):
+        with sources():
+            rows = {r["ref"]: r for r in history.approvals()["rows"]}
+        self.assertEqual(rows["#3"]["decision_label"], "Approved")
+        self.assertEqual(rows["#3"]["outcome"], "rows loaded")
+        self.assertEqual(rows["#4"]["decision_label"], "Waiting")
+        self.assertEqual(rows["RECON-2026-10-08"]["outcome"], "plan approved; people do the steps")
+
+    def test_self_approval_is_flagged_but_not_for_incident_fixes(self):
+        own = [dict(ACCESS[0], ref="#8", status="APPLIED", requested_by="Admin", decided_by="admin")]
+        with sources(access=own):
+            out = history.approvals()
+        rows = {r["ref"]: r for r in out["rows"]}
+        self.assertTrue(rows["#8"]["self_approved"])
+        self.assertFalse(rows["#3"]["self_approved"])                  # ravi asked, admin decided
+        self.assertFalse(rows["RECON-2026-10-08"]["self_approved"])    # an admin approves fixes directly, by design
+        self.assertEqual(out["totals"]["self_approved"], 1)
+
+    def test_totals_ignore_the_filters(self):
+        with sources():
+            out = history.approvals(decision="rejected", person="priya")
+        self.assertEqual(len(out["rows"]), 1)
+        self.assertEqual(out["totals"]["pending"], 1)
+        self.assertEqual(out["totals"]["approved"], 2)
+        self.assertEqual(out["totals"]["pending_by_kind"], {"access": 0, "reinsert": 1, "remediation": 0})
 
 
 class RouteTests(unittest.TestCase):

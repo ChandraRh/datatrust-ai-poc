@@ -403,6 +403,62 @@ def _resolved(scope_key: str, open_ids: set) -> list:
     return out
 
 
+HISTORY_LIMIT = 2000
+
+
+def resolved_history(scope: str | None = None, all_sources: bool = False, date_from: str | None = None,
+                     date_to: str | None = None, verified: str | None = None, q: str | None = None) -> dict:
+    """Every incident that was resolved, any time (Verify's 7-day list only shows the recent ones): newest first, with the
+    reason it closed. One source, or all sources with the source named on each row. Dates compare with when it went away.
+    verified: "yes" / "no". An incident that came back is open again, so it is not listed here."""
+    if verified not in (None, "", "yes", "no"):
+        raise ValueError("verified must be yes or no")
+    names = {s["key"]: s["name"] for s in list_scopes()}
+    key = None if all_sources else resolve(scope)["key"]
+    rows = []
+    if appdb.table_exists("app.incident_state"):
+        where, args = ["s.resolved_at IS NOT NULL", "s.resolution IS DISTINCT FROM 'superseded'"], []
+        if key:
+            where.append("s.scope = %s"); args.append(key)
+        if date_from:
+            where.append("s.resolved_at >= %s::date"); args.append(date_from)
+        if date_to:
+            where.append("s.resolved_at < %s::date + 1"); args.append(date_to)
+        rows = appdb.rows(f"""SELECT s.incident_id, s.scope, s.title, s.severity, s.first_seen, s.resolved_at, s.resolution,
+                                     s.resolution_detail, s.acknowledged_by, a.approved_by
+                              FROM app.incident_state s
+                              LEFT JOIN LATERAL (SELECT approved_by FROM app.remediation_log l WHERE l.incident_id = s.incident_id
+                                                 ORDER BY approved_at DESC LIMIT 1) a ON true
+                              WHERE {' AND '.join(where)} ORDER BY s.resolved_at DESC LIMIT {HISTORY_LIMIT}""", tuple(args))
+    out, needle = [], (q or "").strip().lower()
+    for r in rows:
+        name, ok = resolution.label(r["resolution"])
+        item = {"incident_id": r["incident_id"], "title": r["title"], "severity": r["severity"],
+                "source": names.get(r["scope"], r["scope"] + " (removed)"), "scope": r["scope"],
+                "first_seen": _iso(r["first_seen"]), "resolved_at": _iso(r["resolved_at"]),
+                "resolution_label": name, "verified": ok,
+                "resolution_detail": r["resolution_detail"] or "Resolved before DataTrust recorded reasons.",
+                "approved_by": r["approved_by"], "acknowledged_by": r["acknowledged_by"]}
+        if verified and ok != (verified == "yes"):
+            continue
+        if needle and needle not in " ".join(str(item[k] or "") for k in ("incident_id", "title", "source", "resolution_label",
+                                                                              "resolution_detail")).lower():
+            continue
+        out.append(item)
+    return {"rows": out, "all_sources": bool(all_sources), "scope": key, "truncated": len(rows) >= HISTORY_LIMIT,
+            "counts": {"verified": sum(r["verified"] for r in out), "not_verified": sum(not r["verified"] for r in out)}}
+
+
+def _iso(v) -> str | None:
+    return v.isoformat(sep=" ", timespec="seconds") if isinstance(v, datetime) else (str(v) if v else None)
+
+
+RESOLVED_COLUMNS = [("resolved_at", "Resolved at"), ("source", "Source"), ("incident_id", "Incident"), ("title", "Title"),
+                    ("severity", "Severity"), ("resolution_label", "Reason it closed"), ("verified", "Verified"),
+                    ("resolution_detail", "Details"), ("first_seen", "First seen"), ("approved_by", "Fix approved by"),
+                    ("acknowledged_by", "Acknowledged by")]
+
+
 def acknowledge(incident_id: str, by: str) -> None:
     with appdb.connect() as conn:
         n = conn.execute("""UPDATE app.incident_state SET acknowledged_by = %s, acknowledged_at = now()

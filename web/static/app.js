@@ -257,7 +257,7 @@ async function render(page, arg) {
   if (page === "investigate") return renderInvestigate(arg);
   if (page === "lineage") return renderLineage();
   if (page === "impact") return renderImpact(arg);
-  if (page === "verify") return renderVerify();
+  if (page === "verify") return renderVerify(arg);                 // #verify=<incident id>: that incident in Resolved incidents
   if (page === "pipeline") return renderPipeline();
   if (page === "ask") return renderAsk();
 }
@@ -1049,7 +1049,8 @@ async function renderAutofix(id) {
 }
 
 // ------------------------------------------------------------------ 6. verify
-async function renderVerify() {
+async function renderVerify(arg) {
+  if (typeof arg === "string" && arg) rh.f = { ...RH_EMPTY, all: "1", q: arg };   // from Audit & approvals: find it anywhere, any date
   const { open, resolved } = state.incidents;
   const t = state.overview.trust, p = state.overview.pipeline;
   const waiting = open.filter((i) => i.approval);
@@ -1074,9 +1075,74 @@ async function renderVerify() {
       </div>
       <div class="card center"><div id="gauge3"></div><div class="gauge-label"><span class="${t.score == null ? "muted" : tone(t.score)}">${esc(t.label)}</span></div>
         <div class="small muted">${esc((state.overview.scope || {}).name || "")} · open incidents ${open.length}${p ? ` · latest run ${esc(p.batch.batch_id || "–")}: ${p.layers.map((l) => l.layer + " " + l.status).join(", ")}` : ""}</div></div>
-    </div>`;
+    </div>
+    <div class="card" id="rhCard"><h3>Resolved incidents</h3><p class="small muted">Loading…</p></div>`;
   gauge("gauge3", t.score);
   bindRecheck($("verifyBody"));
+  await renderResolvedHistory();
+  if (typeof arg === "string" && arg) $("rhCard").scrollIntoView({ block: "start" });
+}
+
+// ------------------------------------------------------------------ 6. verify: Resolved incidents (every resolution on record)
+// The list above shows the last 7 days of the picked source; this one goes back as far as DataTrust has records,
+// for this source or all of them, with the reason each incident closed. Filters stay while you move between pages.
+const isoDaysAgo = (n) => new Date(Date.now() - n * 864e5).toISOString().slice(0, 10);
+const RH_EMPTY = { all: "", date_from: "", date_to: "", verified: "", q: "" };
+const rh = { f: { ...RH_EMPTY, date_from: isoDaysAgo(30) } };
+function rhParams() {
+  const p = new URLSearchParams();
+  if (rh.f.all) p.set("all", "true"); else if (state.scope) p.set("scope", state.scope);
+  ["date_from", "date_to", "verified", "q"].forEach((k) => rh.f[k] && p.set(k, rh.f[k]));
+  return p.toString();
+}
+const openFor = (from, to) => {
+  const ms = from && to ? new Date(String(to).replace(" ", "T")) - new Date(String(from).replace(" ", "T")) : NaN;
+  if (!(ms >= 0)) return "–";
+  const m = Math.round(ms / 60000);
+  return m < 60 ? `${m} min` : m < 2880 ? `${Math.round(m / 60)} h` : `${Math.round(m / 1440)} days`;
+};
+// nothing found: when the search is an incident that is still open (e.g. from Audit & approvals), say so
+function rhEmpty() {
+  const q = (rh.f.q || "").toLowerCase(), open = ((state.incidents || {}).open || []).find((i) => q && String(i.id).toLowerCase() === q);
+  return open ? `<b>${esc(open.id)}</b> has not been resolved: it is still open. <a href="#detect">See it on 2. Detect →</a>`
+    : "No resolved incidents for these filters.";
+}
+async function renderResolvedHistory() {
+  const card = $("rhCard");
+  if (!card) return;
+  let d;
+  try { d = await api("/api/incidents/resolved?" + rhParams()); }
+  catch (e) { card.innerHTML = `<h3>Resolved incidents</h3><div class="error-box">${esc(e.message)}</div>`; return; }
+  const f = rh.f, all = !!f.all, when = (t) => (t ? `<span style="white-space:nowrap">${esc(String(t).slice(0, 16))}</span>` : "–");
+  const srcName = all ? "all sources" : esc((state.overview.scope || {}).name || "this source");
+  const rows = d.rows.map((r) => `<tr>
+      <td class="small">${when(r.resolved_at)}</td>
+      ${all ? `<td class="small">${esc(r.source)}</td>` : ""}
+      <td><span class="sev ${esc(r.severity)}">${esc(r.severity || "")}</span> <b>${esc(r.title || r.incident_id)}</b><div class="small muted">${esc(r.incident_id)}</div></td>
+      <td><span class="chip ${r.verified ? "ok" : "warn"}">${esc(r.resolution_label)}</span><div class="small muted">${esc(r.resolution_detail)}</div></td>
+      <td class="small" style="white-space:nowrap">${openFor(r.first_seen, r.resolved_at)}<div class="muted">from ${when(r.first_seen)}</div></td>
+      <td class="small">${esc(r.approved_by || "–")}</td></tr>`).join("");
+  card.innerHTML = `<div class="draft-head"><h3 style="margin:0">Resolved incidents <span class="chip grey">${num(d.rows.length)}</span></h3>
+      <span class="small muted">${num(d.counts.verified)} verified · ${num(d.counts.not_verified)} not verified</span></div>
+    <p class="small muted">Every incident that went away, for ${srcName}, newest first, with the reason it closed. An incident that came back is open again and is not listed.</p>
+    <div class="rj-filters">
+      <div class="seg" role="tablist"><button type="button" data-rh-all="" class="${all ? "" : "active"}">This source</button><button type="button" data-rh-all="1" class="${all ? "active" : ""}">All sources</button></div>
+      <label>From<input type="date" id="rhFrom" value="${esc(f.date_from)}"></label>
+      <label>To<input type="date" id="rhTo" value="${esc(f.date_to)}"></label>
+      <label>Verified<select id="rhVer"><option value="">Verified or not</option><option value="yes"${f.verified === "yes" ? " selected" : ""}>Verified only</option><option value="no"${f.verified === "no" ? " selected" : ""}>Not verified only</option></select></label>
+      <label class="grow">Search<input id="rhQ" placeholder="incident id, title, reason…" value="${esc(f.q)}"></label>
+      <span class="rj-actions"><button class="btn btn-sm" id="rhApply">Show</button><button class="btn light btn-sm" id="rhClear">Clear</button>
+      <a class="btn light btn-sm" href="/api/incidents/resolved.csv?${rhParams()}" download>⬇ CSV</a></span></div>
+    ${d.truncated ? `<p class="small muted">Showing the newest ${num(d.rows.length)}. Narrow the dates or download the CSV.</p>` : ""}
+    <div class="tablewrap" style="max-height:520px"><table><thead><tr><th>Resolved</th>${all ? "<th>Source</th>" : ""}<th>Incident</th><th>Reason it closed</th><th>Open for</th><th>Fix approved by</th></tr></thead>
+      <tbody>${rows || `<tr><td colspan="${all ? 6 : 5}" class="muted">${rhEmpty()}</td></tr>`}</tbody></table></div>`;
+  const read = () => ({ all: rh.f.all, date_from: $("rhFrom").value, date_to: $("rhTo").value, verified: $("rhVer").value, q: $("rhQ").value.trim() });
+  const apply = (x) => { rh.f = x; renderResolvedHistory(); };
+  card.querySelectorAll("[data-rh-all]").forEach((b) => (b.onclick = () => apply({ ...read(), all: b.dataset.rhAll })));
+  $("rhApply").onclick = () => apply(read());
+  $("rhVer").onchange = () => apply(read());
+  $("rhQ").onkeydown = (e) => { if (e.key === "Enter") apply(read()); };
+  $("rhClear").onclick = () => apply({ ...RH_EMPTY, all: rh.f.all, date_from: isoDaysAgo(30) });
 }
 
 // An ADF error no rule recognised, in plain words (ai.explain_adf_error); the original message stays one click away

@@ -214,6 +214,25 @@ def incidents(scope: Optional[str] = None):
     return _scoped(scopes.incidents, scope)
 
 
+@app.get("/api/incidents/resolved")
+def resolved_incidents(scope: Optional[str] = None, all: bool = False, date_from: Optional[str] = None,
+                       date_to: Optional[str] = None, verified: Optional[str] = None, q: Optional[str] = None):
+    """Verify page, Resolved incidents: every resolution on record (not only the last 7 days), this source or all."""
+    return _scoped(scopes.resolved_history, scope, all, date_from, date_to, verified, q)
+
+
+@app.get("/api/incidents/resolved.csv")
+def resolved_incidents_csv(scope: Optional[str] = None, all: bool = False, date_from: Optional[str] = None,
+                           date_to: Optional[str] = None, verified: Optional[str] = None, q: Optional[str] = None):
+    from datetime import date
+    import history
+    from fastapi.responses import Response
+    rows = [dict(r, verified="yes" if r["verified"] else "no")
+            for r in _scoped(scopes.resolved_history, scope, all, date_from, date_to, verified, q)["rows"]]
+    return Response(history.to_csv(rows, scopes.RESOLVED_COLUMNS), media_type="text/csv",
+                    headers={"Content-Disposition": f'attachment; filename="datatrust-resolved-incidents-{date.today()}.csv"'})
+
+
 @app.get("/api/quality/rows")
 def quality_rows(scope: Optional[str] = None):
     """Rejected records for any source other than the POC: the rows its quality findings point at."""

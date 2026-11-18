@@ -15,7 +15,10 @@ from estate.routes import admin_user, guard
 
 router = APIRouter(prefix="/api/estate/history")
 
-APPROVAL_COLUMNS = ["kind_label", "ref", "what", "status", "requested_by", "requested_at", "decided_by", "decided_at", "detail"]
+APPROVAL_COLUMNS = [("kind_label", "Type"), ("ref", "Reference"), ("what", "What"), ("decision_label", "Decision"),
+                    ("outcome", "Outcome"), ("status", "Status code"), ("requested_by", "Asked by"), ("requested_at", "Asked at"),
+                    ("decided_by", "Decided by"), ("decided_at", "Decided at"), ("self_approved", "Self-approved"), ("result_label", "Incident now"),
+                    ("detail", "Details")]
 
 
 def _csv(text: str, name: str) -> Response:
