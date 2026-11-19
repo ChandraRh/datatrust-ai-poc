@@ -225,34 +225,45 @@ def login(username: str, password: str):
 # ============================================================================ portal users
 def list_users():
     with db() as conn:
-        return conn.execute("SELECT username, role, active, created_by, created_at FROM portal.users ORDER BY username").fetchall()
+        return conn.execute("""SELECT username, role, active, email_verified, google_sub IS NOT NULL AS google,
+                                      created_by, created_at FROM portal.users ORDER BY active DESC, role, username""").fetchall()
 
 
-def save_user(username: str, role: str, password: str, by: str, active: bool = True):
+def save_user(username: str, role: str, password: str | None, by: str, active: bool = True):
+    """Add a portal user, or change one: role, active, and the password only when a new one is given."""
     if role not in ("admin", "viewer"):
-        raise ValueError("role must be admin or viewer")
+        raise ValueError("Role must be admin or viewer.")
     email = username.strip().lower()
-    if "@" not in email or len(email) > 254 or len(password) < 12:
-        raise ValueError("enter a valid email address and a password of at least 12 characters")
+    password = password or ""
+    if "@" not in email or len(email) > 254:
+        raise ValueError("Enter the person's email address.")
+    if password and len(password) < 12:
+        raise ValueError("The password needs at least 12 characters.")
     with db() as conn:
         current = conn.execute("SELECT role, active FROM portal.users WHERE username = %s", (email,)).fetchone()
+        if not current and not password:
+            raise ValueError("A new user needs a password of at least 12 characters.")
         if current and current["role"] == "admin" and (role != "admin" or not active):
             if email == by:
-                raise ValueError("you cannot remove your own admin role; ask another admin")
+                raise ValueError("You cannot remove your own admin role or switch yourself off; ask another admin.")
             others = conn.execute("""SELECT COUNT(*) AS n FROM portal.users
                                      WHERE role = 'admin' AND active AND username <> %s""", (email,)).fetchone()["n"]
             if not others:
-                raise ValueError("the portal needs at least one active admin")
-        conn.execute("""INSERT INTO portal.users
-                        (username, password_hash, role, active, created_by, email, email_verified)
-                        VALUES (%s, %s, %s, %s, %s, %s, %s)
-                        ON CONFLICT (username) DO UPDATE SET password_hash = EXCLUDED.password_hash,
-                               role = EXCLUDED.role, active = EXCLUDED.active,
-                               email = COALESCE(portal.users.email, EXCLUDED.email),
-                               email_verified = portal.users.email_verified OR EXCLUDED.email_verified""",
-                     (email, hash_password(password), role, active, by, email, True))
+                raise ValueError("The portal needs at least one active admin.")
+        if current and not password:                                   # role / active only: the password stays
+            conn.execute("UPDATE portal.users SET role = %s, active = %s WHERE username = %s", (role, active, email))
+        else:                                                          # new user, or a new password: other sessions end
+            conn.execute("""INSERT INTO portal.users
+                            (username, password_hash, role, active, created_by, email, email_verified)
+                            VALUES (%s, %s, %s, %s, %s, %s, %s)
+                            ON CONFLICT (username) DO UPDATE SET password_hash = EXCLUDED.password_hash,
+                                   role = EXCLUDED.role, active = EXCLUDED.active,
+                                   session_version = portal.users.session_version + 1,
+                                   email = COALESCE(portal.users.email, EXCLUDED.email),
+                                   email_verified = portal.users.email_verified OR EXCLUDED.email_verified""",
+                         (email, hash_password(password), role, active, by, email, True))
         conn.commit()
-    audit(by, "PORTAL_USER_SAVED", email, role)
+    audit(by, "PORTAL_USER_SAVED", email, f"{role}{'' if active else ', switched off'}{', new password' if current and password else ''}")
 
 
 def register_email_user(email: str, password: str) -> tuple[str | None, bool]:

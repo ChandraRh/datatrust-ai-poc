@@ -60,7 +60,7 @@ def me(user: dict = Depends(current_user)):
 # ---------------------------------------------------------------- portal users (admin)
 class PortalUser(BaseModel):
     username: str
-    password: str = Field(min_length=12, max_length=256)
+    password: str = Field("", max_length=256)        # empty for an existing user = keep the password (store.save_user checks length)
     role: str = "viewer"
     active: bool = True
 

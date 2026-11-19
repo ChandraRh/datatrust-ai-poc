@@ -79,6 +79,7 @@
   </div>
   <div class="nav-group"><div class="nav-title">Administration</div>
     <button data-page="estate-history" title="Audit &amp; approvals"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M7 3h8l4 4v14H7z"/><path d="M15 3v4h4"/><path d="M10 13l2 2 4-4"/></svg><span class="label">Audit &amp; approvals</span></button>
+    <button data-page="estate-users" title="Portal users"><svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="9" cy="8" r="3.5"/><path d="M3 20a6 6 0 0 1 12 0"/><path d="M17 8v6M14 11h6"/></svg><span class="label">Portal users</span></button>
   </div>
   <!-- add new menu items here: <button data-page="NAME"> + a matching <section id="page-NAME"> -->
 </nav>
@@ -296,6 +297,13 @@
     <h1>Audit &amp; approvals</h1>
     <p class="sub">Every approval and rejection: access requests, re-inserted rows and incident fixes. Admins only.</p>
     <div id="body-estate-history"></div>
+  </section>
+
+  <!-- ADMINISTRATION: Portal users (estate.js pageUsers) -->
+  <section id="page-estate-users" class="page hidden">
+    <h1>Portal users</h1>
+    <p class="sub">Who can sign in to DataTrust, and as what: viewers look and ask, admins also connect sources and approve changes. Admins only.</p>
+    <div id="body-estate-users"></div>
   </section>
 
   <!-- DATA ESTATE: Estate assistant -->

@@ -825,3 +825,7 @@ label.cv-row { cursor: pointer; }
 .pw-eye { position: absolute; right: 4px; top: 50%; transform: translateY(-50%); display: grid; place-items: center; width: 32px; height: 32px;
   padding: 0; border: 0; border-radius: 6px; background: transparent; color: var(--muted, #64748b); cursor: pointer; }
 .pw-eye:hover { color: var(--ink, #0f172a); background: rgba(100, 116, 139, .12); }
+
+/* Portal users */
+.pu-grid { grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); }
+tr.pu-off td { opacity: .6; }

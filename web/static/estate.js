@@ -9,8 +9,14 @@ async function eapi(path, options = {}) {
     headers: { "Content-Type": "application/json", ...(options.headers || {}) } });
   const body = await r.json().catch(() => ({}));
   if (r.status === 401) { est.user = null; showUserBadge(); throw Object.assign(new Error("please sign in"), { login: true }); }
-  if (!r.ok) throw new Error(body.detail || body.error || r.statusText);
+  if (!r.ok) throw new Error(errorText(body) || r.statusText);
   return body;
+}
+// the server's reason in plain words; a form check (422) comes as a list: "password: String should have at least 12 characters"
+function errorText(body) {
+  const d = body.detail;
+  if (Array.isArray(d)) return d.map((x) => `${(x.loc || []).filter((p) => p !== "body").join(".") || "input"}: ${x.msg || "not valid"}`).join("; ");
+  return typeof d === "string" ? d : body.error || (d ? JSON.stringify(d) : "");
 }
 const post = (path, data) => eapi(path, { method: "POST", body: JSON.stringify(data || {}) });
 const srcType = () => ((est.connections || []).find((c) => c.connection_id === est.conn) || {}).source_type;
@@ -103,6 +109,7 @@ async function renderEstate(page) {
       if (!est.user) return loginForm(el, page);
     }
     el.innerHTML = "<p class='muted'>Loading…</p>";
+    if (page === "estate-users") { const body = await pageUsers(); el.innerHTML = body.html; body.bind(); return; }
     if (page === "estate-activity") { const body = await pageActivity(); el.innerHTML = body.html; body.bind(); return; }
     if (page === "estate-people" || page === "estate-history" || page.startsWith("estate-dq-") || page.startsWith("estate-adf-") || page.startsWith("estate-checks")) {   // no source to pick
       const body = await (page === "estate-people" ? window.Connect.page() : page === "estate-history" ? window.HISTORY.page()
@@ -439,6 +446,59 @@ async function pageActivity() {
   };
 }
 
+// ------------------------------------------------------------------ Administration: portal users
+// Who can sign in to DataTrust itself (not to the databases it watches). Admins add people, change a role, switch someone
+// off, or set a new password; a role change or switching off takes effect at once (the session is checked on every call).
+const PU = { edit: null };
+async function pageUsers() {
+  if (est.user.role !== "admin") return { html: `<div class="card"><h3>Admins only</h3><p class="muted">Ask an admin to add or change portal users.</p></div>`, bind() {} };
+  const users = await eapi("/portal-users");
+  const me = (est.user.username || "").toLowerCase(), e = PU.edit && users.find((u) => u.username === PU.edit);
+  const admins = users.filter((u) => u.role === "admin" && u.active).length;
+  const rows = users.map((u) => `<tr class="${u.active ? "" : "pu-off"}">
+      <td><b>${esc(u.username)}</b>${u.username.toLowerCase() === me ? ` <span class="chip grey">you</span>` : ""}</td>
+      <td><span class="chip ${u.role === "admin" ? "warn" : "grey"}">${esc(u.role)}</span></td>
+      <td>${u.active ? `<span class="chip ok">active</span>` : `<span class="chip bad">switched off</span>`}</td>
+      <td class="small">${u.email_verified ? "verified" : `<span class="muted">not verified yet</span>`}${u.google ? " · Google" : ""}</td>
+      <td class="small muted">${esc(u.created_by || "–")}<div>${esc(String(u.created_at || "").slice(0, 10))}</div></td>
+      <td class="nowrap">${u.username.includes("@") ? `<button class="btn light btn-sm" data-pu-edit="${esc(u.username)}">Change</button>` : `<span class="small muted" title="Sign-in names without @ come from .env">from .env</span>`}</td></tr>`).join("");
+  return {
+    html: `<div class="kpis" style="grid-template-columns:repeat(3,1fr)">
+        <div class="kpi"><div class="l">People</div><div class="v">${num(users.filter((u) => u.active).length)}</div><div class="small muted">can sign in</div></div>
+        <div class="kpi ${admins < 2 ? "warn" : ""}"><div class="l">Admins</div><div class="v">${num(admins)}</div><div class="small muted">${admins < 2 ? "add a second admin, so approvals don't depend on one person" : "can approve changes"}</div></div>
+        <div class="kpi"><div class="l">Switched off</div><div class="v">${num(users.filter((u) => !u.active).length)}</div><div class="small muted">kept for the audit trail</div></div></div>
+      <div class="card" id="puForm"><h3>${e ? `Change ${esc(e.username)}` : "Add a person"}</h3>
+        <div class="form-grid pu-grid">
+          <label class="field"><span>Email</span><input id="puName" type="email" autocomplete="off" placeholder="name@company.com" value="${esc(e ? e.username : "")}" ${e ? "readonly" : ""}></label>
+          <label class="field"><span>Role</span><select id="puRole"><option value="viewer" ${e && e.role === "viewer" ? "selected" : ""}>viewer: can look and ask</option>
+            <option value="admin" ${e && e.role === "admin" ? "selected" : ""}>admin: can also connect sources and approve</option></select></label>
+          <label class="field"><span>${e ? "New password (optional)" : "Password"}</span><input id="puPw" type="password" autocomplete="new-password"
+            placeholder="${e ? "leave empty to keep the current one" : "at least 12 characters"}"></label>
+          ${e ? `<label class="field"><span>Can sign in</span><select id="puActive"><option value="true" ${e.active ? "selected" : ""}>yes</option><option value="false" ${e.active ? "" : "selected"}>no, switch off</option></select></label>` : ""}
+        </div>
+        <div class="pacts"><button class="btn" id="puSave">${e ? "Save changes" : "Add person"}</button>${e ? `<button class="btn light" id="puCancel">Cancel</button>` : ""}</div>
+        <div id="puMsg"></div>
+        <p class="small muted">${e ? "A new password signs the person out everywhere else. Changing the role or switching someone off takes effect at once."
+          : "People added here can sign in straight away with this email and password, or with Google if it is set up. Share the password with them directly."}</p></div>
+      <div class="card"><h3>Portal users</h3><p class="small muted">Who can sign in to DataTrust. Access to the databases themselves is on <a href="#estate-access">Access</a>.</p>
+        <div class="tablewrap"><table><thead><tr><th>Email</th><th>Role</th><th>Status</th><th>Sign-in</th><th>Added by</th><th></th></tr></thead><tbody>${rows}</tbody></table></div></div>`,
+    bind() {
+      document.querySelectorAll("[data-pu-edit]").forEach((b) => (b.onclick = () => { PU.edit = b.dataset.puEdit; renderEstate("estate-users").then(() => $e("puForm").scrollIntoView({ behavior: "smooth" })); }));
+      if ($e("puCancel")) $e("puCancel").onclick = () => { PU.edit = null; renderEstate("estate-users"); };
+      $e("puSave").onclick = async () => {
+        const email = $e("puName").value.trim(), pw = $e("puPw").value, msg = (t) => ($e("puMsg").innerHTML = `<div class="error-box small">${esc(t)}</div>`);
+        if (!/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(email)) return msg("Enter the person's email address.");
+        if ((!e || pw) && pw.length < 12) return msg(e ? "A new password needs at least 12 characters, or leave it empty." : "The password needs at least 12 characters.");
+        $e("puSave").disabled = true;
+        try {
+          await post("/portal-users", { username: email, password: pw, role: $e("puRole").value, active: e ? $e("puActive").value === "true" : true });
+          toast(e ? `${email} saved` : `${email} added`); PU.edit = null; renderEstate("estate-users");
+        } catch (x) { msg(x.message); $e("puSave").disabled = false; }
+      };
+    },
+  };
+}
+
 // ------------------------------------------------------------------ 4. access
 const REQ_LABEL = { GRANT: "Grant", REVOKE: "Revoke", CREATE_USER: "Add team member", CREATE_ROLE: "Create role",
   GRANT_ROLE: "Add to role", REVOKE_ROLE: "Remove from role", DROP_PRINCIPAL: "Remove user / role" };
@@ -501,10 +561,7 @@ async function pageAccess() {
       <div class="card"><h3>Pending approval (${pending.length})</h3>${pending.map(reqRow).join("") || "<p class='muted'>Nothing waiting.</p>"}</div>
       <div class="card"><div class="draft-head"><h3 style="margin:0">Request history</h3>${admin ? `<a class="small" style="margin-left:auto" href="#estate-history=access">View all history →</a>` : ""}</div>${objTable(history.map((r) => ({ id: r.request_id, type: REQ_LABEL[r.request_type] || r.request_type, grantee: r.grantee, database: r.database, status: r.status, requested_by: r.requested_by, decided_by: r.decided_by, decided_at: r.decided_at, error: r.error })))
         || "<p class='muted'>No requests yet.</p>"}</div>
-      ${admin ? `<div class="card"><h3>Portal users</h3><div id="puList"></div>
-        <div class="form-grid"><input id="puName" type="email" placeholder="user email"><input id="puPw" type="password" placeholder="password (min 12)">
-          <select id="puRole"><option>viewer</option><option>admin</option></select><button class="btn light" id="puSave">Add / update portal user</button></div>
-        <p class="small muted">Portal users sign in with email. Email sign-ups require verification; admin-provisioned accounts are marked verified.</p></div>` : ""}`,
+      ${admin ? `<p class="small muted">Who can sign in to DataTrust itself is managed under <a href="#estate-users">Administration → Portal users</a>.</p>` : ""}`,
     bind: bindAccess,
   };
 }
@@ -639,13 +696,6 @@ function bindAccess() {
   };
   document.querySelectorAll("[data-approve]").forEach((b) => (b.onclick = () => decide(b.dataset.approve, "approve")));
   document.querySelectorAll("[data-reject]").forEach((b) => (b.onclick = () => decide(b.dataset.reject, "reject")));
-  if (admin) {
-    eapi("/portal-users").then((u) => ($e("puList").innerHTML = objTable(u, ["username", "role", "active", "created_by", "created_at"])));
-    $e("puSave").onclick = async () => {
-      try { await post("/portal-users", { username: $e("puName").value, password: $e("puPw").value, role: $e("puRole").value }); toast("Portal user saved"); renderEstate("estate-access"); }
-      catch (e) { toast(e.message); }
-    };
-  }
 }
 
 // ------------------------------------------------------------------ 5. estate assistant
