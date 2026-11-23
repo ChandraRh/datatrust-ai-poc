@@ -1,6 +1,6 @@
 # DataTrust AI: Azure deployment guide
 
-> **Quickest path:** [`infra/deploy.ps1`](./infra/README.md) deploys the web app to Azure Container Apps with PostgreSQL 17, Key Vault and a container registry, and copies the local databases (`datatrust_poc` and DataTrust's own `datatrust_app`), in one script. This guide describes the manual App Service route and the settings in detail.
+> **Quickest path:** [two scripts](./infra/README.md) deploy the two services separately to Azure Container Apps, each with its own resource group, PostgreSQL 17 server, Key Vault and container registry: `infra/poc/deploy.ps1` for the POC data pipeline (`datatrust_poc` and a scheduled ADLS job), then `infra/datatrust/deploy.ps1` for DataTrust AI (`datatrust_app` and the web app, which monitors the POC database). This guide describes the manual App Service route and the settings in detail.
 
 This guide deploys the website and the ADLS pipeline worker as two separate Azure services. The worker watches ADLS for a ready batch, runs the existing PySpark ETL, and writes the results to PostgreSQL. The website reads those results.
 

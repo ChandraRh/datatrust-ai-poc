@@ -185,5 +185,49 @@ class AdlsPipelineWorkerTests(unittest.TestCase):
         )
 
 
+class Queue:
+    def __init__(self, messages):
+        self.messages = list(messages)
+        self.deleted = []
+
+    def delete_message(self, message):
+        self.deleted.append(message)
+
+
+class UploadTriggerTests(unittest.TestCase):
+    """In Azure, a queue message ("a _READY was uploaded") starts the job; it is deleted once the run is over."""
+
+    def run_main(self, queue, process):
+        with (
+            patch.object(worker.config, "SOURCE_MODE", "adls"),
+            patch.object(worker.batch_status, "ensure_table"),
+            patch.object(worker.batch_status, "fail_interrupted_batches", return_value=0),
+            patch.object(worker.adls_utils, "get_container", return_value=Container()),
+            patch.object(worker, "take_ready_messages", return_value=(queue, queue.messages)),
+            patch.object(worker, "process_ready_batches", side_effect=process),
+            patch("sys.argv", ["worker", "--once"]),
+        ):
+            return worker.main()
+
+    def test_messages_deleted_after_the_run(self):
+        queue = Queue(["m1", "m2"])
+        self.assertEqual(self.run_main(queue, lambda c, r: 0), 0)
+        self.assertEqual(queue.deleted, ["m1", "m2"])
+
+    def test_messages_deleted_even_when_the_run_fails(self):
+        queue = Queue(["m1"])
+
+        def boom(container, root):
+            raise RuntimeError("database down")
+
+        with self.assertRaises(RuntimeError):
+            self.run_main(queue, boom)
+        self.assertEqual(queue.deleted, ["m1"])
+
+    def test_no_queue_configured(self):
+        with patch.dict("os.environ", {"ADLS_QUEUE_CONNECTION": "", "ADLS_QUEUE_NAME": ""}):
+            self.assertEqual(worker.take_ready_messages(), (None, []))
+
+
 if __name__ == "__main__":
     unittest.main()

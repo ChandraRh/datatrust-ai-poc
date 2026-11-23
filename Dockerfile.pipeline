@@ -1,5 +1,5 @@
 # DataTrust ADLS-to-PostgreSQL pipeline worker (separate from the web image).
-FROM python:3.12-slim
+FROM python:3.12-slim-bookworm
 
 ENV PYTHONDONTWRITEBYTECODE=1 \
     PYTHONUNBUFFERED=1 \

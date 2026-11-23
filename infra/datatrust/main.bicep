@@ -1,38 +1,47 @@
-// DataTrust AI on Azure: everything the web app (and, optionally, the ADLS pipeline worker) needs.
-// Deployed in two passes by infra/deploy.ps1:
-//   1. deployApps = false  -> registry, key vault, identity, PostgreSQL, logs, Container Apps environment
-//   2. deployApps = true   -> the container app(s), after the image is built and the secrets are in Key Vault
-// Secret VALUES never pass through this template: Key Vault holds them, the apps reference them by name.
+// DataTrust AI on Azure, as its own service (its own resource group, server, registry, vault and identity).
+// The POC data pipeline is a different service (infra/poc); DataTrust only connects to its database as a monitored source.
+//
+//   Browser ──HTTPS──► Container App "datatrust-web" (1 replica) ──► PostgreSQL (this service) "datatrust_app"
+//                        web app + ADF collector + checks runner     logins, connections, rules, telemetry, incidents
+//                        + alerts, all in one process
+//                              └──── monitors ────► POC PostgreSQL "datatrust_poc" (other service), Sales DB, ADF ...
+//
+// Deployed in two passes by infra/datatrust/deploy.ps1:
+//   1. deployApps = false -> registry, key vault, identity, PostgreSQL, logs, Container Apps environment
+//   2. deployApps = true  -> the web app, after the image is built and the secrets are in Key Vault
+// Secret VALUES never pass through this template: Key Vault holds them, the app references them by name.
 
 targetScope = 'resourceGroup'
 
-@description('Azure region. Defaults to the resource group\'s region.')
 param location string = resourceGroup().location
 
-@description('Short lowercase name used in every resource name.')
+@description('Short lowercase name used in every resource name of the DataTrust service.')
 @maxLength(12)
 param prefix string = 'datatrust'
 
 @description('false on the first pass (infrastructure only), true once the image and secrets exist.')
 param deployApps bool = false
 
-@description('Tag of the datatrust-web image in the registry.')
+@description('Tag of the datatrust-web image in this service\'s registry.')
 param imageTag string = 'v1'
 
-@description('PostgreSQL administrator login.')
+@description('Host name of an existing server that holds datatrust_app (deploy.ps1 creates the database and its login there). Empty = create a server here.')
+param existingPgHost string = ''
+
+@description('DataTrust\'s login: its own login on an existing server, or the administrator of a server created here.')
 param pgAdminUser string = 'datatrustadmin'
-
 @secure()
-@description('PostgreSQL administrator password (deploy.ps1 generates it and keeps it in Key Vault as PG-PASSWORD).')
-param pgAdminPassword string
-
-@description('PostgreSQL major version. The local databases are PostgreSQL 17.')
+@description('Its password (deploy.ps1 generates it and keeps it in this service\'s Key Vault as APP-PG-PASSWORD).')
+param pgAdminPassword string = ''
 param pgVersion string = '17'
-
-@description('PostgreSQL compute size. Standard_B1ms (Burstable) is the cheapest; use Standard_B2s or GeneralPurpose for more load.')
 param pgSkuName string = 'Standard_B1ms'
 param pgSkuTier string = 'Burstable'
 param pgStorageGB int = 32
+
+@description('The monitored POC database (another service): host, database and login. Its password is in this service\'s Key Vault as PG-PASSWORD.')
+param pocHost string
+param pocDatabase string = 'datatrust_poc'
+param pocUser string
 
 @description('Object id of the person running the deployment: gets Key Vault Secrets Officer so deploy.ps1 can write the secrets.')
 param deployerObjectId string = ''
@@ -43,28 +52,25 @@ param clientIp string = ''
 @description('Plain (non-secret) settings for the web app: [{ name, value }].')
 param webSettings array = []
 
-@description('Names of web app settings whose values are in Key Vault, e.g. ["GEMINI_API_KEY"]. The Key Vault secret is the name with _ replaced by -.')
+@description('Names of web app settings whose values are in Key Vault, e.g. ["GEMINI_API_KEY"]. The secret is the name with _ replaced by -.')
 param webSecretNames array = []
 
-@description('Also run the ADLS pipeline worker (PySpark ETL) as a second container app.')
-param deployWorker bool = false
-param workerImageTag string = 'v1'
-param workerSettings array = []
-param workerSecretNames array = []
+@description('Resource id of an existing Container Apps environment to run the web app on (this subscription allows only one). Empty = create one here.')
+param existingEnvironmentId string = ''
+@description('That environment\'s default domain (properties.defaultDomain), for the app\'s public address.')
+param existingEnvironmentDomain string = ''
 
 param webCpu string = '1.0'
 param webMemory string = '2Gi'
 
 var suffix = uniqueString(resourceGroup().id)
-var acrName = toLower('${prefix}acr${suffix}')
-var kvName = '${prefix}-kv-${take(suffix, 8)}'
-var pgName = '${prefix}-pg-${suffix}'
 var webName = '${prefix}-web'
-var workerName = '${prefix}-pipeline'
 var tags = { app: 'datatrust-ai' }
+var createEnv = empty(existingEnvironmentId)
+var createPgServer = empty(existingPgHost)
+var appPgHost = createPgServer ? pg!.properties.fullyQualifiedDomainName : existingPgHost
 
-// --------------------------------------------------------------------------------------------- shared
-resource logs 'Microsoft.OperationalInsights/workspaces@2022-10-01' = {
+resource logs 'Microsoft.OperationalInsights/workspaces@2022-10-01' = if (createEnv) {
   name: '${prefix}-logs'
   location: location
   tags: tags
@@ -81,7 +87,7 @@ resource identity 'Microsoft.ManagedIdentity/userAssignedIdentities@2023-01-31' 
 }
 
 resource acr 'Microsoft.ContainerRegistry/registries@2023-07-01' = {
-  name: acrName
+  name: toLower('${prefix}acr${suffix}')
   location: location
   tags: tags
   sku: { name: 'Basic' }
@@ -99,7 +105,7 @@ resource acrPull 'Microsoft.Authorization/roleAssignments@2022-04-01' = {
 }
 
 resource kv 'Microsoft.KeyVault/vaults@2023-07-01' = {
-  name: kvName
+  name: '${prefix}-kv-${take(suffix, 8)}'
   location: location
   tags: tags
   properties: {
@@ -130,9 +136,8 @@ resource kvDeployer 'Microsoft.Authorization/roleAssignments@2022-04-01' = if (!
   }
 }
 
-// --------------------------------------------------------------------------------------------- PostgreSQL
-resource pg 'Microsoft.DBforPostgreSQL/flexibleServers@2025-08-01' = {
-  name: pgName
+resource pg 'Microsoft.DBforPostgreSQL/flexibleServers@2025-08-01' = if (createPgServer) {
+  name: '${prefix}-pg-${suffix}'
   location: location
   tags: tags
   sku: { name: pgSkuName, tier: pgSkuTier }
@@ -148,36 +153,28 @@ resource pg 'Microsoft.DBforPostgreSQL/flexibleServers@2025-08-01' = {
   }
 }
 
-// Lets Azure services (the container apps) reach the server. A demo setting: for production, use private networking.
-resource pgAllowAzure 'Microsoft.DBforPostgreSQL/flexibleServers/firewallRules@2025-08-01' = {
+// Lets Azure services (the web app) reach the server. A demo setting: for production, use private networking.
+resource pgAllowAzure 'Microsoft.DBforPostgreSQL/flexibleServers/firewallRules@2025-08-01' = if (createPgServer) {
   parent: pg
   name: 'AllowAzureServices'
   properties: { startIpAddress: '0.0.0.0', endIpAddress: '0.0.0.0' }
 }
 
-resource pgAllowClient 'Microsoft.DBforPostgreSQL/flexibleServers/firewallRules@2025-08-01' = if (!empty(clientIp)) {
+resource pgAllowClient 'Microsoft.DBforPostgreSQL/flexibleServers/firewallRules@2025-08-01' = if (createPgServer && !empty(clientIp)) {
   parent: pg
   name: 'DeployerClient'
   properties: { startIpAddress: clientIp, endIpAddress: clientIp }
   dependsOn: [ pgAllowAzure ]
 }
 
-resource pocDb 'Microsoft.DBforPostgreSQL/flexibleServers/databases@2025-08-01' = {
+resource appDb 'Microsoft.DBforPostgreSQL/flexibleServers/databases@2025-08-01' = if (createPgServer) {
   parent: pg
-  name: 'datatrust_poc'
+  name: 'datatrust_app'
   properties: { charset: 'UTF8', collation: 'en_US.utf8' }
   dependsOn: [ pgAllowClient ]
 }
 
-resource appDb 'Microsoft.DBforPostgreSQL/flexibleServers/databases@2025-08-01' = {
-  parent: pg
-  name: 'datatrust_app'
-  properties: { charset: 'UTF8', collation: 'en_US.utf8' }
-  dependsOn: [ pocDb ]
-}
-
-// --------------------------------------------------------------------------------------------- Container Apps
-resource env 'Microsoft.App/managedEnvironments@2024-03-01' = {
+resource env 'Microsoft.App/managedEnvironments@2024-03-01' = if (createEnv) {
   name: '${prefix}-env'
   location: location
   tags: tags
@@ -185,31 +182,39 @@ resource env 'Microsoft.App/managedEnvironments@2024-03-01' = {
     appLogsConfiguration: {
       destination: 'log-analytics'
       logAnalyticsConfiguration: {
-        customerId: logs.properties.customerId
-        sharedKey: logs.listKeys().primarySharedKey
+        customerId: logs!.properties.customerId
+        sharedKey: logs!.listKeys().primarySharedKey
       }
     }
   }
 }
 
-var publicUrl = 'https://${webName}.${env.properties.defaultDomain}'
+var envId = createEnv ? env.id : existingEnvironmentId
+var envDomain = createEnv ? env!.properties.defaultDomain : existingEnvironmentDomain
+var publicUrl = 'https://${webName}.${envDomain}'
 
-// Settings every deployment sets, whatever .env says. PG_PASSWORD is the Azure admin password (Key Vault).
+// Settings every deployment sets, whatever .env says.
+//   APP_PG_*  DataTrust's own database, on this service's server (password APP-PG-PASSWORD)
+//   PG_*      the monitored POC database, on the POC service's server (password PG-PASSWORD, copied from the POC vault)
 var fixedWebSettings = [
   { name: 'WEB_HOST', value: '0.0.0.0' }
   { name: 'WEB_PORT', value: '8000' }
-  { name: 'PG_HOST', value: pg.properties.fullyQualifiedDomainName }
-  { name: 'PG_PORT', value: '5432' }
-  { name: 'PG_DATABASE', value: 'datatrust_poc' }
-  { name: 'PG_USER', value: pgAdminUser }
-  { name: 'PGSSLMODE', value: 'require' }
+  { name: 'APP_PG_HOST', value: appPgHost }
+  { name: 'APP_PG_PORT', value: '5432' }
   { name: 'APP_PG_DATABASE', value: 'datatrust_app' }
+  { name: 'APP_PG_USER', value: pgAdminUser }
+  { name: 'APP_PGSSLMODE', value: 'require' }
+  { name: 'PG_HOST', value: pocHost }
+  { name: 'PG_PORT', value: '5432' }
+  { name: 'PG_DATABASE', value: pocDatabase }
+  { name: 'PG_USER', value: pocUser }
+  { name: 'PGSSLMODE', value: 'require' }
   { name: 'PORTAL_AUTH_ENABLED', value: 'true' }
   { name: 'PORTAL_COOKIE_SECURE', value: 'true' }
   { name: 'DATATRUST_PUBLIC_URL', value: publicUrl }
   { name: 'AZURE_CLIENT_ID', value: identity.properties.clientId }
 ]
-var allWebSecretNames = union([ 'PG_PASSWORD', 'PORTAL_SECRET' ], webSecretNames)
+var allWebSecretNames = union([ 'APP_PG_PASSWORD', 'PG_PASSWORD', 'PORTAL_SECRET' ], webSecretNames)
 
 resource web 'Microsoft.App/containerApps@2024-03-01' = if (deployApps) {
   name: webName
@@ -220,7 +225,7 @@ resource web 'Microsoft.App/containerApps@2024-03-01' = if (deployApps) {
     userAssignedIdentities: { '${identity.id}': {} }
   }
   properties: {
-    managedEnvironmentId: env.id
+    managedEnvironmentId: envId
     configuration: {
       activeRevisionsMode: 'Single'
       ingress: {
@@ -270,59 +275,11 @@ resource web 'Microsoft.App/containerApps@2024-03-01' = if (deployApps) {
   dependsOn: [ acrPull, kvAppReader, appDb ]
 }
 
-resource worker 'Microsoft.App/containerApps@2024-03-01' = if (deployApps && deployWorker) {
-  name: workerName
-  location: location
-  tags: tags
-  identity: {
-    type: 'UserAssigned'
-    userAssignedIdentities: { '${identity.id}': {} }
-  }
-  properties: {
-    managedEnvironmentId: env.id
-    configuration: {
-      activeRevisionsMode: 'Single'
-      registries: [ { server: acr.properties.loginServer, identity: identity.id } ]
-      secrets: [for n in union([ 'PG_PASSWORD' ], workerSecretNames): {
-        name: toLower(replace(n, '_', '-'))
-        keyVaultUrl: '${kv.properties.vaultUri}secrets/${replace(n, '_', '-')}'
-        identity: identity.id
-      }]
-    }
-    template: {
-      containers: [
-        {
-          name: 'pipeline'
-          image: '${acr.properties.loginServer}/datatrust-pipeline:${workerImageTag}'
-          resources: { cpu: json('2.0'), memory: '4Gi' }
-          env: concat([
-            { name: 'SOURCE_MODE', value: 'adls' }
-            { name: 'PG_HOST', value: pg.properties.fullyQualifiedDomainName }
-            { name: 'PG_PORT', value: '5432' }
-            { name: 'PG_DATABASE', value: 'datatrust_poc' }
-            { name: 'PG_USER', value: pgAdminUser }
-            { name: 'PGSSLMODE', value: 'require' }
-            { name: 'WRITE_MODE', value: 'python' }
-            { name: 'AZURE_CLIENT_ID', value: identity.properties.clientId }
-          ], workerSettings, map(union([ 'PG_PASSWORD' ], workerSecretNames), n => {
-            name: n
-            secretRef: toLower(replace(n, '_', '-'))
-          }))
-        }
-      ]
-      // Exactly one: two workers could pick up the same ready batch.
-      scale: { minReplicas: 1, maxReplicas: 1 }
-    }
-  }
-  dependsOn: [ acrPull, kvAppReader, appDb ]
-}
-
 output acrName string = acr.name
-output acrLoginServer string = acr.properties.loginServer
 output keyVaultName string = kv.name
-output pgServerName string = pg.name
-output pgHost string = pg.properties.fullyQualifiedDomainName
+output pgServerName string = createPgServer ? pg.name : ''
+output pgHost string = appPgHost
 output pgAdminUser string = pgAdminUser
-output identityPrincipalId string = identity.properties.principalId
 output publicUrl string = publicUrl
 output webAppName string = webName
+output identityPrincipalId string = identity.properties.principalId

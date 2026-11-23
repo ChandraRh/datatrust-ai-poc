@@ -249,6 +249,9 @@ def start(connection_id: int, tables: list, by: str) -> dict:
 def _connection_for(asset: dict, cfg: dict, conns: list) -> dict | None:
     host = (asset.get("host") or "").lower()
     match = [c for c in conns if host and (c.get("host") or "").lower() == host]
+    db = str(asset.get("database") or "").lower()
+    if db and len(match) > 1:          # several databases on one server (e.g. the Sales DB and the POC): the one named here first
+        match.sort(key=lambda c: (c.get("database") or "").lower() != db)
     if not match and cfg.get("target_connection_id"):
         match = [c for c in conns if c["connection_id"] == cfg["target_connection_id"]]
     return match[0] if match else None

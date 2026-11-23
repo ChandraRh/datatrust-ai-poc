@@ -1,7 +1,7 @@
 # DataTrust AI web app (dashboard + AI agent + Data Estate portal)
 # Build:  docker build -t datatrust-web .
 # Run:    docker run -p 8000:8000 --env-file .env -e PG_HOST=<db host> datatrust-web
-FROM python:3.12-slim
+FROM python:3.12-slim-bookworm
 
 ENV PYTHONDONTWRITEBYTECODE=1 \
     PYTHONUNBUFFERED=1 \

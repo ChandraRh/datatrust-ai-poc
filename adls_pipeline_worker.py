@@ -132,6 +132,37 @@ def process_ready_batches(container, root: str) -> int:
     return 1 if failed else 0
 
 
+def take_ready_messages():
+    """In Azure, Event Grid puts a message in a queue when a _READY marker is uploaded, and that message starts this job.
+
+    Take the messages that are there now (hidden for an hour, not yet deleted). The run scans ADLS anyway, so the
+    messages only say "look now"; they are deleted after the run (delete_messages). A message that arrives during the
+    run stays in the queue and starts the next run. Returns (queue, messages), or (None, []) when no queue is set.
+    """
+    conn = os.getenv("ADLS_QUEUE_CONNECTION")
+    name = os.getenv("ADLS_QUEUE_NAME")
+    if not (conn and name):
+        return None, []
+    try:
+        from azure.storage.queue import QueueClient
+
+        queue = QueueClient.from_connection_string(conn, name)
+        messages = list(queue.receive_messages(max_messages=32, visibility_timeout=3600))
+        print(f"Started by {len(messages)} upload message(s) from queue '{name}'.")
+        return queue, messages
+    except Exception:
+        traceback.print_exc()
+        return None, []
+
+
+def delete_messages(queue, messages) -> None:
+    for message in messages:
+        try:
+            queue.delete_message(message)
+        except Exception:
+            traceback.print_exc()
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--once", action="store_true", help="check ADLS once, then exit")
@@ -159,7 +190,12 @@ def main() -> int:
         f"every {args.poll_seconds} seconds."
     )
     while True:
-        result = process_ready_batches(container, root)
+        queue, messages = take_ready_messages() if args.once else (None, [])
+        try:
+            result = process_ready_batches(container, root)
+        finally:
+            # A failed batch is recorded as FAILED and is not retried, so its message is done either way.
+            delete_messages(queue, messages)
         if args.once:
             return result
         time.sleep(args.poll_seconds)

@@ -1240,7 +1240,7 @@ async function renderPipeline() {
       button.disabled = true;
       try {
         const result = await api(`/api/pipeline/batches/${encodeURIComponent(button.dataset.batchId)}/retry`, { method: "POST" });
-        toast(`Retry queued for ${result.batch_name}`);
+        toast(`Retry queued for ${result.batch_name}. ${result.pipeline_note || ""}`.trim());
         await renderPipeline();
       } catch (e) {
         button.disabled = false;

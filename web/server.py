@@ -24,6 +24,7 @@ sys.path.insert(0, str(HERE))
 import agent          # noqa: E402
 import data_service as ds  # noqa: E402
 import batch_status  # noqa: E402
+import pipeline_trigger  # noqa: E402  Azure: a retried batch starts the pipeline job via its queue
 import scopes  # noqa: E402  one source at a time: overview / incidents / investigate per connection
 
 app = FastAPI(title="DataTrust AI")
@@ -333,9 +334,10 @@ def pipeline():
 @app.post("/api/pipeline/batches/{batch_id}/retry")
 def retry_pipeline_batch(batch_id: int, user: dict = Depends(estate_routes.admin_user)):
     try:
-        return {"ok": True, **batch_status.request_retry(batch_id, user["username"])}
+        row = batch_status.request_retry(batch_id, user["username"])
     except ValueError as e:
         raise HTTPException(400, str(e))
+    return {"ok": True, **row, **pipeline_trigger.start_pipeline(row["batch_name"], user["username"])}
 
 
 class Approval(BaseModel):

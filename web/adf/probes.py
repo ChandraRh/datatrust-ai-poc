@@ -197,6 +197,8 @@ def find_pg_connection(asset: dict, cfg: dict):
     except Exception:                                                    # noqa: BLE001
         conns = []
     match = [c for c in conns if host and c["host"].lower() == host]
+    if db and len(match) > 1:          # several databases on one server (e.g. the Sales DB and the POC): the one named here first
+        match.sort(key=lambda c: (c.get("database") or "").lower() != str(db).lower())
     if not match and cfg.get("target_connection_id"):
         match = [c for c in conns if c["connection_id"] == cfg["target_connection_id"]]
     if match:
