@@ -32,6 +32,15 @@ async function initScopes() {
   pick.innerHTML = group("db", "Databases") + group("adf", "Data factories");
   if (state.scope) pick.value = state.scope;
 }
+// ADF pipelines / issues / runs belong to a data factory: shown only when one is picked ("Connect ADF" always stays)
+const ADF_PAGES = ["estate-adf-overview", "estate-adf-issues", "estate-adf-runs"];
+const isAdfScope = () => /^adf:\d+$/.test(state.scope || "");
+function menuForScope() {
+  ADF_PAGES.forEach((p) => {
+    const b = document.querySelector(`#tabs [data-page="${p}"]`);
+    if (b) b.classList.toggle("hidden", !isAdfScope());
+  });
+}
 async function setScope(key) {
   if (!key || key === state.scope) return;
   state.scope = key;
@@ -39,9 +48,11 @@ async function setScope(key) {
   state.selected = null;
   state.version = null;
   if ($("scopePick")) $("scopePick").value = key;
+  menuForScope();
+  if (ADF_PAGES.includes(state.page) && !isAdfScope()) return go("observe");   // a database has no ADF pipelines
   await checkVersion(true);
-  const follows = ["estate-activity", "estate-connections", "estate-catalog", "estate-access"];   // Data estate pages follow it too
-  if ((state.page.startsWith("estate-dq-") || follows.includes(state.page)) && window.renderEstate) return renderEstate(state.page);
+  const follows =["estate-activity", "estate-connections", "estate-catalog", "estate-access"];   // Data estate pages follow it too
+  if ((state.page.startsWith("estate-dq-") || follows.includes(state.page) || ADF_PAGES.includes(state.page)) && window.renderEstate) return renderEstate(state.page);
   if (state.page.startsWith("estate-")) toast(`Observe to Verify now show ${($("scopePick").selectedOptions[0] || {}).textContent || key}`);
 }
 
@@ -274,6 +285,7 @@ async function loadCore() {
     try { localStorage.setItem("dt.scope", state.scope); } catch (e) {}
   }
   if ($("scopePick") && state.scope) $("scopePick").value = state.scope;
+  menuForScope();
   const openIncidents = inc.open || [];
   const urgentIncidents = openIncidents.filter((incident) => ["CRITICAL", "HIGH"].includes(incident.severity)).length;
   const incidentBadge = $("detectNavCount");

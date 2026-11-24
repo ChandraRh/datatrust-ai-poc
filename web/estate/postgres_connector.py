@@ -72,7 +72,9 @@ class PostgresSource:
     # ------------------------------------------------------------------ catalog
     def databases(self):
         return self.q("""SELECT d.datname AS name, pg_get_userbyid(d.datdba) AS owner,
-                                pg_database_size(d.datname) AS size_bytes,
+                                -- the size needs CONNECT on that database: a login without it (e.g. another app's
+                                -- database on a shared server) would fail the whole list
+                                CASE WHEN has_database_privilege(d.datname, 'CONNECT') THEN pg_database_size(d.datname) END AS size_bytes,
                                 has_database_privilege(d.datname, 'CONNECT') AS can_connect
                          FROM pg_database d WHERE NOT d.datistemplate ORDER BY 1""")
 

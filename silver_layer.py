@@ -406,6 +406,9 @@ def run_silver(spark, batch_id: str, business_date: str = None) -> bool:
                 else:
                     conn.execute("DELETE FROM silver.rejected_records WHERE entity = %s AND business_date = %s",
                                  (name, business_date))
+                    cleared = clear_resent_rejections(conn, bronze, name, RAW_KEY.get(name, key), batch_id)
+                    if cleared:
+                        print(f"  silver  {name}: {cleared} earlier rejection(s) cleared, the record was sent again")
 
                 # SCD2 on a full load: apply the changes day by day, in order, so the full history is kept
                 if scd == 2 and business_date is None and "business_date" in bronze.columns:
@@ -494,6 +497,21 @@ def log_quality_warnings(conn, batch_id, business_date, duplicates) -> None:
                                  "DQ_DUPLICATES_REMOVED", f"{removed} duplicate {entity} row(s) removed ({read} read)")
     except Exception as e:
         db_utils.log_error(batch_id, business_date, "SILVER", "PL_SILVER_DQ_WARNINGS", e)
+
+
+def clear_resent_rejections(conn, bronze: DataFrame, entity: str, raw_key: str, batch_id: str) -> int:
+    """A record rejected by an earlier batch and sent again in this one (a correction, or a later change of the same
+    customer) is judged again now: its old rejection is removed. If the new copy passes it goes to silver, so the
+    incident closes; if it fails again it is rejected again, once. audit.rejected_history keeps the old rejection."""
+    if raw_key not in bronze.columns:
+        return 0
+    keys = [r[0] for r in bronze.select(F.trim(F.col(raw_key)).alias("k")).where("k IS NOT NULL AND k <> ''")
+                                 .distinct().collect()]
+    if not keys:
+        return 0
+    return conn.execute("""DELETE FROM silver.rejected_records
+                           WHERE entity = %s AND batch_id <> %s AND record_key = ANY(%s)""",
+                        (entity, batch_id, keys)).rowcount
 
 
 def keep_rejected_history(conn, entity, batch_id) -> None:

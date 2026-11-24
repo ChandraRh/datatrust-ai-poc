@@ -7,6 +7,9 @@ BRONZE layer: land the source CSV rows exactly as delivered.
     Every later load      = APPEND (new rows added with the new batch_id, nothing deleted)
   * FULL LOAD (no business date given): every row of every file is loaded, all dates at once.
   * DAILY LOAD (business date given): daily files are filtered to that date; snapshot files are loaded whole.
+  * CORRECTIONS (daily load only): an optional <file>_corrections.csv next to a daily file, e.g. payments_corrections.csv,
+    holds corrected rows of EARLIER dates, each with its original business date (the source resends a record it got
+    wrong). They are loaded with this batch; silver then replaces the stored record, or clears its earlier rejection.
   * Everything runs in ONE transaction: if any file fails, nothing of this batch is kept.
 
 Run alone:  python bronze_layer.py               full load (all rows, all dates)
@@ -45,6 +48,22 @@ def read_source_csv(spark, path, date_column, business_date) -> DataFrame:
     if date_column and business_date:                      # daily load -> only this business date
         df = df.filter(F.col(date_column) == business_date)
     return df
+
+
+def corrections_path(source_folder, file_name: str):
+    """payments.csv -> payments_corrections.csv in the same folder."""
+    return source_folder / file_name.replace(".csv", "_corrections.csv")
+
+
+def read_corrections(spark, source_folder, src: dict, business_date: str):
+    """Corrected rows of earlier dates for a daily file, or None. Rows dated on or after this batch's date are ignored:
+    a correction fixes the past, today's rows belong in the daily file itself."""
+    path = corrections_path(source_folder, src["file"])
+    if not (business_date and src["date_column"] and path.exists()):
+        return None
+    df = spark.read.option("header", True).option("inferSchema", False).csv(path.as_uri())
+    df = df.toDF(*[to_snake_case(c) for c in df.columns])
+    return df.filter(F.col(src["date_column"]) < business_date)
 
 
 def get_load_mode(conn) -> str:
@@ -91,6 +110,11 @@ def run_bronze(spark, batch_id: str, business_date: str = None) -> bool:
         for src in config.SOURCES:
             with step(src["file"]) as info:
                 df = read_source_csv(spark, source_folder / src["file"], src["date_column"], business_date)
+                fixes = read_corrections(spark, source_folder, src, business_date)
+                n_fixes = 0
+                if fixes is not None:
+                    n_fixes = fixes.count()
+                    df = df.unionByName(fixes)              # same columns as the daily file, or the load fails
                 df = (df.withColumn("batch_id", F.lit(batch_id))
                         .withColumn("source_file", F.lit(src["file"]))
                         .withColumn("ingested_at", F.localtimestamp())
@@ -101,8 +125,9 @@ def run_bronze(spark, batch_id: str, business_date: str = None) -> bool:
                     conn.commit()                            # Spark's own connection must see the table
                 rows = db_utils.write_df(df, src["bronze"], conn)
                 total_rows += rows
-                info.update(rows_in=rows, rows_out=rows, message=f"{src['file']} -> {src['bronze']} ({load_mode})")
-                print(f"  bronze  {src['bronze']:<24} +{rows:>6} rows  ({load_mode})")
+                fixed = f", incl. {n_fixes} correction(s) of earlier dates" if n_fixes else ""
+                info.update(rows_in=rows, rows_out=rows, message=f"{src['file']} -> {src['bronze']} ({load_mode}{fixed})")
+                print(f"  bronze  {src['bronze']:<24} +{rows:>6} rows  ({load_mode}{fixed})")
 
         with step("COMMIT") as info:
             conn.commit()                                    # COMMIT: the whole batch at once

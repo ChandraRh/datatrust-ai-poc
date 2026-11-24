@@ -39,7 +39,9 @@
   async function sourcesBar(page) {
     const srcs = await api("/sources");
     A.sources = srcs;
-    if (A.src && !srcs.some((s) => String(s.source_id) === String(A.src))) A.src = "";
+    const picked = /^adf:(\d+)$/.exec(state.scope || "");          // the factory picked at the top of the page
+    if (picked) A.src = picked[1];
+    if (A.src &&!srcs.some((s) => String(s.source_id) === String(A.src))) A.src = "";
     const shown = A.src ? srcs.filter((s) => String(s.source_id) === String(A.src)) : srcs;
     const status = shown.map((s) => {
       const st = !s.enabled ? `<span class="chip grey">paused</span>` : s.last_sync_status === "RUNNING" ? `<span class="chip warn">syncing…</span>`
@@ -49,7 +51,7 @@
     }).join("");
     return {
       none: !srcs.length,
-      html: !srcs.length ? "" : `<div class="ctx adf-ctx">${srcs.length > 1 ? `<label>Factory <select id="adfSrc_${page}"><option value="">All factories</option>${srcs.map((s) =>
+      html: !srcs.length ? "" : `<div class="ctx adf-ctx">${srcs.length > 1 && !picked ? `<label>Factory <select id="adfSrc_${page}"><option value="">All factories</option>${srcs.map((s) =>
         `<option value="${s.source_id}" ${String(s.source_id) === String(A.src) ? "selected" : ""}>${esc(s.name)}</option>`).join("")}</select></label>` : ""}
         ${status}<span class="grow"></span>
         ${srcs.length ? `<button class="btn light btn-sm" id="adfSync_${page}" title="Read the factory now instead of waiting for the next automatic sync">↻ Sync now</button>` : ""}</div>`,

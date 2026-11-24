@@ -249,13 +249,21 @@ def _source_rows(file_name: str, business_date: str = None):
     path = config.LOCAL_SOURCE_DIR / file_name
     if config.SOURCE_MODE != "local" or not path.exists():
         return None
-    with open(path, newline="", encoding="utf-8") as f:
-        reader = csv.reader(f)
-        header = [h.strip().lower() for h in next(reader, [])]
-        if business_date and "business_date" in header:
-            i = header.index("business_date")
-            return sum(1 for r in reader if len(r) > i and r[i] == business_date)
-        return sum(1 for _ in reader)
+
+    def count(p, keep=None):
+        with open(p, newline="", encoding="utf-8-sig") as f:
+            reader = csv.reader(f)
+            header = [h.strip().lower() for h in next(reader, [])]
+            if keep and "business_date" in header:
+                i = header.index("business_date")
+                return sum(1 for r in reader if len(r) > i and keep(r[i]))
+            return sum(1 for _ in reader)
+
+    n = count(path, (lambda d: d == business_date) if business_date else None)
+    fixes = config.LOCAL_SOURCE_DIR / file_name.replace(".csv", "_corrections.csv")
+    if business_date and fixes.exists():                     # bronze also loads corrections of earlier dates
+        n += count(fixes, lambda d: d < business_date)
+    return n
 
 
 def _gold_views_using(silver_table: str) -> list:
