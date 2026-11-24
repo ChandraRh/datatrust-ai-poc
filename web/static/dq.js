@@ -463,8 +463,10 @@
     const s = d.scope;
     if (d.kind === "adf") {
       const on = (v, yes, no) => `<span class="chip ${v ? "ok" : "grey"}">${v ? yes : no}</span>`;
+      const own = rulesSection(d, "Pipeline rules", `No pipeline rules yet. <b>Add rule</b>: pick a pipeline, then let DataTrust suggest rules from its run history, describe one in words, or build it.`);
       return {
-        html: sourceNote(s, "A factory has no DataTrust rules of its own: what decides good data is each Copy step's settings, plus the checks DataTrust runs on every copy.") +
+        html: sourceNote(s, "Your own pipeline rules (on time, success, rows, run time), then what decides good data in each Copy step.") +
+          own.html + `<h2 class="dq-h2">Copy step settings</h2><p class="small muted">How each Copy step treats bad rows, and the checks DataTrust runs on every copy.</p>` +
           (d.steps.length ? d.steps.map((st) => `<div class="card"><div class="draft-head"><h3 style="margin:0">${esc(st.activity)}</h3><span class="small muted">in ${esc(st.pipeline)}</span></div>
             <div class="pacts">${on(st.skip_incompatible_rows, "Skips bad rows", "Stops on a bad row")} ${on(st.skip_log, "Skipped-rows log on", "No skipped-rows log")}
               ${st.mapping_at_runtime ? `<span class="chip warn">Column mapping set at run time</span>` : st.mapped_columns ? `<span class="chip grey">${num(st.mapped_columns)} mapped columns</span>` : `<span class="chip grey">Columns matched by name</span>`}</div>
@@ -473,7 +475,7 @@
               ${st.checks.map((c) => `<tr><td>${esc(c.label)}</td><td>${stChip(c.status)}</td><td class="small">${esc(c.detail || "")}</td></tr>`).join("")}</tbody></table></div>`
               : "<p class='muted small'>No copy has run since the factory was connected.</p>"}</div>`).join("")
           : `<div class="card"><p class="muted">${esc(d.empty)}</p></div>`),
-        bind() {},
+        bind: own.bind,
       };
     }
     const sec = rulesSection(d);
@@ -482,14 +484,14 @@
 
   // the rules (data checks) of one database connection: scorecard by table, every rule with its last 20 runs, run / open / edit / add
   const DOT = { PASS: "ok", WARN: "warn", FAIL: "bad", ERROR: "bad" };
-  function rulesSection(d, title) {
+  function rulesSection(d, title, emptyText) {
     const admin = isAdmin();
     const html = `<div id="dqChecksSec"><div class="card"><div class="draft-head"><h3 style="margin:0">${esc(title || "Rules by table")}</h3><span class="grow"></span>
           ${admin ? `<button class="btn btn-sm" id="dqAddRule">+ Add rule</button>` : ""}</div>
           ${d.scorecard.length ? `<div class="tablewrap"><table><thead><tr><th>Applies to</th><th class="num">Rules</th><th class="num">Passing</th><th class="num">Failing</th><th class="num">Warnings</th><th class="num">Errors</th></tr></thead><tbody>
             ${d.scorecard.map((r) => `<tr><td><code>${esc(r.applies_to)}</code></td><td class="num">${r.rules}</td><td class="num">${r.passing}</td><td class="num ${r.failing ? "bad" : ""}">${r.failing}</td>
               <td class="num">${r.warnings}</td><td class="num ${r.errors ? "bad" : ""}">${r.errors}</td></tr>`).join("")}</tbody></table></div>`
-            : `<p class="muted">No rules yet. <b>Add rule</b>: pick a table, then <b>Suggest checks</b> measures it and proposes rules that fit it.</p>`}</div>
+            : `<p class="muted">${emptyText || "No rules yet. <b>Add rule</b>: pick a table, then <b>Suggest checks</b> measures it and proposes rules that fit it."}</p>`}</div>
         ${d.rules.length ? `<div class="card"><h3>Every rule</h3><div class="tablewrap" style="max-height:none"><table><thead><tr><th>Rule</th><th>Applies to</th><th>Severity</th><th>Now</th><th>Last runs</th><th></th></tr></thead><tbody>
           ${d.rules.map((r) => `<tr><td><b>${esc(r.name)}</b><div class="small muted">${esc(r.rule)}</div>${r.repeats_pipeline ? `<div class="small muted">Repeats a built-in check, so it does not lower the score twice.</div>` : ""}
               ${r.sql ? `<pre class="code small">${esc(r.sql)}</pre>` : ""}</td>
@@ -529,7 +531,7 @@
       $e("dqRulesSub").textContent = {
         poc: "The checks every row must pass on its way into silver. Write one in plain words, test it on today's data, then switch it on, no code change or deployment needed.",
         db: "What this database's data must meet, by table. Run, open or edit any rule here; Add rule proposes rules that fit a table.",
-        adf: "What decides good data in this factory: each Copy step's data settings, and the checks DataTrust runs on every copy." }[kind];
+        adf: "Your own rules on this factory's pipelines, and what decides good data in each Copy step." }[kind];
       if (!isPoc()) return page === "estate-dq-rules" ? rulesOther() : rowsOther();
       const body = await (page === "estate-dq-rules" ? pageRules() : pageRejected());
       if (page === "estate-dq-rules") {                          // the POC's data checks live here too (one place for rules)

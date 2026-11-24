@@ -104,7 +104,13 @@ def _adf_rows(s: dict) -> dict:
 
 
 # ============================================================================ what decides "good data" (Rule Studio)
+def _pipeline_text(c) -> str:
+    from checks import pipeline_rules
+    return pipeline_rules.describe(c["config"])
+
+
 RULE_TEXT = {
+    "pipeline": _pipeline_text,
     "freshness": lambda c: f"newest {c['config'].get('column')} at most {c['config'].get('max_age_hours', 24)} h old",
     "volume": lambda c: (f"at least {c['config'].get('min_rows', 1)} rows"
                          + (f" with {c['config']['window_column']} in the last {c['config'].get('window_hours', 24)} h"
@@ -128,7 +134,11 @@ def rules(scope: str | None) -> dict:
 
 
 def _db_rules(s: dict) -> dict:
-    cs = scopes._checks_of(s["id"], skip_dedupe=False)
+    return _rule_rows(scopes._checks_of(s["id"], skip_dedupe=False))
+
+
+def _rule_rows(cs: list) -> dict:
+    """Every rule with its last 20 results, and a scorecard by what it applies to (table, query or pipeline)."""
     hist = {}
     if cs:
         for r in appdb.rows("""SELECT check_id, status FROM (SELECT check_id, status, run_at,
@@ -148,6 +158,10 @@ def _db_rules(s: dict) -> dict:
 
 
 def _adf_rules(s: dict) -> dict:
+    return {**_adf_steps(s), **_rule_rows(scopes._pipeline_checks_of(s["id"]))}
+
+
+def _adf_steps(s: dict) -> dict:
     from adf import resolve
     latest = {(r["pipeline_name"], r["activity_name"], r["check_type"]): r for r in appdb.rows("""
         SELECT DISTINCT ON (k.pipeline_name, k.activity_name, c.check_type) k.pipeline_name, k.activity_name, c.check_type, c.status,

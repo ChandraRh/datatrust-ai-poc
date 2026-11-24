@@ -393,7 +393,8 @@ def health(pipeline_issues: list, runs: list, signals: list) -> tuple[str, int]:
 
 
 # ============================================================================ overview
-def overview(source_id: int | None = None) -> dict:
+def overview(source_id: int | None = None, extra_signals: list | None = None) -> dict:
+    """extra_signals: the factory's own pipeline rules (scopes.py), scored with the built-in checks."""
     srcs = [s for s in sources() if not source_id or s["source_id"] == source_id]
     all_issues = issues(source_id)
     pipelines = []
@@ -439,7 +440,7 @@ def overview(source_id: int | None = None) -> dict:
                       FROM telemetry.pipeline_runs WHERE source_id = ANY(%s) AND run_start > now() - interval '14 days'
                       GROUP BY 1, 2 ORDER BY 1""", (ids,))
     # the factory's score: the same formula over all its pipelines' signals; confidence = pipelines that ran in 30 days
-    t = trust.compute(signals, trust.confidence(sum(1 for p in pipelines if p["runs_30d"]), len(pipelines), "pipelines"))
+    t = trust.compute(signals + list(extra_signals or []), trust.confidence(sum(1 for p in pipelines if p["runs_30d"]), len(pipelines), "pipelines"))
     return {"sources": srcs, "trust": t, "kpis": {**k, **v, "pipelines": len(pipelines), "issues": len(all_issues),
                                       "success_rate_7d": round(100 * k["ok_7d"] / k["runs_7d"]) if k.get("runs_7d") else None,
                                       "trust": t["score"]},

@@ -323,6 +323,12 @@ def run(chk: dict) -> dict:
     """chk: a monitor.checks row (or an unsaved definition for preview). Never raises: problems become status ERROR."""
     started = time.monotonic()
     try:
+        if chk["check_type"] == "pipeline":                         # a factory pipeline's run history, not a query on a database
+            from . import pipeline_rules
+            r = pipeline_rules.evaluate(chk)
+            r["duration_ms"] = int((time.monotonic() - started) * 1000)
+            r["details"] = _jsonable(r.get("details"))
+            return r
         d = _dialect(chk["connection_id"] if chk["check_type"] != "reconciliation" else chk["config"]["left"]["connection_id"])
         t = d.table(chk["schema_name"], chk["table_name"]) if chk.get("table_name") else None
         r = RUN[chk["check_type"]](chk, d, t)

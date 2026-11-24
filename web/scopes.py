@@ -113,7 +113,7 @@ def scope_of_incident(incident_id: str) -> str | None:
     m = re.match(r"^db(\d+):", incident_id)
     if m:
         return f"db:{m.group(1)}"
-    m = re.match(r"^adf:(\d+):", incident_id)
+    m = re.match(r"^adf:(\d+):", incident_id) or re.match(r"^adf(\d+):CHECK-\d+$", incident_id)
     if m:
         return f"adf:{m.group(1)}"
     poc = _poc_connection_id()
@@ -134,19 +134,35 @@ def _checks_of(connection_id: int, skip_dedupe: bool) -> list:
     return [r for r in rows if not (skip_dedupe and (r["config"] or {}).get("dedupe") == "poc")]
 
 
+def _pipeline_checks_of(source_id: int) -> list:
+    """A factory's pipeline rules (checks/pipeline_rules.py), same shape as a connection's data checks."""
+    if not appdb.table_exists("monitor.checks"):
+        return []
+    return appdb.rows("""
+        SELECT c.check_id, c.name, c.check_type, c.connection_id, c.database, c.schema_name, c.table_name, c.config, c.severity,
+               c.enabled, c.last_status, c.last_run_at, c.description, r.observed, r.expected, r.message, r.details, r.run_at
+        FROM monitor.checks c
+        LEFT JOIN LATERAL (SELECT observed, expected, message, details, run_at FROM monitor.results x
+                           WHERE x.check_id = c.check_id ORDER BY run_at DESC LIMIT 1) r ON true
+        WHERE c.enabled AND c.check_type = 'pipeline' AND (c.config->>'source_id')::int = %(s)s""", {"s": source_id})
+
+
 def _target(c) -> str:
+    if c.get("check_type") == "pipeline":
+        cfg = c.get("config") or {}
+        return f"pipeline {cfg.get('pipeline')}" + (f" · step {cfg['activity']}" if cfg.get("activity") else "")
     return f"{c['schema_name']}.{c['table_name']}" if c.get("table_name") else (
         f"{(c['config'].get('left') or {}).get('label', 'left')} vs {(c['config'].get('right') or {}).get('label', 'right')}"
         if c["check_type"] == "reconciliation" else "custom query")
 
 
-def _check_incident(c, scope_id: int) -> dict | None:
+def _check_incident(c, scope_id: int, prefix: str = "db") -> dict | None:
     st = c["last_status"]
     if st not in ("FAIL", "ERROR", "WARN"):
         return None
     sev = c["severity"] if st == "FAIL" else ("MEDIUM" if st == "ERROR" else "LOW")
     verb = {"FAIL": "failed", "ERROR": "could not run", "WARN": "warning"}[st]
-    return {"id": f"db{scope_id}:CHECK-{c['check_id']}", "severity": sev, "type": {"FAIL": "CHECK_FAILED", "ERROR": "CHECK_ERROR",
+    return {"id": f"{prefix}{scope_id}:CHECK-{c['check_id']}", "severity": sev, "type": {"FAIL": "CHECK_FAILED", "ERROR": "CHECK_ERROR",
             "WARN": "CHECK_WARNING"}[st], "title": f"{c['name']}: {verb}", "summary": c["message"] or "",
             "business_date": None, "source": "check",
             "metrics": {"check_id": c["check_id"], "check_type": c["check_type"], "observed": c["observed"], "expected": c["expected"],
@@ -158,8 +174,15 @@ def _check_signal(c, status: str | None = None) -> dict | None:
     st = status or c["last_status"]
     verb = {"FAIL": "failed", "ERROR": "could not run", "WARN": "warning", "PASS": "passes"}.get(st, "")
     text = f"'{c['name']}' {verb}" + (f": {c['message']}" if c.get("message") and not status else "")
-    return trust.status_signal(CHECK_SUBJECT.get(c["check_type"], "validity"), st, c["severity"], text,
+    subj = (pipeline_subject((c.get("config") or {}).get("kind")) if c["check_type"] == "pipeline"
+            else CHECK_SUBJECT.get(c["check_type"], "validity"))
+    return trust.status_signal(subj, st, c["severity"], text,
                                origin="rule", rule_id=c["check_id"])
+
+
+def pipeline_subject(kind) -> str:
+    from checks import pipeline_rules
+    return pipeline_rules.subject(kind)
 
 
 # ============================================================================ incidents of one source
@@ -210,6 +233,8 @@ def group_of(i: dict) -> tuple[str, str] | None:
             return f"run:{a['pipeline']}:{a['run_id']}", f"same run of {a['pipeline']}"
         return None
     m = i.get("metrics") or {}
+    if re.match(r"^adf\d+:CHECK-\d+$", str(i.get("id", ""))):          # a pipeline rule broken by a run an ADF issue also reports
+        return (f"run:{m['pipeline']}:{m['run_id']}", f"same run of {m['pipeline']}") if m.get("pipeline") and m.get("run_id") else None
     t = m.get("target")
     if t and re.match(r"^[\w$#@]+\.[\w$#@]+$", str(t)):
         return f"table:{t}", f"same table {t}"
@@ -291,6 +316,12 @@ def _incidents(s: dict) -> list:
             out.append({"id": i["id"], "severity": i["severity"], "type": i["type"], "title": i["title"], "summary": i["summary"] or "",
                         "business_date": None, "source": "adf", "adf": i,
                         "metrics": {"pipeline": i.get("pipeline"), "run_id": i.get("run_id"), "n": None, "evidence": ev}})
+        for c in _pipeline_checks_of(s["id"]):                      # the user's own pipeline rules
+            inc = _check_incident(c, s["id"], prefix="adf")
+            if inc:
+                inc["metrics"]["pipeline"] = (c.get("config") or {}).get("pipeline")
+                inc["metrics"]["run_id"] = (c.get("details") or {}).get("run_id")     # the run behind the result, if one
+                out.append(inc)
         return out
     found = [x for x in (_check_incident(c, s["id"]) for c in _checks_of(s["id"], skip_dedupe=s["poc"])) if x]
     if s["poc"]:
@@ -568,7 +599,8 @@ def _check_trend(connection_id: int, days: int = 14) -> list:
 
 def _overview_adf(s: dict) -> dict:
     from adf import insights
-    o = insights.overview(s["id"])
+    rules = [x for x in (_check_signal(c) for c in _pipeline_checks_of(s["id"]) if c["last_status"]) if x]
+    o = insights.overview(s["id"], extra_signals=rules)
     k = o["kpis"]
     issues = o["issues"]
     t = o["trust"]
@@ -690,6 +722,9 @@ ACTIONS = {
     "schema": ["Contact the owner of the change", "Revert it, or update the jobs and views that use the table",
                "Accept the new schema on the check once everything is updated"],
     "custom_sql": ["Review the rows the rule returned", "Fix them at the source", "Re-run the check"],
+    "pipeline": ["Open the run behind the result (see the evidence) and read its error or timings",
+                 "Fix the cause in the factory (trigger, source file, linked service, step settings) and re-run the pipeline",
+                 "If the rule's limit no longer fits how the pipeline should behave, change the rule"],
     "reconciliation": ["Look at the keys that differ (see the evidence)", "Find whether rows are missing or values changed on one side",
                        "Re-load the affected keys and re-run the check"],
 }
@@ -740,8 +775,10 @@ def _investigate_check(s: dict, inc: dict) -> dict:
         if who["changes"] and chk["check_type"] == "schema":             # the person behind a schema change is the root cause
             c = who["changes"][0]
             root += f" Changed by {c['who'] or 'an unknown login'} at {c['at'][:16]} ({c['action'].lower()} {c['object']})."
-    chain = [f"{s['type']} connection {s['name']}" + (f", database {chk['database']}" if chk.get("database") else ""),
-             f"{'table ' + chk['schema_name'] + '.' + chk['table_name'] if chk.get('table_name') else 'query'}",
+    is_pipe = chk["check_type"] == "pipeline"
+    chain = ([f"{s['type']} {s['name']}", _target(chk)] if is_pipe else
+             [f"{s['type']} connection {s['name']}" + (f", database {chk['database']}" if chk.get("database") else ""),
+              f"{'table ' + chk['schema_name'] + '.' + chk['table_name'] if chk.get('table_name') else 'query'}"]) + [
              f"rule: {last.get('expected') or chk['check_type']}", last.get("message") or inc["summary"]]
     if chk.get("description"):
         chain.insert(0, f"Why it matters: {chk['description']}")

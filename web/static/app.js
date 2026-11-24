@@ -8,7 +8,7 @@ let versionCheck = null;
 const sq = () => (state.scope ? "scope=" + encodeURIComponent(state.scope) : "");
 const isPoc = () => state.overview && state.overview.kind === "poc";
 function scopeOfIncident(id) {
-  const m = /^db(\d+):/.exec(id) || null, a = /^adf:(\d+):/.exec(id) || null;
+  const m = /^db(\d+):/.exec(id) || null, a = /^adf:(\d+):/.exec(id) || /^adf(\d+):CHECK-\d+$/.exec(id) || null;   // ADF issue / pipeline rule
   if (m) return `db:${m[1]}`;
   if (a) return `adf:${a[1]}`;
   const poc = state.scopes.find((s) => s.poc);

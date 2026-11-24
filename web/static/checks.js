@@ -28,10 +28,14 @@
     schema: ["Schema change", "Columns were not removed, renamed or changed type since the accepted schema."],
     custom_sql: ["Custom SQL", "Your own read-only query: it must return no rows, or a number that meets a condition."],
     reconciliation: ["Reconciliation", "Two queries (same or different databases) must agree per key, e.g. source totals vs target totals."],
+    pipeline: ["Pipeline rule", "A Data Factory pipeline (or one step) runs on time, succeeds, moves a normal number of rows, or finishes in time."],
   };
   const TABLE_TYPES = ["freshness", "volume", "null_rate", "uniqueness", "schema"];
   const SCHEDULES = [[15, "every 15 min"], [60, "hourly"], [360, "every 6 h"], [1440, "daily"]];
-  const where = (c) => c.check_type === "reconciliation"
+  const factoryName = (sid) => ((state.scopes || []).find((s) => s.key === `adf:${sid}`) || {}).name || `factory ${sid}`;
+  const where = (c) => c.check_type === "pipeline"
+    ? `${esc(factoryName((c.config || {}).source_id))} · pipeline <code>${esc((c.config || {}).pipeline)}</code>${(c.config || {}).activity ? ` · step <code>${esc(c.config.activity)}</code>` : ""}`
+    : c.check_type === "reconciliation"
     ? `${esc((c.config.left || {}).label || "left")} ↔ ${esc((c.config.right || {}).label || "right")}`
     : `${esc(c.connection_name || "connection " + c.connection_id)}${c.table_name ? ` · <code>${esc(c.schema_name)}.${esc(c.table_name)}</code>` : c.database ? ` · ${esc(c.database)}` : ""}`;
   const dots = (h) => `<span class="ck-dots" aria-label="last runs">${(h || []).map((s) => `<i class="${ST[s] || "grey"}" title="${esc(LABEL[s] || s)}"></i>`).join("")}</span>`;
@@ -53,6 +57,10 @@
         <th class="num">Difference</th></tr></thead><tbody>${tr.join("")}</tbody></table></div>`;
     }
     if (c.check_type === "uniqueness" && (d.duplicates || []).length) return `<h4>Duplicate keys <span class="small muted">(first ${d.duplicates.length})</span></h4>${table(d.duplicates)}`;
+    if (c.check_type === "pipeline" && (d.rows || []).length) return `<h4>Runs it looked at <span class="small muted">(newest first)</span></h4>
+      <div class="tablewrap"><table><thead><tr><th>Run</th><th>Status</th><th>Started (UTC)</th><th class="num">Minutes</th><th class="num">Rows written</th></tr></thead><tbody>
+      ${d.rows.map((x) => `<tr><td><a href="#estate-adf-runs=${encodeURIComponent(x.run_id)}">${esc(String(x.run_id).slice(0, 8))}…</a></td><td>${esc(x.status)}</td>
+        <td class="nowrap">${esc(x.started || "")}</td><td class="num">${x.minutes ?? "–"}</td><td class="num">${x.rows_written != null ? n0(x.rows_written) : "–"}</td></tr>`).join("")}</tbody></table></div>`;
     if (c.check_type === "custom_sql" && (d.rows || []).length) return `<h4>Rows returned <span class="small muted">(first ${d.rows.length})</span></h4>${table(d.rows)}`;
     if (c.check_type === "schema" && (d.removed || d.added || d.type_changed)) {
       const parts = [];
@@ -125,7 +133,8 @@
       ["Schedule", c.enabled ? esc((SCHEDULES.find((x) => x[0] === c.schedule_minutes) || [0, `every ${c.schedule_minutes} min`])[1]) : "paused"],
       ["Added by", `${esc(c.created_by || "–")}${c.origin === "starter" ? " (starter check)" : c.origin === "auto" ? " (Start monitoring)" : ""}`], ["Last run", esc(when(c.last_run_at))]];
     const cfg = c.config || {};
-    const rule = c.check_type === "freshness" ? `newest <code>${esc(cfg.column)}</code> at most ${esc(cfg.max_age_hours || 24)} h old`
+    const rule = c.check_type === "pipeline" ? esc(window.PRULES ? window.PRULES.describe(cfg) : cfg.kind)
+      : c.check_type === "freshness" ? `newest <code>${esc(cfg.column)}</code> at most ${esc(cfg.max_age_hours || 24)} h old`
       : c.check_type === "volume" ? `at least ${esc(cfg.min_rows ?? 1)} rows${cfg.window_column ? ` with <code>${esc(cfg.window_column)}</code> in the last ${esc(cfg.window_hours || 24)} h` : ""}; fail if ${esc(cfg.max_drop_pct || 50)}% below usual${cfg.max_growth_pct ? `; warn if ${esc(cfg.max_growth_pct)}% above` : ""}`
       : c.check_type === "null_rate" ? `<code>${esc(cfg.column)}</code> at most ${esc(cfg.max_null_pct || 0)}% empty`
       : c.check_type === "uniqueness" ? `<code>${esc((cfg.columns || []).join(" + "))}</code> unique`
@@ -165,10 +174,13 @@
   // ------------------------------------------------------------------ the measured value over time, against the check's own limit
   const UNIT = { freshness: "hours since the newest row", volume: "rows", null_rate: "% empty", uniqueness: "duplicate keys",
     reconciliation: "keys that differ", custom_sql: "value returned" };
+  const PIPE_UNIT = { success_rate: "% of runs that succeeded", rows: "rows", duration: "minutes", not_stuck: "minutes in progress",
+    finishes_by: "hours after midnight it succeeded", last_run: "1 = succeeded, 0 = failed" };
+  const unitOf = (c) => (c.check_type === "pipeline" ? PIPE_UNIT[(c.config || {}).kind] : UNIT[c.check_type]) || "value";
   const plotted = (c, results) => results.filter((r) => r.observed != null && r.status !== "ERROR").reverse();
   function trendCard(c, results) {
     if (c.check_type === "schema" || plotted(c, results).length < 2 || !window.Chart) return "";
-    return `<div class="card"><h3>Measured over time <span class="small muted">${esc(UNIT[c.check_type] || "value")}, last ${plotted(c, results).length} runs</span></h3>
+    return `<div class="card"><h3>Measured over time <span class="small muted">${esc(unitOf(c))}, last ${plotted(c, results).length} runs</span></h3>
       <div class="chartbox"><canvas id="ckTrend"></canvas></div><div class="chart-legend" id="ckTrendLegend"></div></div>`;
   }
   function limits(c, results) {
@@ -179,6 +191,14 @@
       if (Number(cfg.min_rows) > 1) out.push({ y: Number(cfg.min_rows), label: `Minimum ${n0(cfg.min_rows)}` });
       const usual = ((results[0] || {}).details || {}).usual;
       if (usual) out.push({ y: usual * (1 - (Number(cfg.max_drop_pct) || 50) / 100), label: `Fails below ${n0(Math.round(usual * (1 - (Number(cfg.max_drop_pct) || 50) / 100)))}` });
+    }
+    if (c.check_type === "pipeline") {
+      if (cfg.kind === "success_rate") out.push({ y: Number(cfg.min_pct), label: `At least ${cfg.min_pct}%` });
+      if (cfg.kind === "duration" || cfg.kind === "not_stuck") out.push({ y: Number(cfg.max_minutes), label: `Limit ${cfg.max_minutes} min` });
+      if (cfg.kind === "rows" && cfg.mode === "range") {
+        if (cfg.min != null) out.push({ y: Number(cfg.min), label: `At least ${n0(cfg.min)}` });
+        if (cfg.max != null) out.push({ y: Number(cfg.max), label: `At most ${n0(cfg.max)}` });
+      }
     }
     if (c.check_type === "custom_sql" && cfg.mode === "value" && cfg.threshold != null) out.push({ y: Number(cfg.threshold), label: `Expected ${cfg.op || "="} ${cfg.threshold}` });
     return out;
@@ -284,6 +304,8 @@
   }
 
   async function pageForm() {
+    const pipe = C.f ? C.f.check_type === "pipeline" : !C.editing && typeof isAdfScope === "function" && isAdfScope();
+    if (pipe && window.PRULES) return window.PRULES.page({ editing: C.editing, f: C.f && C.f.check_type === "pipeline" ? C.f : null });
     if (!isAdmin()) return { html: `<div class="card"><p class="muted">Only an admin can add or change checks.</p></div>`, bind() {} };
     const f = (C.f = C.f || blank());
     f.config = f.config || {};
@@ -528,6 +550,7 @@
       if (page === "estate-checks-new") { C.editing = null; C.f = null; C.preview = null; }
     },
     open(id) { C.open = Number(id) || null; },
+    resetForm() { C.editing = null; C.f = null; C.preview = null; },   // the pipeline rule form saved or left
     async edit(id) {
       try { goForm((await api(`/${Number(id)}`)).check); }
       catch (x) { toast(x.message); }

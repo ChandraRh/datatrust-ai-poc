@@ -100,6 +100,37 @@ def start_monitoring(body: StartBody, user: dict = Depends(admin_user)):
     return r
 
 
+# ---------------------------------------------------------------- pipeline rules (a Data Factory pipeline's runs)
+@router.get("/pipeline/options")
+def pipeline_options(source_id: int, user: dict = Depends(current_user)):
+    """The factory's pipelines and their steps, for the pipeline rule form."""
+    from . import pipeline_rules
+    return guard(pipeline_rules.options, source_id)
+
+
+@router.get("/pipeline/suggest")
+def pipeline_suggest(source_id: int, pipeline: str, activity: Optional[str] = None, utc_offset_min: int = 0,
+                     user: dict = Depends(admin_user)):
+    """Rules that fit what this pipeline usually does (from its last 30 days of runs), each with today's result. Nothing is saved."""
+    from . import pipeline_rules
+    return {"suggestions": guard(pipeline_rules.suggest, source_id, pipeline, activity or None, utc_offset_min)}
+
+
+class PipelineText(BaseModel):
+    source_id: int
+    pipeline: str
+    activity: Optional[str] = None
+    text: str
+    utc_offset_min: int = 0
+
+
+@router.post("/pipeline/from-text")
+def pipeline_from_text(body: PipelineText, user: dict = Depends(admin_user)):
+    """A pipeline rule described in plain words (AI when a model is configured, else common phrasings). Nothing is saved."""
+    from . import pipeline_rules
+    return guard(pipeline_rules.from_text, body.source_id, body.pipeline, body.activity or None, body.text, body.utc_offset_min)
+
+
 @router.get("/{check_id}")
 def detail(check_id: int, user: dict = Depends(current_user)):
     return {"check": guard(store.get_check, check_id), "results": store.history(check_id)}

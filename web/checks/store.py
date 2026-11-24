@@ -9,7 +9,7 @@ from psycopg.types.json import Jsonb
 
 import appdb
 
-TYPES = ("freshness", "volume", "null_rate", "uniqueness", "schema", "custom_sql", "reconciliation")
+TYPES = ("freshness", "volume", "null_rate", "uniqueness", "schema", "custom_sql", "reconciliation", "pipeline")
 SEVERITIES = ("LOW", "MEDIUM", "HIGH", "CRITICAL")
 TABLE_TYPES = ("freshness", "volume", "null_rate", "uniqueness", "schema")
 KEEP_DAYS = 90
@@ -86,6 +86,10 @@ def validate(body: dict) -> dict:
     out = {"name": name, "check_type": t, "severity": sev, "schedule_minutes": minutes,
            "enabled": bool(body.get("enabled", True)), "description": (body.get("description") or "").strip()[:500] or None,
            "config": dict(body.get("config") or {}), "connection_id": None, "database": None, "schema_name": None, "table_name": None}
+    if t == "pipeline":                                 # a Data Factory pipeline's runs (checks/pipeline_rules.py): no connection
+        from . import pipeline_rules
+        out["config"] = pipeline_rules.validate_config(out["config"])
+        return out
     if t != "reconciliation":
         if not str(body.get("connection_id") or "").isdigit():
             raise ValueError("choose the connection to check")

@@ -68,6 +68,12 @@ def health(nodes: dict, scopes: list) -> None:
     conns = {c["connection_id"]: c for c in store.list_connections()}
     by_table = {}
     for s in scopes:
+        if s["kind"] == "adf":                                        # a factory's own pipeline rules -> its pipeline's box
+            for chk in sc._pipeline_checks_of(s["id"]):
+                if chk.get("last_status"):
+                    nid = model.job_id("adf", str(s["id"]), (chk.get("config") or {}).get("pipeline", ""))
+                    by_table.setdefault(nid, []).append({"name": chk["name"], "status": chk["last_status"], "check_id": chk["check_id"]})
+            continue
         if s["kind"] != "db" or s["id"] not in conns:
             continue
         c = conns[s["id"]]

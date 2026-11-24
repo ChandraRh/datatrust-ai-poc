@@ -421,6 +421,7 @@
     return {
       html: backBar("All runs") + `<div class="card adf-runhead"><div class="draft-head"><h2 style="margin:0">${esc(p.name)}</h2> ${healthChip(p.health)}
           ${p.score != null ? `<span class="small muted">trust ${p.score}/100</span>` : ""}<span class="grow"></span>
+          ${window.PRULES && est.user && est.user.role === "admin" ? `<button class="btn light btn-sm" id="adfAddRule" type="button" title="Your own rule on this pipeline: on time, success, rows, run time">+ Add rule</button>` : ""}
           ${p.adf_link ? `<a class="btn light btn-sm" href="${esc(p.adf_link)}" target="_blank" rel="noopener">ADF Monitor ↗</a>` : ""}</div>
           ${p.description ? `<p>${esc(p.description)}</p>` : ""}
           <div class="small muted">${esc(p.factory)}${p.folder ? " · folder " + esc(p.folder) : ""}${p.removed ? " · <span class='warn'>no longer in the factory</span>" : ""}</div>
@@ -436,6 +437,7 @@
       bind() {
         bindBack();
         bindLinks($e("body-estate-adf-runs"));
+        if ($e("adfAddRule")) $e("adfAddRule").onclick = () => window.PRULES.newFor(sid, name);
         const labels = finished.map((r) => when(r.run_start));
         const colors = finished.map((r) => (r.status === "Succeeded" ? "#11805A" : r.status === "Failed" ? "#C42B2B" : "#94A3B8"));
         const opts = { maintainAspectRatio: false, plugins: { legend: { display: false } }, scales: { x: { ticks: { display: false }, grid: { display: false } }, y: { beginAtZero: true } },

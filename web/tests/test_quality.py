@@ -46,7 +46,7 @@ class QualityTests(unittest.TestCase):
         pipe = {"properties": {"activities": [{"name": "CP", "type": "Copy", "typeProperties": {
             "translator": {"type": "Expression", "value": "@json(activity('LK').output.firstRow.column_mapping)"}}}]}}
         with patch.object(quality.appdb, "rows", side_effect=[[], [{"name": "PL", "body": pipe}]]):
-            r = quality._adf_rules({"id": 3})
+            r = quality._adf_steps({"id": 3})          # the Copy steps part of the factory's rules page
         st = r["steps"][0]
         self.assertFalse(st["skip_incompatible_rows"])
         self.assertEqual(st["mapping_at_runtime"], "@json({column_mapping from LK})")

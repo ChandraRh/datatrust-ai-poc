@@ -99,7 +99,7 @@ def classify(row: dict, open_now: list) -> tuple:
     try:
         if iid.startswith("adf:"):
             return _adf(iid, open_ids)
-        if re.match(r"^db\d+:CHECK-\d+$", iid):
+        if re.match(r"^(?:db|adf)\d+:CHECK-\d+$", iid):              # a data check or a pipeline rule
             return _check(int(iid.rsplit("-", 1)[1]), row["first_seen"])
         if t == "PIPELINE_INCOMPLETE" or iid.endswith("-INCOMPLETE"):
             return _incomplete(iid, open_ids)
