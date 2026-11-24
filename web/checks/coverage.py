@@ -257,7 +257,8 @@ def _connection_for(asset: dict, cfg: dict, conns: list) -> dict | None:
     return match[0] if match else None
 
 
-LOOKUP_REF = re.compile(r"activity\('([^']+)'\)\.output\.firstRow\.(\w+)")
+# a Lookup's result used in an expression: output.firstRow.x (first row only) or output.value[0].x (all rows)
+LOOKUP_REF = re.compile(r"activity\('([^']+)'\)\.output\.(?:firstRow|value\[\d+\])\.(\w+)")
 
 
 def _runtime_tables(source_id: int, pipeline: str, schema, table) -> list:
@@ -272,16 +273,19 @@ def _runtime_tables(source_id: int, pipeline: str, schema, table) -> list:
                            WHERE source_id = %s AND pipeline_name = %s AND activity_name = ANY(%s) AND status = 'Succeeded'
                              AND run_start > now() - interval '30 days'
                            ORDER BY run_start DESC LIMIT 500""", (source_id, pipeline, list(acts))):
-        first = ((r.get("output") or {}) if isinstance(r.get("output"), dict) else {}).get("firstRow") or {}
-        got = {}
-        for part, m in refs.items():
-            value = (first.get(m.group(2)) if m and m.group(1) == r["activity_name"] else
-                     None if m else (schema if part == "schema" else table))
-            got[part] = value
-        if got["schema"] and got["table"] and "@" not in str(got["schema"]) + str(got["table"]):
-            pair = (str(got["schema"]), str(got["table"]))
-            if pair not in out:
-                out.append(pair)
+        output = r.get("output") if isinstance(r.get("output"), dict) else {}
+        rows = ([output["firstRow"]] if isinstance(output.get("firstRow"), dict) else []) + \
+               [v for v in output.get("value") or [] if isinstance(v, dict)]
+        for first in rows:
+            got = {}
+            for part, m in refs.items():
+                value = (first.get(m.group(2)) if m and m.group(1) == r["activity_name"] else
+                         None if m else (schema if part == "schema" else table))
+                got[part] = value
+            if got["schema"] and got["table"] and "@" not in str(got["schema"]) + str(got["table"]):
+                pair = (str(got["schema"]), str(got["table"]))
+                if pair not in out:
+                    out.append(pair)
     return out
 
 

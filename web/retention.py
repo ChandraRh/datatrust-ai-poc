@@ -4,7 +4,8 @@ default 90; 0 keeps everything). Runs in the web process once a day (the first t
 
     removed after RETENTION_DAYS   monitor.results (each rule's latest result is always kept), ADF run history:
                                    pipeline / step / trigger runs and after-run checks (each pipeline's latest run is
-                                   always kept), the AI answer cache (rebuilt on the next button press)
+                                   always kept), the AI answer cache (rebuilt on the next button press),
+                                   the trust score history (app.trust_history)
     removed after 30 days          telemetry.sync_log (when the collector read the factory)
     removed once expired           portal.auth_tokens (sign-in and e-mail verification links)
     kept forever                   portal.audit_log, portal.access_requests, app.remediation_log (the audit trail),
@@ -41,6 +42,7 @@ STEPS = [
         AND NOT EXISTS (SELECT 1 FROM telemetry.pipeline_runs p WHERE p.source_id = c.source_id AND p.run_id = c.run_id)"""),
     ("telemetry.trigger_runs", "FROM telemetry.trigger_runs WHERE fired_at < %(cut)s"),
     ("app.ai_notes", "FROM app.ai_notes WHERE created_at < %(cut)s"),
+    ("app.trust_history", "FROM app.trust_history WHERE recorded_at < %(cut)s"),
     ("telemetry.sync_log", "FROM telemetry.sync_log WHERE started_at < %(sync_cut)s"),
     ("portal.auth_tokens", "FROM portal.auth_tokens WHERE expires_at < %(now)s - interval '1 day'"),
 ]

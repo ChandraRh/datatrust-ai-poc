@@ -99,7 +99,20 @@
         <div id="gaugeLabel" class="gauge-label"></div>
         <div class="muted">Data Trust Score</div>
       </div>
-      <div class="card"><h3 id="trendTitle">Trust score by business date</h3><div class="chartbox"><canvas id="trendChart"></canvas></div><p id="trendEmpty" class="muted small hidden"></p></div>
+      <!-- one score chart, two views: over time (DataTrust's own record, web/score_history.py) or by business date / day -->
+      <div class="card" id="histCard">
+        <div class="draft-head"><h3 id="trendTitle" style="margin:0">Trust score over time</h3>
+          <div class="seg seg-sm" id="trendViews" role="group" aria-label="Chart view" style="margin-left:auto">
+            <button type="button" data-view="time">Over time</button><button type="button" data-view="date" id="trendViewDate">By business date</button></div></div>
+        <div id="histView">
+          <div class="hist-bar"><p class="small muted chart-sub" id="histSub"></p>
+            <div class="seg seg-sm" id="histRange" role="group" aria-label="Period"></div></div>
+          <div class="chartbox"><canvas id="histChart" role="img" aria-label="Trust score over time with incidents opened and closed"></canvas></div>
+          <div id="histLegend" class="chart-legend"></div>
+          <div id="histEvents" class="hist-events"></div>
+        </div>
+        <div id="dateView" class="hidden"><div class="chartbox"><canvas id="trendChart"></canvas></div><p id="trendEmpty" class="muted small hidden"></p></div>
+      </div>
     </div>
     <div class="kpis" id="obsKpis"></div>
     <div class="grid g-2">
@@ -169,7 +182,7 @@
   <section id="page-lineage" class="page hidden">
     <div class="page-head"><h1>4. Explain: source → target lineage</h1>
       <div class="seg" id="linToggle" role="group" aria-label="Lineage view">
-        <button data-view="graph" class="active">Graph</button><button data-view="list">List</button></div></div>
+        <button data-view="map" class="active">Lineage map</button><button data-view="graph" data-poc>Latest batch</button><button data-view="list" data-poc>Batch list</button></div></div>
     <p class="sub" id="linSub"></p>
     <div id="linBody"></div>
   </section>
@@ -338,7 +351,8 @@
     }));
   })();
 </script>
-<script src="/static/lineage-graph.js"></script>   <!-- lineage graph view -->
+<script src="/static/lineage-graph.js"></script>   <!-- lineage graph view (POC latest batch) -->
+<script src="/static/lineage-map.js"></script>     <!-- lineage map: every source (Cytoscape.js + dagre, loaded on first use) -->
 <script src="/static/app.js"></script>
 <script src="/static/estate.js"></script>   <!-- Data Estate module -->
 <script src="/static/dq.js"></script>   <!-- Data quality: Rejected records + DQ Rule Studio -->

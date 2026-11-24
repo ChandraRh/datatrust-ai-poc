@@ -430,12 +430,135 @@ function lastRunKpi(p) {
   return ["Last run", ok ? "SUCCESS" : "CHECK", ok ? "" : "bad"];
 }
 
+// ------------------------------------------------------------------ 1. observe: trust score over time (DataTrust's own record)
+// One series (the score, stepped: it holds until the next change) and two kinds of event marks on the line:
+// incident opened (triangle; red for critical / high, amber otherwise) and closed (circle; green when verified, grey when not).
+// Shape + label carry the meaning, colour only repeats it; the list under the chart is the table view of the same events.
+const HIST_RANGES = [[24, "24 hours"], [168, "7 days"], [720, "30 days"]];
+let histHours = 168;
+try { histHours = Number(localStorage.getItem("dt.histHours")) || 168; } catch (e) {}
+const HIST_MARK = { opened: { bad: CH.bad, warn: color.warn }, closed: { ok: CH.ok, no: CH.grey } };
+const evColor = (e) => (e.kind === "opened" ? (["CRITICAL", "HIGH"].includes(e.severity) ? HIST_MARK.opened.bad : HIST_MARK.opened.warn)
+  : e.verified ? HIST_MARK.closed.ok : HIST_MARK.closed.no);
+function histTime(ms, hours) {
+  const d = new Date(ms);
+  return hours <= 24 ? d.toLocaleTimeString(undefined, { hour: "2-digit", minute: "2-digit" })
+    : d.toLocaleDateString(undefined, { day: "numeric", month: "short" });
+}
+const histFull = (ms) => new Date(ms).toLocaleString(undefined, { day: "numeric", month: "short", hour: "2-digit", minute: "2-digit" });
+
+// One card, two views of the score: "Over time" (recorded) and the source's own by-date view (POC: by business date;
+// a database: by day from check results; a factory: runs per day). The choice is remembered.
+let trendView = "time", dateTitle = "Trust score by business date";
+try { trendView = localStorage.getItem("dt.trendView") === "date" ? "date" : "time"; } catch (e) {}
+function setDateView(button, title) {
+  dateTitle = title;
+  $("trendViewDate").textContent = button;
+  applyTrendView();
+}
+function applyTrendView() {
+  $("histView").classList.toggle("hidden", trendView !== "time");
+  $("dateView").classList.toggle("hidden", trendView !== "date");
+  $("trendTitle").textContent = trendView === "time" ? "Trust score over time" : dateTitle;
+  $("trendViews").querySelectorAll("button").forEach((b) => {
+    b.classList.toggle("active", b.dataset.view === trendView);
+    b.setAttribute("aria-pressed", String(b.dataset.view === trendView));
+    b.onclick = () => {
+      trendView = b.dataset.view;
+      try { localStorage.setItem("dt.trendView", trendView); } catch (e) {}
+      applyTrendView();
+      const ch = state.charts[trendView === "time" ? "histChart" : "trendChart"];   // drawn while hidden: fit it now
+      if (ch) ch.resize();
+    };
+  });
+}
+
+async function renderHistory() {
+  if (!$("histCard") || !state.overview) return;
+  $("histRange").innerHTML = HIST_RANGES.map(([h, l]) =>
+    `<button type="button" data-h="${h}" class="${h === histHours ? "active" : ""}" aria-pressed="${h === histHours}">${l}</button>`).join("");
+  $("histRange").querySelectorAll("button").forEach((b) => (b.onclick = () => {
+    histHours = Number(b.dataset.h);
+    try { localStorage.setItem("dt.histHours", String(histHours)); } catch (e) {}
+    renderHistory();
+  }));
+  let d;
+  try { d = await api(`/api/trust/history?hours=${histHours}&${sq()}`); }
+  catch (e) { $("histSub").textContent = `History is not available: ${e.message}`; return; }
+  const now = Date.now(), since = Date.parse(d.since);
+  const t = state.overview.trust || {};
+  const pts = d.points.filter((p) => p.score != null).map((p) => ({ x: Date.parse(p.at), y: p.score, p }));
+  if (t.score != null) pts.push({ x: now, y: t.score, p: { label: t.label, open: (state.incidents && state.incidents.open || []).length, live: true } });
+  // the score at that moment; null before the first recorded point (that event is listed below, not placed on the line)
+  const scoreAt = (ms) => { let s = null; for (const p of pts) { if (p.x <= ms) s = p.y; else break; } return s; };
+  const evs = d.events.map((e) => ({ ...e, ms: Date.parse(e.at), kind: e.kind === "resolved" ? "closed" : "opened" }));
+  const opened = evs.filter((e) => e.kind === "opened"), closed = evs.filter((e) => e.kind === "closed");
+  const recorded = d.points.length;
+  if (!pts.length) {
+    $("histSub").textContent = "Nothing measured yet for this source.";
+  } else {
+    const ys = pts.map((p) => p.y), low = Math.min(...ys), lowAt = pts.find((p) => p.y === low);
+    $("histSub").textContent = recorded < 2
+      ? "DataTrust records this source's score every few minutes (a new point only when it changes); the line fills in from now on."
+      : `Now ${t.score ?? "–"}. Lowest ${low} (${histFull(lowAt.x)}). ${opened.length} incident(s) opened and ${closed.length} closed in this period.`;
+  }
+  $("histLegend").innerHTML = `<span><i class="line" style="background:${CH.brand}"></i>Trust score</span>
+    <span><i style="background:${HIST_MARK.opened.bad};clip-path:polygon(50% 0,100% 100%,0 100%);border-radius:0"></i>Opened: critical / high</span>
+    <span><i style="background:${HIST_MARK.opened.warn};clip-path:polygon(50% 0,100% 100%,0 100%);border-radius:0"></i>Opened: medium / low</span>
+    <span><i style="background:${HIST_MARK.closed.ok};border-radius:50%"></i>Closed, verified</span>
+    <span><i style="background:${HIST_MARK.closed.no};border-radius:50%"></i>Closed, not verified</span>`;
+  const onLine = (list) => list.filter((e) => scoreAt(e.ms) != null);
+  const mark = (all, style) => { const list = onLine(all); return { type: "scatter", data: list.map((e) => ({ x: e.ms, y: scoreAt(e.ms), e })),
+    pointStyle: style, pointRadius: 6, pointHoverRadius: 8, pointBackgroundColor: list.map(evColor), pointBorderColor: "#fff", pointBorderWidth: 2, label: style === "triangle" ? "Opened" : "Closed" }; };
+  const base = chartBase({ min: 0, max: 100, thresholds: TRUST_LINES });
+  base.interaction = { mode: "nearest", intersect: false };
+  // ticks on whole hours / days (local time), not at odd minutes counted from "now minus 24 h"
+  const HOUR = 3600e3, step = histHours <= 24 ? 3 * HOUR : histHours <= 168 ? 24 * HOUR : 5 * 24 * HOUR;
+  const first = new Date(since); first.setMinutes(0, 0, 0); if (step >= 24 * HOUR) first.setHours(0);
+  base.scales.x = { type: "linear", min: since, max: now, grid: { display: false },
+    afterBuildTicks: (axis) => { const ticks = []; for (let v = first.getTime(); v <= now; v += step) if (v >= since) ticks.push({ value: v }); axis.ticks = ticks; },
+    ticks: { maxRotation: 0, autoSkip: true, autoSkipPadding: 18, callback: (v) => histTime(v, histHours) } };
+  base.plugins.tooltip.callbacks = {
+    title: (items) => histFull(items[0].parsed.x),
+    label: (c) => {
+      const r = c.raw;
+      if (!r.e) return `Trust score ${r.y}${r.p && r.p.label ? ` · ${r.p.label}` : ""}${r.p && r.p.open != null ? ` · ${r.p.open} open` : ""}${r.p && r.p.live ? " (now)" : ""}`;
+      return `${r.e.kind === "opened" ? "Opened" : "Closed"} (${r.e.severity}): ${r.e.title}`;
+    },
+    afterLabel: (c) => (c.raw.e && c.raw.e.kind === "closed" ? `${c.raw.e.reason}${c.raw.e.verified ? "" : " (not verified)"}` : ""),
+  };
+  base.onClick = (_evt, els, chart) => {
+    const el = els.find((x) => chart.data.datasets[x.datasetIndex].data[x.index].e);
+    if (el) { const e = chart.data.datasets[el.datasetIndex].data[el.index].e; e.kind === "opened" ? go("investigate", e.incident_id) : go("verify", e.incident_id); }
+  };
+  base.onHover = (evt, els, chart) => { evt.native.target.style.cursor = els.some((x) => chart.data.datasets[x.datasetIndex].data[x.index].e) ? "pointer" : "default"; };
+  if (state.charts.histChart) state.charts.histChart.destroy();
+  if (window.Chart) {
+    state.charts.histChart = new Chart($("histChart"), { type: "line", options: base, data: { datasets: [
+      { type: "line", label: "Trust score", data: pts, stepped: "before", borderColor: CH.brand, backgroundColor: "rgba(6,114,161,.08)",
+        borderWidth: 2, fill: true, pointRadius: 0, pointHoverRadius: 4, pointHitRadius: 6 },
+      mark(opened, "triangle"), mark(closed, "circle")] } });
+  }
+  // the same events as a list (newest first): what moved the score
+  const list = evs.slice().reverse();
+  const row = (e) => `<li><time>${esc(histFull(e.ms))}</time>
+      <span class="chip ${e.kind === "opened" ? (["CRITICAL", "HIGH"].includes(e.severity) ? "bad" : "warn") : e.verified ? "ok" : "grey"}">${e.kind === "opened" ? `Opened · ${esc(e.severity.toLowerCase())}` : esc(e.reason)}</span>
+      <a href="#${e.kind === "opened" ? "investigate" : "verify"}=${encodeURIComponent(e.incident_id)}">${esc(e.title)}</a>
+      ${e.kind === "closed" && e.detail ? `<div class="small muted">${esc(e.detail)}</div>` : ""}</li>`;
+  const wasOpen = !!($("histEvents").querySelector("details[open]"));   // an auto refresh keeps it open
+  $("histEvents").innerHTML = list.length
+    ? `<details${wasOpen ? " open" : ""}><summary>What moved the score <span class="muted">(${opened.length} opened, ${closed.length} closed)</span></summary>
+         <ul class="hist-list">${list.map(row).join("")}</ul></details>`
+    : `<p class="small muted">No incident opened or closed in this period.</p>`;
+}
+
 function renderObserve() {
+  renderHistory();
   aiBriefing();
   if (!isPoc()) return renderObserveGeneric();
   showPocCards(true);
   $("obsSub").textContent = `${state.overview.scope ? state.overview.scope.name + ": " : ""}source files → Bronze → Silver → Gold, monitored after every pipeline run.`;
-  $("trendTitle").textContent = "Trust score by business date";
+  setDateView("By business date", "Trust score by business date");
   const { overview: o, trust: t, pipeline: p } = state.overview;
   const cov = o.coverage || {};
   $("obsTitle").textContent = "1. Observe: " + ({ Healthy: "the estate is healthy", "Needs attention": "the estate needs attention", "At risk": "the estate is at risk" }[t.label] || t.label);
@@ -526,7 +649,7 @@ function renderObserveGeneric() {
   $("freshnessNotice").classList.add("hidden");
   gauge("gauge", t.score);
   $("gaugeLabel").innerHTML = `<span class="${t.score == null ? "muted" : tone(t.score)}">${esc(t.label)}</span>${trustConfidence(t)}`;
-  $("trendTitle").textContent = o.runs_by_day ? "Pipeline runs per day, last 14 days" : o.trend_label || "Trust score by day";
+  setDateView(o.runs_by_day ? "Runs per day" : "By day", o.runs_by_day ? "Pipeline runs per day, last 14 days" : o.trend_label || "Trust score by day");
   if (o.runs_by_day && o.runs_by_day.some((d) => d.Succeeded + d.Failed + d.Cancelled + d.Other)) {
     // a factory: how many runs, and how many failed, every day (a quiet day shows as zero, not as a gap)
     const R = o.runs_by_day, labels = R.map((d) => d.day);
@@ -550,7 +673,9 @@ function renderObserveGeneric() {
   $("itemsTitle").textContent = o.items_title || "What is watched";
   $("itemsBody").innerHTML = o.items.length
     ? o.items.map((i) => { const [c, l] = STATUS_CHIP[i.status] || ["grey", "Not run"];
-        return `<div class="item"><div>${esc(i.name)} <span class="small muted">${esc(i.detail || "")}</span></div><span class="chip ${c}">${esc(i.label || l)}</span></div>`; }).join("")
+        const href = s.kind === "adf" ? adfHref(s.id, i.name) : null;     // a factory's pipeline: open its runs and steps
+        const name = href ? `<a href="${href}" title="Open ${esc(i.name)}: its runs, steps and rows">${esc(i.name)}</a>` : esc(i.name);
+        return `<div class="item"><div>${name} <span class="small muted">${esc(i.detail || "")}</span></div><span class="chip ${c}">${esc(i.label || l)}</span></div>`; }).join("")
     : `<p class="muted small">${esc(o.empty || "Nothing yet.")}</p>`
       + (s.kind === "db" ? `<button class="btn btn-sm" onclick="document.querySelector('#tabs [data-page=estate-dq-coverage]').click()">Start monitoring</button>` : "");
 }
@@ -572,7 +697,20 @@ function incidentRow(i) {
       ${ownerLine(i)}<div class="owner-form" data-owner-form="${esc(i.id)}"></div></div>
     <div class="inc-acts">${i.acknowledged_by ? "" : `<button class="btn light" data-ack="${esc(i.id)}">Acknowledge</button>`}
     <button class="btn light" data-contact="${esc(i.title + " — " + i.summary)}" data-incident="${esc(i.id)}">Contact owner</button>
-    ${recordsButton(i)}<button class="btn light" onclick="go('investigate','${esc(i.id)}')">Investigate</button></div></div>`;
+    ${recordsButton(i)}${adfButton(i)}<button class="btn light" onclick="go('investigate','${esc(i.id)}')">Investigate</button></div></div>`;
+}
+// Drill-down into the Azure Data Factory pages: a run (its steps, rows, error) or a pipeline (all its runs)
+function adfHref(sid, pipeline, run) {
+  if (run && run !== "-") return `#estate-adf-runs=${encodeURIComponent(run)}`;
+  if (pipeline && pipeline !== "-") return `#estate-adf-runs=${encodeURIComponent(`pipeline:${sid}:${pipeline}`)}`;
+  return null;
+}
+function adfButton(i) {
+  const m = /^adf:(\d+):/.exec(i.id || ""), a = i.adf || {};
+  const href = m && adfHref(m[1], a.pipeline, a.run_id);
+  if (!href) return "";
+  const run = a.run_id && a.run_id !== "-";
+  return `<a class="btn light" href="${href}" title="${run ? "This run's steps, rows and error" : `Every run of ${esc(a.pipeline)}`} in ADF runs">${run ? "Open the run" : "Open the pipeline"}</a>`;
 }
 // Time to fix (Built-in checks -> Time to fix): overdue in red, less than a quarter of the time left in amber
 const hrs = (h) => (Math.abs(h) < 48 ? `${Math.round(Math.abs(h))} h` : `${Math.round(Math.abs(h) / 24)} days`);
@@ -893,8 +1031,8 @@ async function aiExplain(id, boxId, where, generate = false) {
 }
 
 // ------------------------------------------------------------------ 4. lineage
-let linView = "graph";
-try { linView = localStorage.getItem("dt.linView") || "graph"; } catch (e) {}
+let linView = "map";                                            // map: every source; graph / list: the POC's latest batch
+try { linView = localStorage.getItem("dt.linView") || "map"; } catch (e) {}
 document.querySelectorAll("#linToggle button").forEach((b) => b.addEventListener("click", () => {
   linView = b.dataset.view;
   try { localStorage.setItem("dt.linView", linView); } catch (e) {}
@@ -903,17 +1041,18 @@ document.querySelectorAll("#linToggle button").forEach((b) => b.addEventListener
   renderLineage();
 }));
 async function renderLineage() {
-  const lin = await api("/api/lineage?" + sq());
-  $("linToggle").classList.toggle("hidden", lin.kind !== "poc");
-  if (lin.kind !== "poc") {                                     // another source: its own flows (factory copy steps, or watched tables -> views)
-    const C = { PASS: "ok", WARN: "warn", FAIL: "bad", ERROR: "bad" };
-    $("linSub").textContent = lin.note || "";
-    $("linBody").innerHTML = `<div class="card"><h3>${esc(lin.title)}</h3>${lin.flows.length ? `<div class="tablewrap" style="max-height:none"><table>
-      <thead><tr><th>From</th><th>Through</th><th>To</th><th>Status</th></tr></thead><tbody>${lin.flows.map((f) => `<tr><td class="small">${esc(f.from)}</td>
-      <td class="small">${esc(f.via)}</td><td class="small">${esc(f.to)}</td><td><span class="chip ${C[f.status] || "grey"}">${esc({ PASS: "OK", WARN: "Warning", FAIL: "Problem", ERROR: "Error" }[f.status] || "Not checked")}</span></td></tr>`).join("")}
-      </tbody></table></div>` : `<p class="muted">${esc(lin.note)}</p>`}</div>`;
+  const poc = isPoc();
+  $("linToggle").classList.toggle("hidden", !poc);                // only the POC has a latest-batch view as well
+  const view = poc ? linView : "map";
+  document.querySelectorAll("#linToggle button").forEach((b) => b.classList.toggle("active", b.dataset.view === view));
+  if (view === "map" || !window.LineageGraph && view === "graph") {
+    $("linSub").textContent = "Built from what each system knows about itself: database catalogs, function and procedure code, "
+      + "Data Factory pipeline definitions and the table names recent runs used. The same table seen by two sources is one box, "
+      + "so links run across sources.";
+    if (window.LineageMap) await window.LineageMap.render($("linBody"));
     return;
   }
+  const lin = await api("/api/lineage?" + sq());
   $("linSub").textContent = `Latest batch ${lin.batch_id} (${lin.business_date}). Gold views come from the PostgreSQL catalog (information_schema.view_table_usage).`;
   document.querySelectorAll("#linToggle button").forEach((b) => b.classList.toggle("active", b.dataset.view === linView));
   if (linView === "graph" && window.LineageGraph) {             // graph view (lineage-graph.js); List below is unchanged
@@ -1074,7 +1213,12 @@ async function renderVerify(arg) {
       <span class="chip ${ok ? "ok" : "warn"}">${esc(r.resolution_label)}</span>
       <div class="small">${esc(r.resolution_detail)}</div>
       <div class="small muted">${r.first_seen ? `Open ${when(r.first_seen)} → ` : ""}gone ${when(r.resolved_at)}${r.approved_by ? ` · fix approved by ${esc(r.approved_by)}` : ""}${r.actions ? ` · ${esc(r.actions)}` : ""}</div></div>`;
+  const byReason = {};                                             // what fixed them: one line per reason, verified first
+  resolved.forEach((r) => { const k = r.resolution_label; byReason[k] = byReason[k] || { n: 0, ok: r.verified }; byReason[k].n++; });
+  const reasons = Object.entries(byReason).sort((a, b) => (b[1].ok - a[1].ok) || (b[1].n - a[1].n));
   $("verifyBody").innerHTML = `
+    ${reasons.length ? `<div class="card fixed-by"><h3>What fixed them, last 7 days</h3><div class="fixed-by-row">${reasons.map(([k, v]) =>
+      `<span class="fixed-by-item"><b>${v.n}</b><span class="chip ${v.ok ? "ok" : "warn"}">${esc(k)}</span></span>`).join("")}</div></div>` : ""}
     ${verified.length ? `<div class="banner ok"><h2>${verified.length} INCIDENT(S) VERIFIED RESOLVED</h2>${verified.map((r) => `✓ ${esc(r.incident_title)}: ${esc(r.resolution_label.toLowerCase())}.`).join("<br>")}</div>` : ""}
     ${unverified.length ? `<div class="banner warn"><h2>${unverified.length} STOPPED SHOWING WITHOUT A VERIFIED FIX</h2>The data no longer shows them, but nothing proves they were fixed: check each one below.</div>` : ""}
     <div class="grid g-2">
@@ -1085,7 +1229,7 @@ async function renderVerify(arg) {
         ${verified.length ? `<h4 class="verify-h">Verified resolved</h4>${verified.map((r) => item(r, true)).join("")}` : ""}
         ${unverified.length ? `<h4 class="verify-h">Not verified</h4>${unverified.map((r) => item(r, false)).join("")}` : ""}
         ${!waiting.length && !resolved.length ? "<p class='muted'>Nothing approved or resolved in the last 7 days. Approve a fix on page 5; it shows as resolved once the data no longer has the problem.</p>" : ""}
-        <p class="small muted">Verified means DataTrust saw why: it corrected the rows, a newer pipeline run succeeded with the same rule, the check ran again and passed, or a schema change was accepted. When a rule was changed or switched off, or nothing was recorded, the incident is listed as not verified.</p>
+        <p class="small muted">Verified means DataTrust saw why: it corrected the rows, the source sent the corrected rows again in a later batch, a newer pipeline run succeeded with the same rule, the check ran again and passed, or a schema change was accepted. When a rule was changed or switched off, or nothing was recorded, the incident is listed as not verified.</p>
       </div>
       <div class="card center"><div id="gauge3"></div><div class="gauge-label"><span class="${t.score == null ? "muted" : tone(t.score)}">${esc(t.label)}</span></div>
         <div class="small muted">${esc((state.overview.scope || {}).name || "")} · open incidents ${open.length}${p ? ` · latest run ${esc(p.batch.batch_id || "–")}: ${p.layers.map((l) => l.layer + " " + l.status).join(", ")}` : ""}</div></div>

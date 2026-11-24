@@ -3,6 +3,7 @@ psycopg[binary]>=3.2      # PostgreSQL driver
 python-dotenv>=1.0        # reads the .env file
 azure-storage-blob>=12.19 # ADLS Gen2 connection
 azure-storage-queue>=12.9 # Azure: upload trigger (pipeline worker) and "Retry failed batch" (web/pipeline_trigger.py)
+sqlglot==25.34.1          # lineage map: reads the SQL of views, functions and ADF Script steps (web/lineage/sql.py)
 azure-identity>=1.15      # optional: Azure AD login instead of an account key
 pandas>=2.2               # .toPandas() in explore.py
 ipykernel>=6.29           # run the # %% cells in explore.py

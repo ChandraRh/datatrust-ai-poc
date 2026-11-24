@@ -94,3 +94,50 @@ class ResolutionTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+RECON = {"incident_id": "RECON-2026-10-27", "first_seen": FIRST, "marks": MARKS,
+         "meta": {"type": "SETTLEMENT_MISMATCH", "business_date": "2026-10-27"}}
+RESENT = {"batch_id": "B20261103_124047", "sent_on": "2026-11-03", "n": 3, "keys": "PAY1, PAY2, PAY3"}
+
+
+class FixedAtTheSourceTests(unittest.TestCase):
+    """A later batch carried corrected rows of that date (<file>_corrections.csv): verified, named batch and records."""
+
+    def test_rejected_rows_resent_by_the_source_are_verified(self):
+        with patch.object(R, "_resent", return_value=RESENT) as resent:
+            reason, detail, _ = run({**DQ, "meta": {**DQ["meta"], "keys": ["PAY1", "PAY2"]}}, poc(batch=NEW_OK))
+        self.assertEqual(reason, "resent_by_source")
+        self.assertTrue(R.label(reason)[1])
+        self.assertIn("B20261103_124047", detail)
+        self.assertIn("PAY1, PAY2, PAY3", detail)
+        self.assertEqual(resent.call_args.args[3], ["PAY1", "PAY2"])     # only the rows this rule rejected
+
+    def test_a_rule_change_still_wins_for_rejected_rows(self):
+        with patch.object(R, "_resent", return_value=RESENT):
+            reason, _, _ = run(DQ, poc(rule_change={"rule_name": "CURRENCY_REQUIRED", "change": "switched off", "changed_by": "x"}))
+        self.assertEqual(reason, "rule_changed")
+
+    def test_settlement_fixed_by_resent_payments_is_verified_before_a_rule_change(self):
+        with patch.object(R, "_resent", return_value=RESENT):
+            reason, detail, _ = run(RECON, poc(rule_change={"rule_name": "PAYMENT_ID_NOT_NULL", "change": "added", "changed_by": "x"}))
+        self.assertEqual(reason, "resent_by_source")
+        self.assertIn("matches the gateway settlement", detail)
+
+    def test_nothing_resent_falls_back_to_the_rerun(self):
+        with patch.object(R, "_resent", return_value={}):
+            self.assertEqual(run(DQ, poc(batch=NEW_OK))[0], "pipeline_rerun")
+
+    def test_resent_lists_at_most_five_keys(self):
+        with patch.object(R.ds, "table_exists", return_value=True), \
+                patch.object(R.ds, "one", return_value={"batch_id": "B9", "sent_on": "2026-11-03", "n": 7,
+                                                        "keys": "K1, K2, K3, K4, K5, K6, K7"}) as one:
+            r = R._resent("payments", "2026-10-27", MARKS, ["K1"])
+        self.assertEqual(r["keys"], "K1, K2, K3, K4, K5 and 2 more")
+        params = one.call_args.args[1]
+        self.assertEqual((params["d"], params["mb"], params["only"]), ("2026-10-27", "B1", ["K1"]))
+
+    def test_resent_needs_a_date_and_the_marks(self):
+        self.assertEqual(R._resent("payments", None, MARKS), {})
+        self.assertEqual(R._resent("payments", "2026-10-27", {}), {})
+        self.assertEqual(R._resent("no_such_entity", "2026-10-27", MARKS), {})

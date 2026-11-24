@@ -136,6 +136,20 @@ try:                                                    # retention: remove Data
 except Exception as e:
     print(f"!! Retention not started: {e}")
 
+try:                                                    # lineage map (4. Explain): one graph per source, read on demand
+    from lineage import store as lineage_store
+    lineage_store.ensure_table()
+except Exception as e:
+    print(f"!! Lineage map not ready: {e}")
+
+try:                                                    # trust score over time (Observe), every source, even with no page open
+    import score_history
+    score_history.ensure_table()
+    if score_history.start_background():
+        print(f"Trust score history: on (every source every {score_history.interval_seconds() // 60} min)")
+except Exception as e:
+    print(f"!! Trust score history not started: {e}")
+
 try:                                                    # Google Chat alerts (only when GOOGLE_CHAT_WEBHOOK_URL is set)
     import alerts
     if alerts.start_background():
@@ -214,7 +228,20 @@ def scopes_list():
 def overview(scope: Optional[str] = None):
     o = _scoped(scopes.overview, scope)
     o["llm"] = os.getenv("LLM_PROVIDER", "none")
+    try:                                                # the score just computed also goes into its history (if it changed)
+        import score_history
+        score_history.record(o["scope"]["key"], o["trust"])
+    except Exception as e:                              # noqa: BLE001  the page never fails because of the history
+        print(f"!! trust history not recorded: {e}")
     return o
+
+
+@app.get("/api/trust/history")
+def trust_history(scope: Optional[str] = None, hours: int = 168):
+    """Observe, Trust score over time: the source's recorded scores and the incidents that opened / closed meanwhile."""
+    import score_history
+    s = _scoped(scopes.resolve, scope)
+    return score_history.history(s["key"], hours)
 
 
 @app.get("/api/incidents")
@@ -303,6 +330,17 @@ def recheck(body: Recheck, user: dict = Depends(estate_routes.current_user)):
 @app.get("/api/investigate/{incident_id}")
 def investigate(incident_id: str, scope: Optional[str] = None):
     return _scoped(scopes.investigate, incident_id, scope)
+
+
+@app.get("/api/lineage/map")
+def lineage_map(scope: Optional[str] = None, control: bool = False, refresh: bool = False):
+    """4. Explain, Lineage map: what each system knows about itself (catalogs, code, pipeline definitions, recent runs),
+    merged across sources, cut to the picked source and what other sources read from or write into it."""
+    from lineage import graph as lineage_graph, store as lineage_store
+    all_scopes = scopes.list_scopes()
+    s = _scoped(scopes.resolve, scope)
+    snaps = lineage_store.snapshots(all_scopes, refresh=refresh)
+    return {"scope": s, **lineage_graph.view(s, snaps, all_scopes, control=control)}
 
 
 @app.get("/api/lineage")

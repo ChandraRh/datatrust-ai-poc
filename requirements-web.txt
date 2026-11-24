@@ -11,3 +11,4 @@ itsdangerous>=2.2
 azure-identity>=1.15      # Azure Data Factory connector: sign-in to the Azure management API
 azure-storage-blob>=12.19 # Azure Data Factory connector: source file checks
 azure-storage-queue>=12.9 # Azure: "Retry failed batch" starts the POC pipeline job (web/pipeline_trigger.py)
+sqlglot==25.34.1          # lineage map: reads the SQL of views, functions and ADF Script steps (web/lineage/sql.py)

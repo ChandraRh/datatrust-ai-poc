@@ -379,7 +379,8 @@ def incidents() -> list:
 
     # 2. rejected rows per entity / rule / date
     for r in rows("""SELECT entity, rule_name, business_date::text AS business_date, COUNT(*) AS n,
-                            MIN(batch_id) AS batch_id
+                            MIN(batch_id) AS batch_id,
+                            (array_agg(DISTINCT record_key ORDER BY record_key))[1:50] AS keys   -- kept, so a fix can name them
                      FROM silver.rejected_records GROUP BY 1, 2, 3 ORDER BY 1, 3""") if cfg["poc.rejected"]["enabled"] else []:
         found.append({
             "id": f"DQ-{r['entity']}-{r['rule_name']}-{r['business_date']}", "severity": cfg["poc.rejected"]["severity"],

@@ -2,6 +2,8 @@
 Why an incident stopped showing: every resolution gets a recorded reason instead of "it is gone, so it is fixed".
 
     fixed_by_datatrust  auto-fix or re-insert wrote the corrected rows (audit.dq_corrections)          verified
+    resent_by_source    a later batch carried corrected rows of that date (<file>_corrections.csv)     verified
+                        and the run that loaded them succeeded
     pipeline_rerun      a newer pipeline run succeeded and the same rule no longer finds anything       verified
     check_passes        the data check / factory read ran again and passes                             verified
     accepted            someone acknowledged a change that cannot be undone (a schema change)          verified
@@ -21,6 +23,7 @@ import data_service as ds
 
 LABELS = {
     "fixed_by_datatrust": ("Fixed by DataTrust", True),
+    "resent_by_source": ("Fixed at the source", True),
     "pipeline_rerun": ("Fixed by a pipeline rerun", True),
     "check_passes": ("Re-checked: passes", True),
     "accepted": ("Accepted", True),
@@ -47,7 +50,7 @@ def meta(i: dict) -> dict:
     out = {"type": i.get("type")}
     if i.get("business_date"):
         out["business_date"] = str(i["business_date"])
-    for k in ("entity", "rule_name", "check_id", "layer"):
+    for k in ("entity", "rule_name", "check_id", "layer", "keys"):
         if m.get(k) is not None:
             out[k] = m[k]
     if i.get("adf"):
@@ -136,6 +139,40 @@ def _corrections(entity: str, day: str | None, mk: dict, rule: str | None = None
     return r if r.get("n") else {}
 
 
+SHOW_KEYS = 5
+
+
+def _resent(entity: str, day: str | None, mk: dict, only: list | None = None) -> dict:
+    """Corrected rows of `day` that the source sent again in a LATER daily batch (bronze loads <file>_corrections.csv
+    with that batch), loaded after the incident opened by a run whose bronze and silver succeeded. `only`: the keys the
+    incident was about (its rejected rows), when known. -> {batch_id, sent_on, n, keys} of the newest such batch, or {}."""
+    spec = ds.ENTITIES.get(entity)
+    if not (spec and day and mk.get("batch")) or not ds.table_exists(spec[1]):
+        return {}
+    marked_batch, _, marked_end = str(mk["batch"]).partition("@")
+    r = ds.one(f"""
+        SELECT x.batch_id, b.business_date::text AS sent_on, count(DISTINCT x.{spec[3]}) AS n,
+               string_agg(DISTINCT x.{spec[3]}, ', ' ORDER BY x.{spec[3]}) AS keys
+        FROM {spec[1]} x
+        JOIN audit.batch_control b ON b.batch_id = x.batch_id AND b.layer = 'BRONZE' AND b.status = 'SUCCESS'
+        WHERE x.business_date = %(d)s AND b.business_date > %(d)s::date AND x.batch_id <> %(mb)s
+          AND (%(only)s::text[] IS NULL OR trim(x.{spec[3]}) = ANY(%(only)s::text[]))
+          AND (%(me)s::text IN ('', 'None') OR b.ended_at > %(me)s::timestamp)
+          AND EXISTS (SELECT 1 FROM audit.batch_control s WHERE s.batch_id = x.batch_id AND s.layer = 'SILVER' AND s.status = 'SUCCESS')
+        GROUP BY x.batch_id, b.business_date ORDER BY max(b.ended_at) DESC LIMIT 1""",
+               {"d": day, "mb": marked_batch, "me": marked_end, "only": list(only) if only else None})
+    if not r.get("n"):
+        return {}
+    keys = (r["keys"] or "").split(", ")
+    r["keys"] = ", ".join(keys[:SHOW_KEYS]) + (f" and {len(keys) - SHOW_KEYS} more" if len(keys) > SHOW_KEYS else "")
+    return r
+
+
+def _resent_text(r: dict, entity: str, day: str) -> str:
+    return (f"The source sent {r['n']} corrected {entity} row(s) of {day} again with the {r['sent_on']} batch "
+            f"({r['batch_id']}): {r['keys']}.")
+
+
 def _rule_change(entity: str, rule: str | None, mk: dict) -> dict:
     if "rule_change" not in mk or not ds.table_exists("audit.dq_rule_changes"):
         return {}
@@ -167,6 +204,9 @@ def _rejected(iid: str, m: dict, mk: dict) -> tuple:
     if fx:
         return "fixed_by_datatrust", (f"{fx['n']} {entity} row(s) were corrected and loaded into silver by DataTrust"
                                       f"{' (approved by ' + fx['by'] + ')' if fx.get('by') else ''}; every change is in audit.dq_corrections."), None
+    rs = _resent(entity, day, mk, m.get("keys"))
+    if rs:
+        return "resent_by_source", _resent_text(rs, entity, day) + f" Rule {rule} (unchanged) no longer rejects any {entity} row for {day}.", None
     b = _rerun(mk, "SILVER")
     if b:
         return "pipeline_rerun", f"Batch {b['batch_id']} ran after the incident opened, and rule {rule} (unchanged) no longer rejects any {entity} row for {day}.", None
@@ -180,6 +220,9 @@ def _recon(iid: str, m: dict, mk: dict) -> tuple:
     if fx:
         return "fixed_by_datatrust", (f"{fx['n']} payment(s) of {day} were corrected and loaded into silver by DataTrust"
                                       f"{' (approved by ' + fx['by'] + ')' if fx.get('by') else ''}, so silver now matches the gateway settlement."), None
+    rs = _resent("payments", day, mk)                     # resent payments are direct evidence; checked before a rule change
+    if rs:
+        return "resent_by_source", _resent_text(rs, "payments", day) + " Silver now matches the gateway settlement.", None
     ch = _rule_change("payments", None, mk)
     if ch:
         return "rule_changed", (f"Payment rule {ch['rule_name']} was {ch['change'] or 'changed'} by {ch['changed_by'] or 'someone'} after the "
