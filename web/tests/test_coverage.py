@@ -17,7 +17,7 @@ def ago(hours):
 def plan(row, cols=COLS):
     with patch.object(engine, "_dialect", return_value=PG), patch.object(engine, "query", return_value=[row]) as q:
         p = coverage.plan_table(5, None, "sales", "orders", cols)
-    return p, q.call_args[0][2]
+    return p, q.call_args_list[0][0][2]          # the measuring query (the learning query, if any, comes after it)
 
 
 def kinds(p):
@@ -28,8 +28,8 @@ class PlanTests(unittest.TestCase):
     def test_daily_table_gets_fresh_per_day_volume_and_schema(self):
         p, sql = plan({"n_rows": 1_240_000, "mx0": ago(2), "w0": 8000, "mx1": ago(30)})
         k = kinds(p)
-        self.assertEqual(k["freshness"]["config"], {"column": "created_at", "max_age_hours": 26})
-        self.assertEqual(k["volume"]["config"]["window_column"], "created_at")      # each load's size, not the whole table
+        self.assertEqual(k["freshness"]["config"], {"column": "created_at", "max_age_hours": 26, "adaptive": True, "date_only": False})
+        self.assertNotIn("window_column", k["volume"]["config"])    # no history to learn the rhythm: whole-table count
         self.assertIn("schema", k)
         self.assertIn("""COUNT(CASE WHEN "created_at" >= now() - interval '24 hours' THEN 1 END)""", sql)
         self.assertEqual(p["facts"]["rows_24h"], 8000)

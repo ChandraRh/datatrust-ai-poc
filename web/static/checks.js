@@ -125,6 +125,15 @@
     };
   }
 
+  // a freshness rule's limit: fixed, or learned from how often the table loads (checks/engine.py rhythm)
+  function freshnessText(c) {
+    const cfg = c.config || {}, r = (c.state || {}).rhythm;
+    if (!cfg.adaptive) return `newest <code>${esc(cfg.column)}</code> at most ${esc(cfg.max_age_hours || 24)} h old`;
+    if (r && r.limit_hours) return `newest <code>${esc(cfg.column)}</code> at most ${esc(r.limit_hours)} h old, <b>learned</b>: rows arrived on ${esc(r.load_days)} of the last ${esc(r.window_days || 60)} days, it loads ${esc(r.pattern)} (longest usual gap ${esc(r.longest_gap_days)} day${r.longest_gap_days === 1 ? "" : "s"}); re-learned ${esc(ago(r.learned_at))}`;
+    if (r && r.too_few) return `newest <code>${esc(cfg.column)}</code> at most ${esc(cfg.max_age_hours || 24)} h old for now; the limit will be <b>learned</b> once rows have arrived on at least 3 days (${esc(r.load_days)} so far in the last ${esc(r.window_days || 60)})`;
+    return `newest <code>${esc(cfg.column)}</code> at most ${esc(cfg.max_age_hours || 24)} h old; <b>learned</b> from how often the table loads, and re-learned every day from the next run`;
+  }
+
   // ------------------------------------------------------------------ one check
   async function pageDetail(id) {
     const { check: c, results } = await api(`/${id}`);
@@ -134,7 +143,8 @@
       ["Added by", `${esc(c.created_by || "–")}${c.origin === "starter" ? " (starter check)" : c.origin === "auto" ? " (Start monitoring)" : ""}`], ["Last run", esc(when(c.last_run_at))]];
     const cfg = c.config || {};
     const rule = c.check_type === "pipeline" ? esc(window.PRULES ? window.PRULES.describe(cfg) : cfg.kind)
-      : c.check_type === "freshness" ? `newest <code>${esc(cfg.column)}</code> at most ${esc(cfg.max_age_hours || 24)} h old`
+      : c.check_type === "freshness" ? freshnessText(c)
+      : c.check_type === "volume" && cfg.per_load ? `each load (the rows of its day by <code>${esc(cfg.window_column)}</code>) has at least ${esc(cfg.min_rows ?? 1)} rows and not ${esc(cfg.max_drop_pct || 50)}% below the usual load (median of earlier loads)${cfg.max_growth_pct ? `; warn if ${esc(cfg.max_growth_pct)}% above` : ""}; days without a load are not compared`
       : c.check_type === "volume" ? `at least ${esc(cfg.min_rows ?? 1)} rows${cfg.window_column ? ` with <code>${esc(cfg.window_column)}</code> in the last ${esc(cfg.window_hours || 24)} h` : ""}; fail if ${esc(cfg.max_drop_pct || 50)}% below usual${cfg.max_growth_pct ? `; warn if ${esc(cfg.max_growth_pct)}% above` : ""}`
       : c.check_type === "null_rate" ? `<code>${esc(cfg.column)}</code> at most ${esc(cfg.max_null_pct || 0)}% empty`
       : c.check_type === "uniqueness" ? `<code>${esc((cfg.columns || []).join(" + "))}</code> unique`
@@ -185,7 +195,10 @@
   }
   function limits(c, results) {
     const cfg = c.config || {}, out = [];
-    if (c.check_type === "freshness") out.push({ y: Number(cfg.max_age_hours || 24), label: `Limit ${cfg.max_age_hours || 24} h` });
+    if (c.check_type === "freshness") {
+      const lim = Number(((results[0] || {}).details || {}).limit_hours || cfg.max_age_hours || 24);
+      out.push({ y: lim, label: `Limit ${lim} h${cfg.adaptive ? " (learned)" : ""}` });
+    }
     if (c.check_type === "null_rate" && Number(cfg.max_null_pct)) out.push({ y: Number(cfg.max_null_pct), label: `Limit ${cfg.max_null_pct}%` });
     if (c.check_type === "volume") {
       if (Number(cfg.min_rows) > 1) out.push({ y: Number(cfg.min_rows), label: `Minimum ${n0(cfg.min_rows)}` });
@@ -324,11 +337,15 @@
       const cols = ready ? await colsOf(f.connection_id, f.database || (conns.find((x) => String(x.connection_id) === String(f.connection_id)) || {}).database, f.schema_name, f.table_name) : [];
       const colOpts = (v, ph) => opt((cols.error ? [] : cols).map((x) => ({ name: x.name })), v, ph);
       if (cols.error) specific += `<div class="error-box small">${esc(cols.error)}</div>`;
-      if (ready && t === "freshness") specific += sel("cCol", "Date / time column", colOpts(c.column, "Choose…"), "e.g. loaded_at, updated_at, business_date") + inp("cAge", "Max age (hours)", c.max_age_hours ?? 24, "24", "", "number");
+      if (ready && t === "freshness") specific += sel("cCol", "Date / time column", colOpts(c.column, "Choose…"), "e.g. loaded_at, updated_at, business_date") + inp("cAge", "Max age (hours)", c.max_age_hours ?? 24, "24", c.adaptive ? "the starting limit, until the rhythm is learned" : "", "number")
+        + `<label class="field ck-adaptive"><span><input type="checkbox" id="cAdaptive" ${c.adaptive ? "checked" : ""}> Learn the limit from how often the table loads</span>
+          <span class="small muted">Looks at which of the last 60 days received rows, sets the limit to the longest usual gap plus a margin, and re-learns every day.</span></label>`;
       if (ready && t === "volume") specific += inp("cMin", "Minimum rows", c.min_rows ?? 1, "1", "", "number") + inp("cDrop", "Fail if below usual by (%)", c.max_drop_pct ?? 50, "50", "usual = median of recent runs", "number")
         + inp("cGrow", "Warn if above usual by (%)", c.max_growth_pct ?? "", "optional", "", "number")
         + sel("cWinCol", "Count only recent rows by", colOpts(c.window_column, "the whole table"), "a date / time column: counts what each load brings")
-        + inp("cWinH", "Recent = the last (hours)", c.window_hours ?? 24, "24", "", "number");
+        + `<label class="field ck-adaptive"><span><input type="checkbox" id="cPerLoad" ${c.per_load ? "checked" : ""}> Compare each load with earlier loads</span>
+          <span class="small muted">Counts the rows of each day that received data (by the column above) and compares the latest load with the median of earlier ones, whatever the rhythm: daily, weekdays or weekly. Days without a load are not compared.</span></label>`
+        + (c.per_load ? "" : inp("cWinH", "Recent = the last (hours)", c.window_hours ?? 24, "24", "", "number"));
       if (ready && t === "null_rate") specific += sel("cCol", "Column", colOpts(c.column, "Choose…")) + inp("cNull", "Max empty (%)", c.max_null_pct ?? 0, "0", "", "number");
       if (ready && t === "uniqueness") specific += `<label class="field"><span>Key column(s)</span><select id="cCols" multiple size="5">${(cols.error ? [] : cols).map((x) => `<option value="${esc(x.name)}" ${(c.columns || []).includes(x.name) ? "selected" : ""}>${esc(x.name)}</option>`).join("")}</select><span class="small muted">Ctrl+click for a key of several columns</span></label>`;
       if (ready && ["volume", "null_rate", "uniqueness", "freshness"].includes(t)) specific += inp("cWhere", "Only rows where (optional)", c.where || "", "e.g. business_date >= current_date - 7", "a SQL condition");
@@ -479,10 +496,12 @@
     const num = (id) => (v(id) === "" || v(id) === undefined ? undefined : Number(v(id)));
     if (v("cCol") !== undefined) c.column = v("cCol");
     if (v("cAge") !== undefined) c.max_age_hours = num("cAge");
+    if ($e("cAdaptive")) c.adaptive = $e("cAdaptive").checked || undefined;
     if (v("cMin") !== undefined) c.min_rows = num("cMin");
     if (v("cDrop") !== undefined) c.max_drop_pct = num("cDrop");
     if (v("cGrow") !== undefined) c.max_growth_pct = num("cGrow");
     if (v("cWinCol") !== undefined) { c.window_column = v("cWinCol") || undefined; c.window_hours = c.window_column ? num("cWinH") || 24 : undefined; }
+    if ($e("cPerLoad")) c.per_load = ($e("cPerLoad").checked && !!c.window_column) || undefined;
     if (v("cNull") !== undefined) c.max_null_pct = num("cNull");
     if ($e("cCols")) c.columns = [...$e("cCols").selectedOptions].map((o) => o.value);
     if (v("cWhere") !== undefined) c.where = v("cWhere");
@@ -516,6 +535,7 @@
     if ($e("fSchema")) $e("fSchema").onchange = reset("table_name");
     if ($e("fTable")) $e("fTable").onchange = redraw;
     if ($e("cMode")) $e("cMode").onchange = redraw;
+    if ($e("cPerLoad")) $e("cPerLoad").onchange = redraw;            // per load: no "last N hours" field
     for (const side of ["left", "right"]) {
       if ($e(`${side}Conn`)) $e(`${side}Conn`).onchange = () => { readForm(); C.f.config[side].database = ""; renderEstate("estate-checks-new"); };
       if ($e(`${side}Db`)) $e(`${side}Db`).onchange = redraw;

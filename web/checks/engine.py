@@ -131,22 +131,149 @@ def _hours_since(v) -> float | None:
     raise ValueError(f"column value {v!r} is not a date or time")
 
 
+# ---------------------------------------------------------------- how often a table loads (freshness that learns)
+RHYTHM_DAYS = 60            # history read to learn the rhythm
+RELEARN_HOURS = 24          # an adaptive freshness rule re-learns once a day
+MIN_LOAD_DAYS = 3           # fewer days with new rows: too little to know the rhythm
+
+
+def _as_date(v) -> date | None:
+    if v is None:
+        return None
+    if isinstance(v, datetime):
+        return v.date()
+    if isinstance(v, date):
+        return v
+    return datetime.fromisoformat(str(v)[:10]).date()
+
+
+def load_days(connection_id: int, database: str | None, d, t: str, column: str) -> list:
+    """The days of the last RHYTHM_DAYS that received rows (by the column's own value), oldest first. One grouped query."""
+    q = d.ident(column)
+    sql = f"SELECT CAST({q} AS DATE) AS day FROM {t} WHERE {d.since(column, RHYTHM_DAYS * 24)} GROUP BY CAST({q} AS DATE)"
+    today = date.today()
+    days = {_as_date(r["day"]) for r in query(connection_id, database, sql, max_rows=RHYTHM_DAYS + 10)}
+    return sorted(x for x in days if x and x <= today)                    # a date in the future is not a load
+
+
+def rhythm(days: list, date_only: bool = False) -> dict | None:
+    """How often the table receives rows, from the days that did, and the freshness limit that fits it: the longest
+    usual gap between loads (90th percentile, so one odd gap does not decide) + 15% margin (at least 2 h), + 12 h for a
+    date-only column (a date says nothing about the time of day). None when there are fewer than MIN_LOAD_DAYS days."""
+    days = sorted(set(days))
+    if len(days) < MIN_LOAD_DAYS:
+        return None
+    gaps = sorted((b - a).days for a, b in zip(days, days[1:]))
+    median = statistics.median(gaps)
+    longest = gaps[min(len(gaps) - 1, round(0.9 * (len(gaps) - 1)))]
+    limit = int(-(-(longest * 24 + max(2.0, 0.15 * longest * 24) + (12 if date_only else 0)) // 1))
+    weekdays_only = len(days) >= 10 and all(x.weekday() < 5 for x in days)
+    pattern = ("every day" if longest <= 1 else
+               "on weekdays (the limit covers the weekend)" if weekdays_only and median <= 1 else
+               f"about every {median:g} days" if median > 1 else f"most days, with gaps up to {longest} days")
+    return {"load_days": len(days), "first": days[0].isoformat(), "last": days[-1].isoformat(), "median_gap_days": median,
+            "longest_gap_days": longest, "pattern": pattern, "limit_hours": limit}
+
+
+def learn(connection_id: int, database: str | None, d, t: str, column: str, date_only: bool = False) -> dict:
+    """The rhythm as kept in a rule's state: what was learned, and when."""
+    days = load_days(connection_id, database, d, t, column)
+    r = rhythm(days, date_only) or {"load_days": len(days), "too_few": True}
+    return {**r, "window_days": RHYTHM_DAYS, "learned_at": datetime.now(timezone.utc).isoformat(timespec="seconds")}
+
+
 def _freshness(chk, d, t):
-    col, limit = chk["config"]["column"], float(chk["config"].get("max_age_hours") or 24)
-    sql = f"SELECT MAX({d.ident(col)}) AS latest FROM {t}{d.where(chk['config'].get('where'))}"
+    c = chk["config"]
+    col, limit = c["column"], float(c.get("max_age_hours") or 24)
+    learned, new_state = None, None
+    if c.get("adaptive"):                       # the limit follows how often the table really loads, re-learned daily
+        state = dict(chk.get("state") or {})
+        learned = state.get("rhythm")
+        stale = not learned or (_hours_since(learned.get("learned_at")) or 1e9) >= RELEARN_HOURS
+        if stale:
+            try:
+                learned = learn(chk["connection_id"], chk["database"], d, t, col, bool(c.get("date_only")))
+                new_state = {**state, "rhythm": learned}
+            except Exception:                   # noqa: BLE001  keep the last rhythm (or the fixed limit) and measure anyway
+                pass
+        if learned and learned.get("limit_hours"):
+            limit = float(learned["limit_hours"])
+    sql = f"SELECT MAX({d.ident(col)}) AS latest FROM {t}{d.where(c.get('where'))}"
     latest = query(chk["connection_id"], chk["database"], sql)[0]["latest"]
     age = _hours_since(latest)
-    expected = f"newest {col} at most {limit:g} h old"
+    how = f", learned: it loads {learned['pattern']}" if learned and learned.get("pattern") else ""
+    expected = f"newest {col} at most {limit:g} h old{how}"
+    extra = {"new_state": new_state} if new_state else {}
     if latest is None:
-        return dict(status="FAIL", observed=None, expected=expected, message=f"No rows: {col} has no value at all.", sql=sql)
+        return dict(status="FAIL", observed=None, expected=expected, message=f"No rows: {col} has no value at all.", sql=sql, **extra)
     age = max(age, 0)
     status = "FAIL" if age > limit else "PASS"
-    return dict(status=status, observed=round(age, 2), expected=expected, sql=sql, details={"latest": _plain(latest)},
-                message=f"Newest {col} is {_plain(latest)}, {age:.1f} h ago" + (f" (limit {limit:g} h)." if status == "FAIL" else "."))
+    return dict(status=status, observed=round(age, 2), expected=expected, sql=sql,
+                details={"latest": _plain(latest), "limit_hours": limit, "rhythm": learned},
+                message=f"Newest {col} is {_plain(latest)}, {age:.1f} h ago" + (f" (limit {limit:g} h)." if status == "FAIL" else "."),
+                **extra)
+
+
+USUAL_LOADS = 14            # a load is compared with the median of this many earlier loads
+
+
+def _volume_per_load(chk, d, t):
+    """The latest load compared with earlier loads, whatever the rhythm (daily, weekdays, weekly): rows are counted per day
+    over the last RHYTHM_DAYS, the latest day that received rows is the load checked, and 'usual' is the median of the load
+    days before it. Days without a load are not compared, so they never fail. A load still arriving (rows in the last hour,
+    or today on a date-only column) is skipped for the previous complete one."""
+    c = chk["config"]
+    col = c["window_column"]
+    q = d.ident(col)
+    extra = (c.get("where") or "").strip()
+    where = " AND ".join(f"({w})" for w in (d.since(col, RHYTHM_DAYS * 24), extra) if w)
+    sql = f"SELECT CAST({q} AS DATE) AS day, COUNT(*) AS n FROM {t}{d.where(where)} GROUP BY CAST({q} AS DATE)"
+    today = date.today()
+    per_day = {}
+    for r in query(chk["connection_id"], chk["database"], sql, max_rows=RHYTHM_DAYS + 10):
+        day = _as_date(r["day"])
+        if day and day <= today:
+            per_day[day] = int(r["n"])
+    days = sorted(per_day)
+    min_rows = int(c.get("min_rows") if c.get("min_rows") not in (None, "") else 1)
+    drop = float(c.get("max_drop_pct") or 50)
+    growth = float(c["max_growth_pct"]) if c.get("max_growth_pct") not in (None, "") else None
+    learned = rhythm(days, bool(c.get("date_only")))
+    how = f" (it loads {learned['pattern']})" if learned else ""
+    if not days:
+        return dict(status="FAIL", observed=0, expected=f"at least {min_rows:,} rows per load", sql=sql, details={"rows": 0},
+                    message=f"No rows arrived in the last {RHYTHM_DAYS} days ({col}).")
+    target, note = days[-1], ""
+    if target == today and len(days) > 1:                            # today's load may still be arriving
+        arriving = bool(c.get("date_only"))
+        if not arriving:
+            arriving = int(query(chk["connection_id"], chk["database"],
+                                 f"SELECT COUNT(*) AS n FROM {t}{d.where(d.since(col, 1))}")[0]["n"]) > 0
+        if arriving:
+            target, note = days[-2], " Today's load is still arriving, so the previous complete one was checked."
+    n = per_day[target]
+    earlier = [per_day[x] for x in days if x < target][-USUAL_LOADS:]
+    median = statistics.median(earlier) if len(earlier) >= 3 else None
+    expected = f"at least {min_rows:,} rows per load" + (f", not below {100 - drop:g}% of the usual load ({median:,.0f})" if median else "") + how
+    details = {"rows": n, "usual": median, "history_points": len(earlier), "load_day": target.isoformat(), "rhythm": learned}
+    label = f"the load of {target.isoformat()}"
+    if n < min_rows:
+        return dict(status="FAIL", observed=n, expected=expected, details=details, sql=sql,
+                    message=f"{label} has {n:,} rows, fewer than the minimum of {min_rows:,}.{note}")
+    if median and n < median * (1 - drop / 100):
+        return dict(status="FAIL", observed=n, expected=expected, details=details, sql=sql,
+                    message=f"{label} has {n:,} rows: {100 * (1 - n / median):.0f}% fewer than the usual load ({median:,.0f}).{note}")
+    if median and growth is not None and n > median * (1 + growth / 100):
+        return dict(status="WARN", observed=n, expected=expected, details=details, sql=sql,
+                    message=f"{label} has {n:,} rows: {100 * (n / median - 1):.0f}% more than the usual load ({median:,.0f}).{note}")
+    usual = f"; the usual load is {median:,.0f}" if median else " (the usual size is known after 3 earlier loads)"
+    return dict(status="PASS", observed=n, expected=expected, details=details, sql=sql, message=f"{label} has {n:,} rows{usual}.{note}")
 
 
 def _volume(chk, d, t):
     c = chk["config"]
+    if c.get("per_load") and c.get("window_column"):
+        return _volume_per_load(chk, d, t)
     # window_column + window_hours: count only rows of the last N hours (the size of each load) instead of the whole table
     window = d.since(c["window_column"], int(c.get("window_hours") or 24)) if c.get("window_column") else ""
     where = " AND ".join(f"({w})" for w in (window, (c.get("where") or "").strip()) if w)

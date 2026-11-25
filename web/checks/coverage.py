@@ -26,7 +26,6 @@ MAX_START = 25                   # tables per Start monitoring request (the page
 TIME_TYPES = ("timestamp", "datetime", "date", "smalldatetime", "datetimeoffset")
 TIME_HINT = ("loaded", "load_", "ingest", "insert", "created", "updated", "modified", "event", "_at", "_ts", "timestamp", "date")
 STATIC_AFTER_DAYS = 7
-DAILY_WINDOW_MIN_ROWS = 20       # rows in the last 24 h needed before "rows per day" is a meaningful volume
 _count_cache: dict = {}
 
 
@@ -166,39 +165,56 @@ def plan_table(connection_id: int, database: str | None, schema: str, table: str
         skipped.append({"check_type": "volume", "why": "The table is empty; a row-count rule would fail straight away. Add one once it loads."})
     else:
         # freshness: is new data still arriving?
+        learned = None                             # the load rhythm (engine.learn), shared with the volume rule
         if not best:
             skipped.append({"check_type": "freshness", "why": "No date or time column, so DataTrust cannot tell when rows arrived. "
                                                              "The volume rule still watches the row count."})
         else:
             col, age = best[0], best[1]
-            daily = 36 if _is_date_only(col["type"]) else 26
-            if age <= daily:
-                limit, how = daily, "it receives new rows every day"
-            elif age <= STATIC_AFTER_DAYS * 24:
-                limit, how = 8 * 24, "it loads less often than daily"
-            else:
-                limit = None
-            if limit:
-                checks.append({**base, "check_type": "freshness", "name": f"{label} is fresh", "severity": "HIGH",
-                               "config": {"column": col["name"], "max_age_hours": limit},
-                               "description": f"Started by Start monitoring: the newest {col['name']} was {age:.0f} h old and {how}, "
-                                              f"so more than {limit} h without new rows means loading stopped."})
-            else:
+            date_only = _is_date_only(col["type"])
+            try:                                   # how often it really loads: the days of the last 60 that got rows
+                learned = engine.learn(connection_id, database, d, t, col["name"], date_only)
+            except Exception:                      # noqa: BLE001  no history readable: the single measurement decides
+                learned = {"too_few": True}
+            facts["rhythm"] = learned
+            if not learned.get("too_few"):
+                limit = learned["limit_hours"]
+                static = age > max(STATIC_AFTER_DAYS * 24, 3 * learned["longest_gap_days"] * 24)
+                how = (f"it received rows on {learned['load_days']} of the last {learned['window_days']} days ({learned['pattern']}), "
+                       f"the longest usual gap being {learned['longest_gap_days']} day(s)")
+            else:                                  # too little history: judge from the newest row, learn later
+                daily = 36 if date_only else 26
+                static = age > STATIC_AFTER_DAYS * 24
+                limit = daily if age <= daily else 8 * 24
+                how = ("it receives new rows every day" if age <= daily else "it loads less often than daily") +                       " (judged from the newest row: too little history to learn the rhythm yet)"
+            if static:
                 skipped.append({"check_type": "freshness",
                                 "why": f"The newest {col['name']} is {age / 24:.0f} days old: the table looks static or has already "
                                        f"stopped loading. Add a freshness rule by hand if it should still receive data."})
+            else:
+                checks.append({**base, "check_type": "freshness", "name": f"{label} is fresh", "severity": "HIGH",
+                               "config": {"column": col["name"], "max_age_hours": limit, "adaptive": True, "date_only": date_only},
+                               "description": f"Started by Start monitoring: {how}, so more than {limit} h without new rows means "
+                                              f"loading stopped. DataTrust re-learns the rhythm every day and adjusts the limit."})
         # volume: did a normal amount arrive?
-        win = best if best and not _is_date_only(best[0]["type"]) and (best[3] or 0) >= DAILY_WINDOW_MIN_ROWS else None
-        if win:
-            checks.append({**base, "check_type": "volume", "name": f"{label} rows per day", "severity": "MEDIUM",
-                           "config": {"min_rows": 1, "max_drop_pct": 50, "window_column": win[0]["name"], "window_hours": 24},
-                           "description": f"Started by Start monitoring: {int(win[3]):,} rows arrived in the last 24 h. Fails when a day "
-                                          f"brings less than half the usual amount (a partial or failed load)."})
+        if learned and not learned.get("too_few"):   # loads with a rhythm: each load compared with earlier loads
+            col = best[0]
+            checks.append({**base, "check_type": "volume", "name": f"{label} rows per load", "severity": "MEDIUM",
+                           "config": {"min_rows": 1, "max_drop_pct": 50, "window_column": col["name"], "per_load": True,
+                                      "date_only": _is_date_only(col["type"])},
+                           "description": f"Started by Start monitoring: it loads {learned['pattern']} (rows arrived on "
+                                          f"{learned['load_days']} of the last {learned['window_days']} days). Each load (the rows of "
+                                          f"its day by {col['name']}) is compared with the median of earlier loads; it fails when a load "
+                                          f"brings less than half the usual (a partial or failed load). Days without a load are not "
+                                          f"compared, so a weekly table is not flagged in between."})
         else:
             checks.append({**base, "check_type": "volume", "name": f"{label} row count", "severity": "MEDIUM",
                            "config": {"min_rows": 1, "max_drop_pct": 50},
-                           "description": f"Started by Start monitoring: the table has {n:,} rows. Fails when it suddenly holds less "
-                                          f"than half the usual count (rows deleted, a table reloaded half-way)."})
+                           "description": f"Started by Start monitoring: the table has {n:,} rows"
+                                          + (" and no date or time column shows when they arrived" if not best else
+                                             " and too little history to tell how often it loads") +
+                                          ". Fails when it suddenly holds less than half the usual count (rows deleted, a table "
+                                          "reloaded half-way)."})
     # schema: did the columns change? The first run records today's columns as the accepted schema.
     checks.append({**base, "check_type": "schema", "name": f"{label} columns unchanged", "severity": "HIGH", "config": {},
                    "description": f"Started by Start monitoring: records today's {len(columns)} columns and fails when one is dropped, "

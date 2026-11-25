@@ -936,3 +936,7 @@ tr.pu-off td { opacity: .6; }
 .pr-days i { width: 12px; height: 12px; border-radius: 3px; background: #CBD5E1; display: inline-block; }
 .pr-days i.ok { background: var(--teal); } .pr-days i.warn { background: #E8A33D; } .pr-days i.bad { background: var(--red); }
 #prResult { margin-top: 12px; }
+
+/* rule form: a freshness rule that learns its limit from how often the table loads */
+.field.ck-adaptive { flex-direction: column; gap: 2px; }
+.field.ck-adaptive input[type="checkbox"] { flex: none; margin-right: 6px; vertical-align: -2px; }

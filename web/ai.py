@@ -106,8 +106,11 @@ def _heuristic(profile: dict) -> list:
     times = [c for c in cols if any(x in c["type"].lower() for x in ("timestamp", "datetime", "date"))]
     best = sorted(times, key=lambda c: (not any(h in c["column"].lower() for h in TIME_HINT), "date" == c["type"].lower()))
     if best:
-        s.append({"check_type": "freshness", "config": {"column": best[0]["column"], "max_age_hours": 24}, "severity": "MEDIUM",
-                  "why": f"{best[0]['column']} is the newest-data marker (latest value {best[0]['max']})."})
+        s.append({"check_type": "freshness", "severity": "MEDIUM",
+                  "config": {"column": best[0]["column"], "max_age_hours": 24, "adaptive": True,
+                             "date_only": best[0]["type"].lower() == "date"},
+                  "why": f"{best[0]['column']} is the newest-data marker (latest value {best[0]['max']}). The limit is learned "
+                         f"from how often the table loads (24 h until then)."})
     s.append({"check_type": "volume", "config": {"min_rows": 1, "max_drop_pct": 50}, "severity": "MEDIUM",
               "why": f"The table has {n:,} rows today; a sudden drop usually means a partial or failed load."})
     keys = [c for c in cols if c["unique"] and (c["column"].lower().endswith("id") or c["column"].lower().endswith("_key"))]
