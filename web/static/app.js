@@ -803,11 +803,25 @@ document.addEventListener("click", async (e) => {                // Acknowledge:
   } catch (x) { toast(x.message); b.disabled = false; }
 });
 // held-back rows behind an incident -> the Rejected records page, filtered to that date / table / rule
-function recordsButton(i) {
-  if (!window.DQ || !["REJECTED_ROWS", "SETTLEMENT_MISMATCH"].includes(i.type) || !i.business_date) return "";
+// which held-back rows an incident is about: [date, table, rule, what they are] (empty = no filter), or null
+function rejectedFilter(i) {
+  if (!window.DQ || !i) return null;
   const m = i.metrics || {};
-  const ent = i.type === "REJECTED_ROWS" ? m.entity : "payments", rule = i.type === "REJECTED_ROWS" ? m.rule_name : "";
-  return `<button class="btn light" onclick="DQ.open('${esc(i.business_date)}','${esc(ent || "")}','${esc(rule || "")}')">See records</button>`;
+  if (i.type === "REJECTED_ROWS" && i.business_date) return [i.business_date, m.entity || "", m.rule_name || "", `the ${m.entity || ""} rows that failed ${m.rule_name || "the rule"} on ${i.business_date}`];
+  if (i.type === "SETTLEMENT_MISMATCH" && i.business_date) return [i.business_date, "payments", "", `the payments held back on ${i.business_date}`];
+  if (/^CHECK_/.test(i.type || "") && m.target === "silver.rejected_records") return ["", "", "", "every row the quality rules hold back"];
+  return null;
+}
+const rejectedOpen = (f) => `DQ.open('${esc(f[0])}','${esc(f[1])}','${esc(f[2])}')`;
+function recordsButton(i, label = "See records", cls = "btn light") {
+  const f = rejectedFilter(i);
+  return f ? `<button class="${cls}" type="button" title="Rejected records: ${esc(f[3])}" onclick="${rejectedOpen(f)}">${esc(label)}</button>` : "";
+}
+// a sentence with a link, for the Investigate and Impact pages
+function recordsLine(i) {
+  const f = rejectedFilter(i);
+  return f ? `<p class="small">See ${esc(f[3])} on <a href="#estate-dq-rejected" onclick="event.preventDefault(); ${rejectedOpen(f)}">Rejected records</a>:
+    review them, correct them and load them again.</p>` : "";
 }
 function renderDetect() {
   const open = state.incidents.open;
@@ -941,6 +955,7 @@ async function renderInvestigate(id) {
         <button class="btn light btn-sm" id="invBack" type="button">← Detect</button>
         ${inv.check_id ? `<button class="btn light btn-sm" id="invOpenCheck" type="button">Open the rule</button>` : ""}
         ${inv.run_id ? `<button class="btn light btn-sm" id="invOpenRun" type="button">Open the ADF run</button>` : ""}
+        ${recordsButton(incident, "See rejected records", "btn light btn-sm")}
         <button class="btn light btn-sm" data-recheck="${esc(id)}" type="button" title="Run its rule / read the factory / read the pipeline's results again now">Re-check now</button>
         <button class="btn btn-sm" id="invImpact" type="button">See impact &amp; decide →</button>
       </div>
@@ -971,7 +986,7 @@ async function renderInvestigate(id) {
     </div>
     <div id="invFollow"></div>
     <div id="invDig"></div>
-    ${Array.isArray(inv.sample) && inv.sample.length ? `<div class="card"><h3>Affected records <span class="small muted">(${esc(sampleLabel(inv.sample.length, inv.sample_total))})</span></h3>${objTable(inv.sample)}</div>` : ""}
+    ${Array.isArray(inv.sample) && inv.sample.length ? `<div class="card"><h3>Affected records <span class="small muted">(${esc(sampleLabel(inv.sample.length, inv.sample_total))})</span></h3>${objTable(inv.sample)}${recordsLine(incident)}</div>` : recordsLine(incident) ? `<div class="card"><h3>Affected records</h3>${recordsLine(incident)}</div>` : ""}
     ${goldViews.length ? `<div class="card"><h3>${esc(impact.views_label || "Downstream Gold views")}</h3><div class="investigation-views">${goldViews.map((view) => `<code>${esc(view)}</code>`).join("")}</div></div>` : ""}`;
   $("invBack").addEventListener("click", () => go("detect"));
   $("invImpact").addEventListener("click", () => go("impact", id));
@@ -1203,7 +1218,8 @@ async function renderImpact(id) {
       <div class="card"><h3>What it touches</h3>
         <p><b>${esc(inc.title)}</b></p>
         <p>${esc(im.views_label || "Gold views reading")} <code>${esc(im.entity || "")}</code>: ${im.gold_views.map((v) => `<span class="chip warn">${im.views_label ? "" : "gold."}${esc(v)}</span>`).join(" ") || "–"}</p>
-        <p class="small muted">${im.views_label ? "Everything listed reads the affected data, so it shows the problem too until the fix is loaded." : "Revenue at risk is the exact amount of the gap in the data, not an estimate. Reports built on the views above show the reduced numbers until the fix is loaded."}</p></div>
+        <p class="small muted">${im.views_label ? "Everything listed reads the affected data, so it shows the problem too until the fix is loaded." : "Revenue at risk is the exact amount of the gap in the data, not an estimate. Reports built on the views above show the reduced numbers until the fix is loaded."}</p>
+        ${recordsLine(inc)}</div>
       <div class="card"><h3>Recommended remediation</h3>
         <div class="actions">${im.actions.map((a) => `<label><input type="checkbox" checked value="${esc(a)}"> ${esc(a)}</label>`).join("")}</div>
         <div class="field"><input id="approveNote" maxlength="500" placeholder="Note (optional), e.g. ticket number or who will fix the source"></div>
