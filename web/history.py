@@ -18,13 +18,15 @@ ACCESS_LABEL = {"GRANT": "Grant", "REVOKE": "Revoke", "CREATE_USER": "Add team m
                 "GRANT_ROLE": "Add to role", "REVOKE_ROLE": "Remove from role", "DROP_PRINCIPAL": "Remove user / role"}
 # what a status means on this page: decided (approved / rejected / failed) or still waiting
 DECISION = {"PENDING": "pending", "APPLIED": "approved", "APPROVED": "approved", "QUEUED": "approved", "CLOSED": "closed",
-            "REJECTED": "rejected", "FAILED": "failed"}
+            "REJECTED": "rejected", "FAILED": "failed", "STALE": "closed"}
 DECISION_LABEL = {"pending": "Waiting", "approved": "Approved", "rejected": "Rejected", "failed": "Failed", "closed": "Closed"}
 # what happened after the decision, in plain words: the stored status means something different per kind
 OUTCOME = {("access", "APPLIED"): "done in the database", ("access", "FAILED"): "the database refused it",
            ("reinsert", "APPLIED"): "rows loaded", ("reinsert", "QUEUED"): "rows load on the next pipeline run",
            ("reinsert", "CLOSED"): "nothing left to do", ("reinsert", "FAILED"): "the rows could not be loaded",
-           ("remediation", "APPLIED"): "the data was fixed", ("remediation", "APPROVED"): "plan approved; people do the steps"}
+           ("remediation", "APPLIED"): "the data was fixed", ("remediation", "APPROVED"): "plan approved; people do the steps",
+           ("remediation", "REJECTED"): "not applied", ("remediation", "FAILED"): "could not be applied",
+           ("remediation", "STALE"): "the rows changed before approval; request it again"}
 LIMIT = 2000                                    # rows read per source; the page filters further
 
 
@@ -79,12 +81,36 @@ def _remediation() -> list:
                           FROM app.remediation_log l
                           {"LEFT JOIN app.incident_state s ON s.incident_id = l.incident_id" if state else ""}
                           ORDER BY l.remediation_id DESC LIMIT %s""", (LIMIT,))
-    # an approved fix has no separate request: the admin who approved it is also who asked for it
-    return [{"kind": "remediation", "ref": r["incident_id"], "what": r["incident_title"] or r["incident_id"],
+    # requested fixes (fix_requests.py): asked by one person, decided by an admin. Their applied fix also wrote a
+    # remediation_log line; that line is left out here so each fix is listed once.
+    import fix_requests
+    fixes = fix_requests.history_rows(LIMIT)
+    # one fix can resolve several incidents (the rejected rows and that date's revenue gap): each wrote a log line
+    applied = {(iid, (f["decided_by"] or "").lower()) for f in fixes if f["status"] == "APPLIED"
+               for iid in [f["incident_id"], *((f.get("proposal") or {}).get("resolves") or [])]}
+    states = {s["incident_id"]: s for s in appdb.rows(
+        "SELECT incident_id, resolved_at, resolution FROM app.incident_state WHERE incident_id = ANY(%s)",
+        ([f["incident_id"] for f in fixes],))} if fixes and state else {}
+    out = []
+    for f in fixes:
+        st = states.get(f["incident_id"])
+        res = f.get("result") or {}
+        out.append({"kind": "remediation", "ref": f["incident_id"], "from_request": True,
+                    "what": f"Fix {f['rows']} {f['entity']} row(s) of {f['business_date']}: {f['title'] or f['incident_id']}",
+                    "detail": " · ".join(x for x in (f.get("note"), f.get("decision_note"), res.get("error")) if x),
+                    "status": f["status"], "requested_by": f["requested_by"], "requested_at": f["requested_at"],
+                    "decided_by": f["decided_by"], "decided_at": f["decided_at"],
+                    "link": f"impact={f['incident_id']}" if f["status"] == "PENDING" else "verify",
+                    "result": _result(st and st["incident_id"], st and st["resolved_at"], st and st["resolution"])
+                    if f["status"] == "APPLIED" else None})
+    # an incident fix approved before requests existed (or a remediation plan): the admin who approved it also asked
+    out += [{"kind": "remediation", "ref": r["incident_id"], "what": r["incident_title"] or r["incident_id"],
              "detail": " · ".join(x for x in (r["actions"], r["note"]) if x),
              "status": r["status"] or "APPROVED", "requested_by": r["approved_by"], "requested_at": _ts(r["approved_at"]),
              "decided_by": r["approved_by"], "decided_at": _ts(r["approved_at"]), "link": "verify",
-             "result": _result(r["tracked"], r["resolved_at"], r["resolution"])} for r in rows]
+             "result": _result(r["tracked"], r["resolved_at"], r["resolution"])} for r in rows
+            if not (r["status"] == "APPLIED" and (r["incident_id"], (r["approved_by"] or "").lower()) in applied)]
+    return out
 
 
 def _result(tracked, resolved_at, reason) -> dict:
@@ -128,9 +154,10 @@ def approvals(kind: str = None, decision: str = None, person: str = None, date_f
         r["outcome"] = OUTCOME.get((r["kind"], r["status"]), "")
         r["result_label"] = (r.get("result") or {}).get("label", "")     # incident fixes: what became of the incident
         r["at"] = r["decided_at"] or r["requested_at"]
-        # four-eyes check: the same person asked and decided. Incident fixes have no separate request, so never count.
+        # four-eyes check: the same person asked and decided. Incident fixes count only when they were requested
+        # (fix_requests.py); an older direct approval had no separate request.
         asked, decided = (r["requested_by"] or "").strip().lower(), (r["decided_by"] or "").strip().lower()
-        r["self_approved"] = r["kind"] != "remediation" and r["decision"] == "approved" and bool(asked) and asked == decided
+        r["self_approved"] = (r["kind"] != "remediation" or bool(r.get("from_request"))) and r["decision"] == "approved"             and bool(asked) and asked == decided
     # totals for the summary tiles: everything read, before the filters below narrow the list
     totals = {d: sum(r["decision"] == d for r in rows) for d in ("pending", "approved", "rejected", "failed")}
     totals["self_approved"] = sum(r["self_approved"] for r in rows)

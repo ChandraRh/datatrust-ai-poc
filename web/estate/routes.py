@@ -317,13 +317,44 @@ def match_people(body: MatchText, user: dict = Depends(current_user)):
     return store.match_people(body.text)
 
 
-# ---------------------------------------------------------------- auto-fix (changes silver data: admin only)
-@router.post("/autofix/{incident_id}/apply")
-def apply_autofix(incident_id: str, user: dict = Depends(admin_user)):
-    import autofix
-    result = guard(autofix.apply, incident_id, user["username"])
-    store.audit(user["username"], "AUTOFIX_APPLIED", incident_id, result["action"])
-    return result
+# ---------------------------------------------------------------- auto-fix: request, then an admin approves (fix_requests.py)
+# There is no direct "apply": a fix changes silver data only through an approved request.
+class FixNote(BaseModel):
+    note: str = ""
+
+
+@router.get("/autofix/{incident_id}/request")
+def fix_request_state(incident_id: str, user: dict = Depends(current_user)):
+    """The incident's newest fix request (pending or decided), and whether this user may approve it."""
+    import fix_requests
+    req = fix_requests.latest(incident_id)
+    ok, why = fix_requests.can_decide(req, user["username"], user["role"]) if req else (False, "")
+    return {"request": req, "can_decide": ok, "why_not": why, "four_eyes": fix_requests.four_eyes(),
+            "user": user["username"], "role": user["role"]}
+
+
+@router.post("/autofix/{incident_id}/request")
+def request_fix(incident_id: str, body: FixNote, user: dict = Depends(current_user)):
+    """Anyone signed in asks for the fix; nothing changes until an admin approves it."""
+    import fix_requests
+    return guard(fix_requests.request, incident_id, user["username"], body.note)
+
+
+@router.post("/fix-requests/{request_id}/approve")
+def approve_fix(request_id: int, body: FixNote, user: dict = Depends(admin_user)):
+    import fix_requests
+    try:
+        return fix_requests.decide(request_id, user["username"], user["role"], True, body.note)
+    except fix_requests.StaleRequest as e:
+        raise HTTPException(409, str(e))
+    except ValueError as e:
+        raise HTTPException(400, str(e))
+
+
+@router.post("/fix-requests/{request_id}/reject")
+def reject_fix(request_id: int, body: FixNote, user: dict = Depends(admin_user)):
+    import fix_requests
+    return guard(fix_requests.decide, request_id, user["username"], user["role"], False, body.note)
 
 
 # ---------------------------------------------------------------- blast radius preview (PostgreSQL sources)

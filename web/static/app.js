@@ -1176,28 +1176,81 @@ async function renderAutofix(id) {
           <td class="ok"><b>${esc(r.proposed)}</b></td><td class="small">${esc(r.evidence)}</td></tr>`).join("")}</tbody></table></div>
       ${p.skipped.length ? `<p class="small warn">${p.skipped.length} row(s) cannot be fixed automatically and stay rejected.</p>` : ""}
       <details class="af-sql"><summary>What will run</summary><pre class="code">${esc(p.sql_preview)}</pre></details>
-      <div class="af-actions"><button class="btn" id="afApply">Approve &amp; apply fix (${p.rows.length} rows)</button>
-        <span class="small muted">Needs a portal admin login (Data estate). Resolves: ${p.resolves.map(esc).join(", ")}.</span></div>
+      <div id="afFlow" class="af-flow"><p class="small muted">Checking for a request…</p></div>
       <div id="afResult"></div></div>`;
-  const applyBtn = box.querySelector("#afApply");
-  if (!applyBtn) return;
-  applyBtn.onclick = async () => {
-    if (!confirm(`Apply the fix to ${p.rows.length} ${p.entity} row(s) of ${p.business_date}?\n\nThe corrected rows are loaded into silver now; every change is recorded.`)) return;
-    applyBtn.disabled = true;
-    applyBtn.textContent = "Applying…";
+  await renderFixFlow(id, p, my);
+}
+
+// Request -> approve: someone asks for the fix (nothing changes), an admin approves it (only then the rows change) or
+// rejects it with a reason. Four-eyes: the requester cannot approve, unless the built-in setting allows it.
+async function renderFixFlow(id, p, my) {
+  const flow = $("afFlow");
+  if (!flow) return;
+  const post = async (path, body) => {
+    const r = await fetch("/api/estate" + path, { method: "POST", credentials: "same-origin",
+      headers: { "Content-Type": "application/json" }, body: JSON.stringify(body || {}) });
+    const out = await r.json().catch(() => ({}));
+    if (!r.ok) { const e = new Error(out.detail || out.error || r.statusText); e.status = r.status; throw e; }
+    return out;
+  };
+  let st;
+  try {
+    const r = await fetch(`/api/estate/autofix/${encodeURIComponent(id)}/request`, { credentials: "same-origin" });
+    if (r.status === 401) {
+      flow.innerHTML = `<p class="small">Log in under <b>Data estate → Connections</b> to request this fix.</p>`;
+      return;
+    }
+    st = await r.json();
+  } catch (e) { flow.innerHTML = `<div class="error-box">${esc(e.message)}</div>`; return; }
+  if (my !== autofixSeq) return;
+  const req = st.request;
+  const when = (t) => esc(String(t || "").slice(0, 16));
+  const done = () => { state.version = null; return loadCore().then(() => go("verify")); };
+  const last = req && req.status !== "PENDING"
+    ? `<p class="small muted af-last">Last request ${when(req.requested_at)} by ${esc(req.requested_by)}: <b>${esc({ APPLIED: "applied", REJECTED: "rejected", STALE: "out of date", FAILED: "failed" }[req.status] || req.status)}</b>${req.decided_by ? ` by ${esc(req.decided_by)}` : ""}${req.decision_note ? ` · ${esc(req.decision_note)}` : ""}</p>` : "";
+  if (!req || req.status !== "PENDING") {                       // nothing pending: anyone signed in can ask for it
+    flow.innerHTML = `${last}<div class="af-actions"><input id="afNote" class="af-note" maxlength="500" placeholder="Why (optional), e.g. 'needed for the month-end report'">
+        <button class="btn" id="afRequest">Request this fix (${p.rows.length} rows)</button></div>
+      <p class="small muted">Nothing changes yet: an admin approves the request${st.four_eyes ? " (not the person who requested it)" : ""}, and only then are the rows corrected.
+        Resolves: ${p.resolves.map(esc).join(", ")}.</p>`;
+    $("afRequest").onclick = async () => {
+      $("afRequest").disabled = true;
+      try {
+        const out = await post(`/autofix/${encodeURIComponent(id)}/request`, { note: $("afNote").value });
+        toast(out.already ? "A request is already waiting for approval" : "Fix requested: waiting for an admin's approval");
+        renderFixFlow(id, p, autofixSeq);
+      } catch (e) { $("afResult").innerHTML = `<div class="error-box">${esc(e.message)}</div>`; $("afRequest").disabled = false; }
+    };
+    return;
+  }
+  flow.innerHTML = `<div class="af-pending"><span class="chip warn">Waiting for approval</span>
+      <span class="small">Requested by <b>${esc(req.requested_by)}</b> at ${when(req.requested_at)}${req.note ? ` · “${esc(req.note)}”` : ""}</span></div>
+    ${st.can_decide ? `<div class="af-actions"><input id="afNote" class="af-note" maxlength="500" placeholder="Note (required to reject)">
+        <button class="btn" id="afApprove">Approve &amp; apply (${req.rows} rows)</button>
+        <button class="btn light" id="afReject">Reject</button></div>`
+      : `<p class="small muted">${esc(st.why_not || "An admin approves fixes.")}</p>`}`;
+  if (!st.can_decide) return;
+  $("afApprove").onclick = async () => {
+    if (!confirm(`Approve and apply the fix to ${req.rows} ${req.entity} row(s) of ${req.business_date}, requested by ${req.requested_by}?\n\nThe corrected rows are loaded into silver now; every change is recorded.`)) return;
+    $("afApprove").disabled = true; $("afApprove").textContent = "Applying…";
     try {
-      const r = await fetch(`/api/estate/autofix/${encodeURIComponent(id)}/apply`, { method: "POST", credentials: "same-origin" });
-      const body = await r.json().catch(() => ({}));
-      if (r.status === 401 || r.status === 403) {
-        $("afResult").innerHTML = `<div class="error-box">Only a portal admin can apply fixes. Log in under <b>Data estate → Connections</b> as an admin, then come back and click again.</div>`;
-        applyBtn.disabled = false; applyBtn.textContent = `Approve & apply fix (${p.rows.length} rows)`; return;
-      }
-      if (!r.ok) throw new Error(body.detail || body.error || r.statusText);
-      toast(`Fix applied: ${body.fixed} row(s) corrected`);
-      state.version = null;                       // reload everything: the data just changed
-      await loadCore();
-      go("verify");
-    } catch (err) { $("afResult").innerHTML = `<div class="error-box">${esc(err.message)}</div>`; applyBtn.disabled = false; applyBtn.textContent = `Approve & apply fix (${p.rows.length} rows)`; }
+      const out = await post(`/fix-requests/${req.request_id}/approve`, { note: $("afNote").value });
+      toast(`Fix applied: ${(out.result || {}).fixed ?? req.rows} row(s) corrected`);
+      await done();
+    } catch (e) {
+      $("afResult").innerHTML = `<div class="error-box">${esc(e.message)}</div>`;
+      if (e.status === 409) renderAutofix(id);                  // out of date: show the new proposal
+      else { $("afApprove").disabled = false; $("afApprove").textContent = `Approve & apply (${req.rows} rows)`; }
+    }
+  };
+  $("afReject").onclick = async () => {
+    const note = $("afNote").value.trim();
+    if (!note) { $("afResult").innerHTML = `<div class="error-box">Write why it is rejected in the note, so the requester knows what to do next.</div>`; $("afNote").focus(); return; }
+    try {
+      await post(`/fix-requests/${req.request_id}/reject`, { note });
+      toast("Fix rejected");
+      renderFixFlow(id, p, autofixSeq);
+    } catch (e) { $("afResult").innerHTML = `<div class="error-box">${esc(e.message)}</div>`; }
   };
 }
 

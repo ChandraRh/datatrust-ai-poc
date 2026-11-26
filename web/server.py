@@ -136,6 +136,12 @@ try:                                                    # retention: remove Data
 except Exception as e:
     print(f"!! Retention not started: {e}")
 
+try:                                                    # incident fixes: requested, then approved by an admin (fix_requests.py)
+    import fix_requests
+    fix_requests.ensure_table()
+except Exception as e:
+    print(f"!! Fix requests not ready: {e}")
+
 try:                                                    # lineage map (4. Explain): one graph per source, read on demand
     from lineage import store as lineage_store
     lineage_store.ensure_table()

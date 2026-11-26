@@ -34,6 +34,11 @@ CHECKS = {
                                 "naming its owner. Switched off: no targets, no reminders.",
                         "params": [_p("critical_h", "Critical", 4, 1, 720, "h"), _p("high_h", "High", 24, 1, 720, "h"),
                                    _p("medium_h", "Medium", 72, 1, 2160, "h"), _p("low_h", "Low", 168, 1, 4320, "h")]},
+    "all.four_eyes": {"kind": "all", "subject": "", "label": "Four-eyes approval for fixes", "severity": "MEDIUM", "no_severity": True,
+                      "what": "An incident fix is first requested, then approved by an admin before any data changes. On: the "
+                              "person who requested a fix cannot approve it; another admin must. Off: one admin may request and "
+                              "approve (e.g. a solo demo); Audit & approvals still flags it as self-approved.",
+                      "params": []},
     # ---------------------------------------------------------------- POC pipeline
     "poc.freshness": {"kind": "poc", "subject": "freshness", "label": "Pipeline ran in time", "severity": "HIGH",
                       "what": "A successful pipeline run within the last N hours.",

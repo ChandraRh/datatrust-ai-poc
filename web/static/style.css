@@ -940,3 +940,10 @@ tr.pu-off td { opacity: .6; }
 /* rule form: a freshness rule that learns its limit from how often the table loads */
 .field.ck-adaptive { flex-direction: column; gap: 2px; }
 .field.ck-adaptive input[type="checkbox"] { flex: none; margin-right: 6px; vertical-align: -2px; }
+
+/* Impact & decide: an incident fix is requested, then approved or rejected by an admin */
+.af-flow { margin-top: 4px; }
+.af-note { flex: 1; min-width: 220px; font: inherit; font-size: 13.5px; padding: 7px 10px; border: 1px solid var(--line); border-radius: 8px; }
+.af-pending { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; margin-top: 12px; padding: 10px 12px; border-radius: 10px;
+  background: var(--amber-bg); }
+.af-last { margin: 10px 0 0; }

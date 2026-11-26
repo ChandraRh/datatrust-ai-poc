@@ -10,7 +10,7 @@
   const TYPE = {   // short name, chip colour, where the decision is made, what it is
     access: { name: "Access request", where: "estate-access", whereLabel: "Access", what: "someone asked for access to a database; an admin grants or refuses it" },
     reinsert: { name: "Re-insert", where: "estate-dq-rejected", whereLabel: "Rejected records", what: "someone corrected rows a quality rule held back and asked to load them" },
-    remediation: { name: "Incident fix", where: "verify", whereLabel: "Verify", what: "an admin approved a fix for an incident directly, so there is no separate request" },
+    remediation: { name: "Incident fix", where: "verify", whereLabel: "Impact & decide", what: "someone requested a fix for an incident and an admin approved or rejected it on Impact & decide (fixes before requests existed were approved directly)" },
   };
   const DECISIONS = { pending: "Waiting", approved: "Approved", rejected: "Rejected", failed: "Failed", closed: "Closed" };
   const EMPTY = { kind: "", decision: "", person: "", date_from: "", date_to: "", q: "" };
@@ -60,7 +60,7 @@
     const w = t.pending_by_kind || {};
     const kpi = (cls, label, v, sub) => `<div class="kpi ${cls}"><div class="l">${label}</div><div class="v">${num(v)}</div><div class="small muted">${sub}</div></div>`;
     return `<div class="kpis k5">
-      ${kpi(t.pending ? "warn" : "", "Waiting for a decision", t.pending, t.pending ? `${num(w.access || 0)} access · ${num(w.reinsert || 0)} re-insert` : "nothing to decide")}
+      ${kpi(t.pending ? "warn" : "", "Waiting for a decision", t.pending, t.pending ? `${num(w.access || 0)} access · ${num(w.reinsert || 0)} re-insert · ${num(w.remediation || 0)} fix` : "nothing to decide")}
       ${kpi("", "Approved", t.approved, "requests and incident fixes")}
       ${kpi("", "Rejected", t.rejected, "turned down by an admin")}
       ${kpi(t.failed ? "bad" : "", "Failed", t.failed, "approved, but could not be applied")}
@@ -73,7 +73,7 @@
       <p class="small muted">Oldest first. Decisions are made where the request lives; this page only records them.</p>
       ${list.map((r) => `<div class="check ha-wait"><span class="grey">⏳</span><span class="grow">${typeChip(r.kind)} <b>${esc(r.what)}</b> <span class="small muted">${esc(r.ref)}</span>
         <div class="small muted">asked by ${esc(r.requested_by || "–")} · ${when(r.requested_at)}${r.detail ? ` · ${esc(r.detail)}` : ""}</div></span>
-        <a class="btn light btn-sm" href="#${TYPE[r.kind].where}">Decide on ${esc(TYPE[r.kind].whereLabel)} →</a></div>`).join("")}</div>`;
+        <a class="btn light btn-sm" href="#${esc(r.link || TYPE[r.kind].where)}">Decide on ${esc(TYPE[r.kind].whereLabel)} →</a></div>`).join("")}</div>`;
   }
 
   function logCard(d) {
