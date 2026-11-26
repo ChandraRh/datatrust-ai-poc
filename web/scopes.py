@@ -767,6 +767,14 @@ def _investigate_check(s: dict, inc: dict) -> dict:
         sample = [{"change": "removed", "column": c} for c in d.get("removed", [])] + \
                  [{"change": "type changed", "column": x["column"], "was": x["was"], "now": x["now"]} for x in d.get("type_changed", [])] + \
                  [{"change": "added", "column": c} for c in d.get("added", [])]
+    # how many affected records there are in all (the table shows up to 20); None when the rows are not records
+    total = None
+    if chk["check_type"] == "uniqueness":
+        total = int(obs) if obs is not None else None                          # duplicated keys
+    elif chk["check_type"] == "custom_sql" and ((chk.get("config") or {}).get("mode") or "no_rows") == "no_rows":
+        total = int(obs) if obs is not None else None                          # rows the rule returned (1000 = 1000 or more)
+    elif chk["check_type"] == "schema":
+        total = len(sample)
     views = _downstream(s["id"], chk) if chk.get("table_name") else []
     root = f"{chk['name']}: {last.get('message') or inc['summary']}"
     who = who_changed(s["id"], chk, last_pass["run_at"] if last_pass else None) if chk.get("table_name") else None
@@ -793,7 +801,8 @@ def _investigate_check(s: dict, inc: dict) -> dict:
                          "sub": f"rule runs every {chk.get('schedule_minutes') or 60} min"},
                         {"label": "Last passed", "value": str(last_pass["run_at"])[:16] if last_pass else "never",
                          "sub": "since the rule was added" if not last_pass else "", "tone": None if last_pass else "warn"}]}
-    return {"found": True, "incident": inc, "checks": checks, "root_cause": root, "chain": chain, "sample": sample, "impact": impact,
+    return {"found": True, "incident": inc, "checks": checks, "root_cause": root, "chain": chain, "sample": sample,
+            "sample_total": total if sample else None, "impact": impact,
             "sql": last.get("sql_text"), "check_id": cid, "changed_by": who}
 
 

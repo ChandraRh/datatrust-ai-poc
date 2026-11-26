@@ -457,6 +457,7 @@ def investigate(incident_id: str) -> dict:
     if inc is None:
         return {"found": False}
     checks, chain, root, sample = [], [], "", []
+    sample_total = None                                   # how many affected records there are (the table shows up to 20)
 
     if inc["type"] == "SETTLEMENT_MISMATCH":
         m, rej = inc["metrics"], inc["rejected_explained"]
@@ -506,6 +507,8 @@ def investigate(incident_id: str) -> dict:
                                 raw_record::jsonb->>'currency' AS currency, raw_record::jsonb->>'method' AS method
                          FROM silver.rejected_records WHERE entity = 'payments' AND business_date = %(d)s
                          ORDER BY record_key LIMIT 20""", {"d": d})
+        sample_total = one("""SELECT COUNT(*) AS n FROM silver.rejected_records
+                              WHERE entity = 'payments' AND business_date = %(d)s""", {"d": d})["n"]
     elif inc["type"] == "REJECTED_ROWS":
         m = inc["metrics"]
         sample = rows("""SELECT record_key, rule_name, left(raw_record, 160) AS raw_record
@@ -517,6 +520,7 @@ def investigate(incident_id: str) -> dict:
                           FROM silver.rejected_records
                           WHERE entity = %(e)s AND rule_name = %(r)s AND business_date = %(d)s""",
                        {"e": m["entity"], "r": m["rule_name"], "d": m["business_date"]})
+        sample_total = observed["n"]
         checks = [
             {"ok": observed["n"] == m["n"],
              "text": f"Incident reports {m['n']} rejected row(s); current query returns {observed['n']}",
@@ -567,7 +571,7 @@ def investigate(incident_id: str) -> dict:
         root = inc["summary"]
         chain = [inc["title"]]
     return {"found": True, "incident": inc, "checks": checks, "root_cause": root,
-            "chain": chain, "sample": sample, "impact": impact(inc)}
+            "chain": chain, "sample": sample, "sample_total": sample_total if sample else None, "impact": impact(inc)}
 
 
 def impact(inc: dict) -> dict:

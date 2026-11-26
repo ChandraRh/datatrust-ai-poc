@@ -971,7 +971,7 @@ async function renderInvestigate(id) {
     </div>
     <div id="invFollow"></div>
     <div id="invDig"></div>
-    ${Array.isArray(inv.sample) && inv.sample.length ? `<div class="card"><h3>Affected records <span class="small muted">(${inv.sample.length} sample rows)</span></h3>${objTable(inv.sample)}</div>` : ""}
+    ${Array.isArray(inv.sample) && inv.sample.length ? `<div class="card"><h3>Affected records <span class="small muted">(${esc(sampleLabel(inv.sample.length, inv.sample_total))})</span></h3>${objTable(inv.sample)}</div>` : ""}
     ${goldViews.length ? `<div class="card"><h3>${esc(impact.views_label || "Downstream Gold views")}</h3><div class="investigation-views">${goldViews.map((view) => `<code>${esc(view)}</code>`).join("")}</div></div>` : ""}`;
   $("invBack").addEventListener("click", () => go("detect"));
   $("invImpact").addEventListener("click", () => go("impact", id));
@@ -983,6 +983,14 @@ async function renderInvestigate(id) {
   aiExplain(id, "aiExplain", "investigate");
   renderFollowups(id);
   renderDig(id);
+}
+
+// "all 3" when every affected record is listed, "first 20 of 500" when there are more, else just the count shown
+function sampleLabel(shown, total) {
+  if (total == null || Number.isNaN(Number(total))) return `${shown} row${shown === 1 ? "" : "s"}`;
+  const t = Number(total);
+  if (t <= shown) return shown === 1 ? "the only one" : `all ${shown}`;
+  return `first ${shown} of ${t >= 1000 ? "1,000 or more" : num(t)}`;
 }
 
 // ---- Follow-up checks (step 1: a fixed plan per kind of problem, no AI) and Dig deeper with AI (step 2, on request)
