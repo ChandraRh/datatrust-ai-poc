@@ -416,12 +416,24 @@ def briefing_text(b: dict) -> str:
     return "\n".join(x for x in lines if x)
 
 
-def daily_briefing() -> list:
-    """Once a day after BRIEFING_CHAT_AT (local time), one briefing per source, posted once even with several instances."""
+def briefing_now(now: datetime | None = None) -> datetime:
+    """The clock the briefing time is read on: BRIEFING_TZ (e.g. Asia/Kolkata) when set, else the server's own.
+    A cloud server runs on UTC, so without it 09:00 would mean 09:00 UTC."""
+    tz = _setting("BRIEFING_TZ")
+    if not tz:
+        return now or datetime.now()
+    from zoneinfo import ZoneInfo
+    zone = ZoneInfo(tz)
+    return now.astimezone(zone) if now else datetime.now(zone)
+
+
+def daily_briefing(now: datetime | None = None) -> list:
+    """Once a day after BRIEFING_CHAT_AT (in BRIEFING_TZ, else server time), one briefing per source, posted once even
+    with several instances."""
     at = _setting("BRIEFING_CHAT_AT")
     if not re.match(r"^\d{1,2}:\d{2}$", at or ""):
         return []
-    now = datetime.now()
+    now = briefing_now(now)
     h, m = (int(x) for x in at.split(":"))
     if (now.hour, now.minute) < (h, m):
         return []
