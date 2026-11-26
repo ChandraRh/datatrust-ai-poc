@@ -39,11 +39,18 @@ def tick(by: str = "schedule") -> list:
     return done
 
 
+SNAPSHOT_SECONDS = 300                     # schema snapshots (change tracking without a superuser): compared every 5 min
+
+
 def _loop():
-    last_prune = 0.0
+    last_prune = last_snapshot = 0.0
     while True:
         try:
             tick()
+            if time.time() - last_snapshot > SNAPSHOT_SECONDS:
+                last_snapshot = time.time()
+                from estate import service as estate_service
+                estate_service.refresh_snapshots()
             if time.time() - last_prune > 86400:
                 store.prune()
                 last_prune = time.time()

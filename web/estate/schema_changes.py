@@ -58,7 +58,9 @@ def schema_changes(cid: int, database: str, days: int = 30, show_internal: bool 
            "days": int(days), "rows": [], "counts": {}, "hidden_internal": 0, "jobs": [], "truncated": False, "unreachable": None}
     src = service.source(cid)
     try:
-        out["tracking"] = tracking = src.tracking_enabled(database)
+        tracking = src.tracking_enabled(database)
+        mode = src.tracking_mode(database) if tracking and hasattr(src, "tracking_mode") else None   # PostgreSQL: triggers / snapshots
+        out["tracking"], out["tracking_mode"] = tracking, (mode if mode in ("triggers", "snapshots") else "triggers" if tracking else None)
     except Exception as e:                                                   # noqa: BLE001  server down, network, login
         out["unreachable"] = str(e).splitlines()[0][:300]
         return out
@@ -75,7 +77,8 @@ def schema_changes(cid: int, database: str, days: int = 30, show_internal: bool 
         if internal(r) and not show_internal:
             out["hidden_internal"] += 1
             continue
-        key = (at.strftime("%Y-%m-%d %H:%M"), r.get("username"), r.get("command_tag"), r.get("object_identity"))
+        key = (at.strftime("%Y-%m-%d %H:%M"), r.get("username"), r.get("command_tag"), r.get("object_identity"),
+               " ".join((r.get("query") or "").split()))              # two different changes to one table stay two rows
         g = groups.get(key)
         if g:
             g["times"] += 1

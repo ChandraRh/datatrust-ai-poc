@@ -3,7 +3,8 @@ PostgreSQL connector for the Data Estate portal.
 
 Reads (catalog, grants, roles, changes) run in READ ONLY sessions with a 10 s timeout.
 Writes happen only in two places, both started by an admin from the portal:
-  * enable_change_tracking()  installs schema dt_audit + two event triggers in ONE database
+  * enable_change_tracking()  installs schema dt_audit + two event triggers in ONE database (without a superuser,
+                              e.g. on Azure: schema snapshots instead, see pg_snapshot.py; refresh_snapshot() updates them)
   * apply_statements()        runs the statements of an APPROVED access request in one transaction
 All SQL that contains user input is built with psycopg.sql (identifiers quoted), never by string pasting.
 """
@@ -16,7 +17,7 @@ import psycopg
 from psycopg import sql
 from psycopg.rows import dict_row
 
-from . import store
+from . import pg_snapshot, store
 
 SYSTEM_SCHEMAS = ("pg_catalog", "information_schema", "pg_toast")
 
@@ -187,10 +188,35 @@ class PostgresSource:
                          ORDER BY 1, 2 LIMIT 100""", {"t": f"%{text}%"}, database)
 
     # ------------------------------------------------------------------ who changed what (event triggers)
-    def tracking_enabled(self, database) -> bool:
-        return bool(self.q("SELECT 1 FROM pg_event_trigger WHERE evtname = 'dt_audit_ddl'", database=database))
+    def tracking_mode(self, database) -> str | None:
+        """"triggers" (every statement logged with who and when), "snapshots" (no superuser: differences found by
+        comparing the catalog, see pg_snapshot.py) or None (off)."""
+        r = self.q("""SELECT EXISTS (SELECT 1 FROM pg_event_trigger WHERE evtname = 'dt_audit_ddl') AS t,
+                             to_regclass('dt_audit.schema_snapshot') IS NOT NULL AS s""", database=database)[0]
+        return "triggers" if r["t"] else "snapshots" if r["s"] else None
 
-    def enable_change_tracking(self, database):
+    def tracking_enabled(self, database) -> bool:
+        return self.tracking_mode(database) is not None
+
+    def refresh_snapshot(self, database) -> int:
+        """Snapshot mode only: log what changed since the last look. Returns the number of changes logged."""
+        with self.connect(database, read_only=False) as c:
+            c.execute("SET statement_timeout = '30s'")
+            return pg_snapshot.refresh(c) if pg_snapshot.installed(c) else 0
+
+    def enable_change_tracking(self, database) -> str:
+        """Event triggers when the login may create them (a superuser), else schema snapshots. Returns the mode."""
+        try:
+            self._install_triggers(database)
+            return "triggers"
+        except psycopg.errors.InsufficientPrivilege as e:
+            if "event trigger" not in str(e).lower():
+                raise                                          # no right to create the schema / tables at all
+        with self.connect(database, read_only=False) as c:
+            pg_snapshot.install(c)
+        return "snapshots"
+
+    def _install_triggers(self, database):
         """Installs dt_audit.ddl_log + 2 event triggers in this database (needs a superuser login).
         From then on every CREATE / ALTER / DROP / GRANT / REVOKE on objects is logged with who and when."""
         with self.connect(database, read_only=False) as c:
@@ -236,8 +262,14 @@ class PostgresSource:
             c.commit()
 
     def changes(self, database, object_name=None, username=None, limit=200):
-        if not self.tracking_enabled(database):
+        mode = self.tracking_mode(database)
+        if not mode:
             return []
+        if mode == "snapshots":
+            try:
+                self.refresh_snapshot(database)                # what changed since the last look, before reading the log
+            except psycopg.Error:
+                pass                                           # the log so far is still worth showing
         where, params = [], {"n": limit}
         if object_name:
             where.append("(object_identity ILIKE %(o)s OR replace(query, '\"', '') ILIKE %(o)s)")

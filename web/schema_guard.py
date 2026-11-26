@@ -153,8 +153,9 @@ def incidents(approvals: dict) -> list:
             what = f"{radius['object']}" + (f".{column}" if column else "")
             found.append({
                 "id": iid, "severity": severity, "type": "SCHEMA_CHANGE",
-                "title": f"Schema change: {what} {change} by {e['username']}",
-                "summary": (f"{e['command_tag']} at {str(e['event_time'])[:16]} from {e['application'] or e['client_addr'] or 'unknown client'}. "
+                "title": f"Schema change: {what} {change}" + (f" by {e['username']}" if e["username"] else ""),
+                "summary": ((f"{e['command_tag']} at {str(e['event_time'])[:16]} from {e['application'] or e['client_addr'] or 'unknown client'}. "
+                             if e["username"] else f"Found by DataTrust's schema snapshot at {str(e['event_time'])[:16]} (who is not recorded on this server). ")
                             + (f"Breaks: {', '.join(d['object'] for d in hit[:6])}." if hit else "Nothing downstream reads it.")
                             + (f" Owners: {', '.join(o['name'] for o in owners)}." if owners else "")),
                 "business_date": None,
@@ -172,7 +173,8 @@ def investigate(inc: dict) -> dict:
     checks = [
         {"ok": False, "text": f"{m['change'].capitalize()}: {m['object']}{'.' + m['column'] if m['column'] else ''}",
          "source": "dt_audit.ddl_log (who-changed-what)"},
-        {"ok": True, "text": f"Changed by {m['who']} at {str(m['when'])[:19]} from {m['application'] or m['client'] or 'unknown client'}",
+        {"ok": True, "text": (f"Changed by {m['who']} at {str(m['when'])[:19]} from {m['application'] or m['client'] or 'unknown client'}" if m["who"]
+                             else f"Found by a schema snapshot at {str(m['when'])[:19]}; who made it is not recorded (no superuser on this server)"),
          "source": "dt_audit.ddl_log"},
         {"ok": not m["downstream"], "text": f"{len(m['downstream'])} downstream object(s) depend on it", "source": "information_schema.view_table_usage + pipeline lineage"},
         {"ok": bool(m["owners"]), "text": ("Owners: " + ", ".join(o["name"] for o in m["owners"])) if m["owners"] else "No owner recorded in Connect",

@@ -74,7 +74,15 @@ function loginForm(el, page) {
 // ------------------------------------------------------------------ the source of every estate page
 // One source at a time, like every other page: Connections (details), Catalog and Access show the source picked at the
 // top, and its own database (the POC is datatrust_poc, not every database on its server). No second picker here.
-function scopeConnId() { const m = /^db:(\d+)$/.exec(state.scope || ""); return m ? Number(m[1]) : null; }
+// the source picked at the top; before anything was picked, the one the picker shows (the server's first source)
+const scopeKey = () => state.scope || ((document.getElementById("scopePick") || {}).value || "");
+function scopeConnId() { const m = /^db:(\d+)$/.exec(scopeKey()); return m ? Number(m[1]) : null; }
+// a database to switch to, for pages that need one while a Data Factory is picked
+const dbChoices = () => {
+  const dbs = (state.scopes || []).filter((s) => s.kind === "db");
+  return dbs.length ? `<p class="db-choices">Show ${dbs.map((s) => `<button class="btn light btn-sm" type="button" data-pick-scope="${esc(s.key)}">${esc(s.name)}</button>`).join(" ")}</p>` : "";
+};
+const bindDbChoices = () => document.querySelectorAll("[data-pick-scope]").forEach((b) => (b.onclick = () => setScope(b.dataset.pickScope)));
 async function contextBar(page) {
   if (!est.connections.length) est.connections = await eapi("/connections");
   const conn = est.connections.find((c) => c.connection_id === scopeConnId());
@@ -122,7 +130,8 @@ async function renderEstate(page) {
     const ctx = await contextBar(page), bar = ctx.html;
     if (ctx.none && page !== "estate-connections") {
       el.innerHTML = `<div class="card"><h3>Pick a database at the top</h3><p class="muted">${page === "estate-catalog" ? "The catalog" : "Access"} shows one database source at a time:
-        the one picked in <b>Source</b> at the top of the page. ${scopeConnId() ? "That source is not a connection any more." : "A Data Factory has no catalog or logins of its own here; see <a href=\"#estate-adf-overview\">ADF pipelines</a>."}</p></div>`;
+        the one picked in <b>Source</b> at the top of the page. ${scopeConnId() ? "That source is not a connection any more." : "A Data Factory has no catalog or logins of its own here; see <a href=\"#estate-adf-overview\">ADF pipelines</a>."}</p>${dbChoices()}</div>`;
+      bindDbChoices();
       return;
     }
     if (!ctx.none && est.overview.limited && page !== "estate-connections") {
@@ -155,7 +164,7 @@ async function pageConnections() {
   const typeLabel = (t) => (est.types[t] ? est.types[t].label : t);
   const rows = ((o && o.databases) || []).map((d) => `<tr><td>${esc(d.name)}</td><td>${esc(d.owner)}</td><td class="num">${fmtBytes(d.size_bytes)}</td>
       <td>${d.can_connect ? "yes" : "no"}</td>
-      <td>${d.tracking ? `<span class="chip ok">tracking on</span>` : d.tracking === false ? (admin ? `<button class="btn light btn-sm" data-track="${esc(d.name)}">Enable tracking</button>` : `<span class="chip grey">off</span>`) : ""}</td></tr>`).join("");
+      <td>${d.tracking ? (d.tracking_mode === "snapshots" ? `<span class="chip ok" title="This login can't create event triggers, so DataTrust compares the tables and columns every 5 minutes: what changed and when, not who. The server admin can set up full tracking once to record who as well.">tracking on (snapshots)</span>` : `<span class="chip ok">tracking on</span>`) : d.tracking === false ? (admin ? `<button class="btn light btn-sm" data-track="${esc(d.name)}">Enable tracking</button>` : `<span class="chip grey">off</span>`) : ""}</td></tr>`).join("");
   const list = est.connections.map((c) => `<tr><td>${esc(c.name)}</td><td><span class="chip grey">${esc(typeLabel(c.source_type))}</span></td>
       <td>${c.username ? esc(c.username) : "Windows login"}@${esc(c.host)}${c.source_type === "snowflake" || !c.port ? "" : ":" + c.port}${c.database ? "/" + esc(c.database) : ""}</td>
       <td title="Hidden">••••••••</td><td>${esc(c.created_by || "")}</td>
@@ -167,7 +176,7 @@ async function pageConnections() {
        <p class="small muted">Browsing ${esc(o.label)} (catalog, changes, access) arrives with its connector, the next build step.</p>`
     : `${o.ok ? `<p>${esc(o.version)}<br><span class="small muted">connected as <b>${esc(o.login_user)}</b></span></p>` : `<p class="bad">${esc(o.error)}</p>`}
        <div class="tablewrap"><table><thead><tr><th>Database</th><th>Owner</th><th>Size</th><th>Can connect</th><th>Who-changed-what</th></tr></thead><tbody>${rows}</tbody></table></div>
-       <p class="small muted">${o.tracking_note ? esc(o.tracking_note) : "Tracking installs schema <code>dt_audit</code> and two event triggers in that database, so every CREATE / ALTER / DROP / GRANT is logged with user and time. Needs a superuser login."}</p>`;
+       <p class="small muted">${o.tracking_note ? esc(o.tracking_note) : "Tracking installs schema <code>dt_audit</code> in that database. With a superuser login (on Azure: the server admin) it adds two event triggers, so every CREATE / ALTER / DROP / GRANT is logged with who and when. With a login that may not create event triggers, DataTrust compares the tables, views and columns every 5 minutes instead: you see what changed and when, but not who. The server admin can run the same setup once to get who as well. Either way the login needs the right to create a schema in that database."}</p>`;
   return {
     html: `<div class="card"><h3>Connected sources</h3><div class="tablewrap"><table><thead><tr><th>Name</th><th>Type</th><th>Login</th><th>Password</th><th>Added by</th><th></th></tr></thead><tbody>${list}</tbody></table></div>
         ${admin ? `<button class="btn" id="wzOpen" style="margin-top:14px">+ Add a source</button>` : ""}</div>
@@ -176,7 +185,8 @@ async function pageConnections() {
     bind() {
       document.querySelectorAll("[data-track]").forEach((b) => (b.onclick = async () => {
         b.disabled = true;
-        try { await post(`/connections/${est.conn}/tracking/${encodeURIComponent(b.dataset.track)}`); toast("Change tracking enabled"); est.overview = null; renderEstate("estate-connections"); }
+        try { const r = await post(`/connections/${est.conn}/tracking/${encodeURIComponent(b.dataset.track)}`);
+          toast(r && r.mode === "snapshots" ? "Change tracking on, by snapshots: this login can't create event triggers, so who made a change is not recorded" : "Change tracking enabled"); est.overview = null; renderEstate("estate-connections"); }
         catch (e) { toast(e.message); b.disabled = false; }
       }));
       document.querySelectorAll("[data-del]").forEach((b) => (b.onclick = async () => {
@@ -380,8 +390,8 @@ async function showObject(schema, name, type) {
 const act = { days: 30, internal: false, q: "", user: "" };
 const ACT_DAYS = [[7, "7 days"], [30, "30 days"], [90, "90 days"], [365, "a year"]];
 async function pageActivity() {
-  const scope = (/^db:(\d+)$/.exec(state.scope || "") || [])[1];
-  const none = (msg) => ({ html: `<div class="card"><h3>Schema changes</h3><p class="muted">${msg}</p></div>`, bind() {} });
+  const scope = (/^db:(\d+)$/.exec(scopeKey()) || [])[1];
+  const none = (msg) => ({ html: `<div class="card"><h3>Schema changes</h3><p class="muted">${msg}</p>${scope ? "" : dbChoices()}</div>`, bind: bindDbChoices });
   if (!scope) return none(`Schema changes are recorded for databases. Pick a database at the top of the page.
     For a Data Factory, see <a href="#estate-adf-runs">ADF runs</a>: each run lists its steps and what changed in the target.`);
   const conn = (await eapi("/connections")).find((c) => String(c.connection_id) === scope);
@@ -410,7 +420,7 @@ async function pageActivity() {
   const when = (t) => `<span style="white-space:nowrap">${esc(String(t).slice(0, 16))}</span>`;
   const rows = d.rows.map((r, i) => `<tr>
       <td class="small">${when(r.at)}${r.times > 1 ? `<div class="muted">×${r.times} in that minute</div>` : ""}</td>
-      <td>${esc(r.who || "–")}</td>
+      <td>${r.who ? esc(r.who) : `<span class="muted" title="Found by comparing snapshots: this server doesn't let DataTrust record who">not recorded</span>`}</td>
       <td><span class="chip ${r.tone}">${esc(r.action)}</span>${r.datatrust ? ` <span class="chip grey" title="DataTrust's own tables">DataTrust</span>` : ""}</td>
       <td><code>${esc(r.object)}</code></td>
       <td class="small muted">${esc(r.app || (r.client && !/^(::1|127\.0\.0\.1)/.test(r.client) ? r.client : "this server"))}</td>
@@ -422,7 +432,9 @@ async function pageActivity() {
         ${kpi("", "Changes", c.changes, `in the last ${ACT_DAYS.find(([n]) => n === act.days)[1]}`)}
         ${kpi("", "Tables and views", c.objects, "changed")}
         ${kpi(c.dropped ? "bad" : "", "Dropped or emptied", c.dropped, "data may be gone")}
-        ${kpi("", "People", c.people, "made these changes")}</div>
+        ${d.tracking_mode === "snapshots" ? kpi("", "Found by snapshot", c.changes, "who is not recorded") : kpi("", "People", c.people, "made these changes")}</div>
+      ${d.tracking_mode === "snapshots" ? `<p class="small muted">Tracked by snapshots: this database's login can't create event triggers (only a superuser can; on Azure, the server admin can set it up once to record who as well).
+        DataTrust compares the tables, views and columns every 5 minutes and when this page opens. Each row shows what changed and when it was noticed, not who made it.</p>` : ""}
       <div class="card"><div class="draft-head"><h3 style="margin:0">Who changed what</h3><span class="small muted">newest first</span></div>
         <div class="rj-filters">
           <label class="grow">Table or view<input id="scObj" placeholder="e.g. silver.payments" value="${esc(act.q)}"></label>

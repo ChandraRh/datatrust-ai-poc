@@ -151,9 +151,10 @@ def overview(cid: int, user: dict = Depends(current_user)):
 
 @router.post("/connections/{cid}/tracking/{database}")
 def enable_tracking(cid: int, database: str, user: dict = Depends(admin_user)):
-    guard(service.source(cid).enable_change_tracking, database)
-    store.audit(user["username"], "TRACKING_ENABLED", f"{cid}/{database}", "dt_audit event triggers installed")
-    return {"ok": True}
+    mode = guard(service.source(cid).enable_change_tracking, database)
+    store.audit(user["username"], "TRACKING_ENABLED", f"{cid}/{database}",
+                "schema snapshots installed (no superuser: who is not recorded)" if mode == "snapshots" else "dt_audit change log installed")
+    return {"ok": True, "mode": mode or "triggers"}
 
 
 # ---------------------------------------------------------------- catalog

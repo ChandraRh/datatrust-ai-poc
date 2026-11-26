@@ -54,10 +54,31 @@ def overview(connection_id: int) -> dict:
     dbs = src.databases()                                     # live list: new databases appear on the next refresh
     for d in dbs:
         try:
-            d["tracking"] = src.tracking_enabled(d["name"]) if d["can_connect"] else None
+            mode = (src.tracking_mode(d["name"]) if hasattr(src, "tracking_mode") else
+                    ("triggers" if src.tracking_enabled(d["name"]) else None)) if d["can_connect"] else False
+            d["tracking"] = None if mode is False else bool(mode)
+            d["tracking_mode"] = mode or None              # "triggers" (who + when) or "snapshots" (what + when)
         except Exception:
-            d["tracking"] = None
+            d["tracking"] = d["tracking_mode"] = None
     return {"ok": True, "label": label, **info, "databases": dbs, "tracking_note": getattr(src, "TRACKING_NOTE", None)}
+
+
+def refresh_snapshots() -> int:
+    """Every PostgreSQL database tracked by schema snapshots (no superuser): log what changed since the last look.
+    Called every few minutes by the checks scheduler. Returns the number of changes logged."""
+    logged = 0
+    for c in store.list_connections():
+        if c.get("source_type", "postgresql") != "postgresql":
+            continue
+        try:
+            src = source(c["connection_id"])
+            names = [c["database"]] if c.get("database") else [d["name"] for d in src.databases() if d.get("can_connect")]
+            for db in names:
+                if src.tracking_mode(db) == "snapshots":
+                    logged += src.refresh_snapshot(db)
+        except Exception:                                    # noqa: BLE001  one unreachable source never stops the others
+            continue
+    return logged
 
 
 def test_new(source_type, host, port, database, username, password_env, settings, password="") -> dict:
