@@ -71,6 +71,10 @@ class Dialect:
         """A row filter: column within the last N hours (the database's own clock)."""
         raise NotImplementedError
 
+    def hour(self, column: str) -> str:
+        """The hour of the day (0-23) of a time column."""
+        raise NotImplementedError
+
 
 class Postgres(Dialect):
     name = "postgresql"
@@ -86,6 +90,9 @@ class Postgres(Dialect):
     def since(self, column: str, hours: int) -> str:
         return f"{self.ident(column)} >= now() - interval '{int(hours)} hours'"
 
+    def hour(self, column: str) -> str:
+        return f"CAST(EXTRACT(HOUR FROM {self.ident(column)}) AS INT)"
+
 
 class SqlServer(Dialect):
     name = "sqlserver"
@@ -98,6 +105,9 @@ class SqlServer(Dialect):
 
     def since(self, column: str, hours: int) -> str:
         return f"{self.ident(column)} >= DATEADD(hour, -{int(hours)}, SYSDATETIME())"
+
+    def hour(self, column: str) -> str:
+        return f"DATEPART(hour, {self.ident(column)})"
 
     def limit(self, select: str, n: int) -> str:
         if re.match(r"(?is)^with\b", select):                 # a CTE cannot sit in a derived table: rows are cut after fetch
@@ -118,6 +128,9 @@ class Snowflake(Dialect):
 
     def since(self, column: str, hours: int) -> str:
         return f"{self.ident(column)} >= DATEADD(hour, -{int(hours)}, CURRENT_TIMESTAMP())"
+
+    def hour(self, column: str) -> str:
+        return f"HOUR({self.ident(column)})"
 
 
 DIALECTS = {"postgresql": Postgres(), "sqlserver": SqlServer(), "snowflake": Snowflake()}

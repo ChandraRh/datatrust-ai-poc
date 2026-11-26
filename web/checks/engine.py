@@ -57,14 +57,15 @@ def _is_timeout(e: Exception) -> bool:
             or "000630" in s or "reached its statement or warehouse timeout" in s)
 
 
-def query(connection_id: int, database: str | None, sql: str, params=(), max_rows: int = 1000) -> list:
+def query(connection_id: int, database: str | None, sql: str, params=(), max_rows: int = 1000, seconds: int | None = None) -> list:
     """Rows as dicts. PostgreSQL: a read-only session. SQL Server and Snowflake: inside a transaction that is always rolled back.
-    Either way the query is stopped on the database after QUERY_SECONDS."""
+    Either way the query is stopped on the database after QUERY_SECONDS (or the shorter `seconds` given)."""
+    limit = int(seconds or QUERY_SECONDS)
     src = _source(connection_id)
     kind = src.cfg["source_type"]
     if kind == "postgresql":
         with closing(src.connect(database)) as c:                    # read_only=True: default_transaction_read_only
-            c.execute(f"SET statement_timeout = '{QUERY_SECONDS}s'")
+            c.execute(f"SET statement_timeout = '{limit}s'")
             try:
                 cur = c.execute(sql, params or None)
             except Exception as e:                                   # noqa: BLE001
@@ -72,7 +73,7 @@ def query(connection_id: int, database: str | None, sql: str, params=(), max_row
             return [dict(r) for r in cur.fetchmany(max_rows)] if cur.description else []
     if kind == "sqlserver":
         with closing(src.connect(database, read_only=False)) as c:  # autocommit off -> rollback below undoes anything
-            c.timeout = QUERY_SECONDS
+            c.timeout = limit
             try:
                 cur = c.cursor()
                 try:
@@ -90,7 +91,7 @@ def query(connection_id: int, database: str | None, sql: str, params=(), max_row
     if kind == "snowflake":
         import snowflake.connector
         from estate.snowflake_connector import lower_keys
-        c = src.connect(database, read_only=False, seconds=QUERY_SECONDS)   # Snowflake stops the statement after QUERY_SECONDS
+        c = src.connect(database, read_only=False, seconds=limit)   # Snowflake stops the statement after QUERY_SECONDS
         try:
             cur = c.cursor(snowflake.connector.DictCursor)
             try:

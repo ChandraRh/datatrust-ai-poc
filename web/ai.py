@@ -30,12 +30,22 @@ def _evidence_pack(inv: dict) -> dict:
             "downstream": {"label": imp.get("views_label") or "gold views", "objects": imp.get("gold_views") or []},
             "amount_at_risk": imp.get("amount_at_risk"), "standard_actions": imp.get("actions") or [],
             "explained_by": inc.get("rejected_explained"),          # e.g. the rejected rows (and their rules) that account for a gap
-            "adf_cause": (inc.get("adf") or {}).get("cause"), "adf_fixes": (inc.get("adf") or {}).get("fixes")}
+            "adf_cause": (inc.get("adf") or {}).get("cause"), "adf_fixes": (inc.get("adf") or {}).get("fixes"),
+            "follow_up_checks": _follow_ups(inc.get("id"))}          # Step 1 findings already worked out on Investigate
+
+
+def _follow_ups(incident_id) -> list:
+    try:
+        import followups
+        return followups.cached(incident_id) if incident_id else []
+    except Exception:                                                 # noqa: BLE001  a bonus, never a failure
+        return []
 
 
 def _without_rows(ev: dict) -> dict:
     """The evidence pack without sample rows: what an automatic note (no one pressed a button) may send to the model."""
-    return {**ev, "sample_rows": [], "sample_rows_note": "not sent: rows from the data are only shared when someone asks on Investigate"}
+    return {**ev, "sample_rows": [], "follow_up_checks": [],
+            "sample_rows_note": "not sent: rows from the data are only shared when someone asks on Investigate"}
 
 
 def explain(incident_id: str, scope: str | None = None, refresh: bool = False, cached_only: bool = False,
@@ -59,7 +69,8 @@ def explain(incident_id: str, scope: str | None = None, refresh: bool = False, c
               "incident and leave out any that do not fit its evidence.")
     prompt = "Evidence (JSON):\n" + json.dumps(ev, default=str)[:24000]
     if cached_only and not refresh:                                   # pages show a saved answer without spending a model call
-        hit = llm.cached("explain", incident_id, ev) or llm.cached("explain", incident_id, _without_rows(full))   # also the triage note
+        hit = (llm.cached("explain", incident_id, ev) or llm.cached("explain", incident_id, _without_rows(full))   # also the triage note
+               or llm.cached("explain", incident_id, {**ev, "follow_up_checks": []}))     # written before the follow-ups were run
         return {"available": True, **hit} if hit else {"available": False, "not_generated": True}
     try:
         out = llm.grounded("explain", incident_id, ev, system, prompt, refresh=refresh)

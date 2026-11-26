@@ -338,6 +338,34 @@ def investigate(incident_id: str, scope: Optional[str] = None):
     return _scoped(scopes.investigate, incident_id, scope)
 
 
+@app.get("/api/investigate/{incident_id}/followups")
+def investigate_followups(incident_id: str, scope: Optional[str] = None, refresh: bool = False):
+    """Step 1: the follow-up checks for the incident's kind of problem, run read-only on its database (no AI)."""
+    import followups
+    return _scoped(followups.plan, incident_id, scope, refresh)
+
+
+@app.get("/api/investigate/{incident_id}/dig")
+def investigate_dig_cached(incident_id: str, scope: Optional[str] = None):
+    """Step 2, the last answer only: AI-proposed queries for this evidence, run again; no model call."""
+    import followups
+    return _scoped(followups.dig, incident_id, scope, False, True)
+
+
+@app.post("/api/investigate/{incident_id}/dig")
+def investigate_dig(incident_id: str, scope: Optional[str] = None, refresh: bool = False,
+                    user: dict = Depends(estate_routes.current_user)):
+    """Step 2: the AI model proposes up to 3 read-only queries, DataTrust checks and runs them, the model reads the results."""
+    import followups
+    out = _scoped(followups.dig, incident_id, scope, refresh, False)
+    if out.get("queries"):
+        from estate import store as estate_store
+        estate_store.audit(user.get("username") or "local", "ai_dig", incident_id,
+                           f"{sum(1 for q in out['queries'] if 'rows' in q)} AI query(ies) run, "
+                           f"{sum(1 for q in out['queries'] if q.get('refused'))} refused")
+    return out
+
+
 @app.get("/api/lineage/map")
 def lineage_map(scope: Optional[str] = None, control: bool = False, refresh: bool = False):
     """4. Explain, Lineage map: what each system knows about itself (catalogs, code, pipeline definitions, recent runs),

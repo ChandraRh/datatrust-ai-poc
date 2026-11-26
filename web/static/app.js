@@ -969,6 +969,8 @@ async function renderInvestigate(id) {
       </div>
       <div class="card"><h3>Evidence path</h3><ol class="chain">${(Array.isArray(inv.chain) ? inv.chain : []).map((step) => `<li>${esc(step)}</li>`).join("")}</ol></div>
     </div>
+    <div id="invFollow"></div>
+    <div id="invDig"></div>
     ${Array.isArray(inv.sample) && inv.sample.length ? `<div class="card"><h3>Affected records <span class="small muted">(${inv.sample.length} sample rows)</span></h3>${objTable(inv.sample)}</div>` : ""}
     ${goldViews.length ? `<div class="card"><h3>${esc(impact.views_label || "Downstream Gold views")}</h3><div class="investigation-views">${goldViews.map((view) => `<code>${esc(view)}</code>`).join("")}</div></div>` : ""}`;
   $("invBack").addEventListener("click", () => go("detect"));
@@ -979,6 +981,87 @@ async function renderInvestigate(id) {
   if (inv.sql) $("invBody").insertAdjacentHTML("beforeend", `<div class="card"><details><summary>SQL the check ran</summary><pre class="code">${esc(inv.sql)}</pre></details></div>`);
   $("invBody").querySelector(".investigation-root").insertAdjacentHTML("afterend", `<div id="aiExplain"></div>`);
   aiExplain(id, "aiExplain", "investigate");
+  renderFollowups(id);
+  renderDig(id);
+}
+
+// ---- Follow-up checks (step 1: a fixed plan per kind of problem, no AI) and Dig deeper with AI (step 2, on request)
+const MARK = { true: ["ok", "✓", "Answered"], false: ["bad", "!", "Points to a problem elsewhere"], null: ["grey", "–", "Not answered"] };
+function followStep(s) {
+  const [cls, mark, label] = MARK[s.ok === true ? "true" : s.ok === false ? "false" : "null"];
+  const rows = Array.isArray(s.rows) && s.rows.length;
+  return `<div class="check fu-step"><span class="${cls}" aria-label="${label}">${mark}</span><b>${esc(s.title)}</b>
+      <p class="fu-text">${esc(s.text)}</p>
+      ${s.source ? `<div class="src">${esc(s.source)}</div>` : ""}
+      ${rows || s.sql ? `<details class="fu-more"><summary>${rows ? "The numbers" : ""}${rows && s.sql ? " and " : ""}${s.sql ? (rows ? "the SQL" : "The SQL") : ""}</summary>
+        ${rows ? `<div class="fu-table">${objTable(s.rows)}</div>` : ""}${s.sql ? `<pre class="code">${esc(s.sql)}</pre>` : ""}</details>` : ""}</div>`;
+}
+async function renderFollowups(id, refresh = false) {
+  const box = $("invFollow");
+  if (!box) return;
+  const head = (sub, btn = "") => `<div class="investigation-section-head"><div><h3>Follow-up checks</h3><p class="small muted">${sub}</p></div>${btn}</div>`;
+  box.innerHTML = `<div class="card fu-card">${head("Asking the data what changed… (read-only; each question stops after 15 s)")}</div>`;
+  let r;
+  try { r = await api(`/api/investigate/${encodeURIComponent(id)}/followups?${sq()}${refresh ? "&refresh=true" : ""}`); }
+  catch (e) { if ($("invFollow")) box.innerHTML = `<div class="card fu-card">${head("")}<div class="error-box">${esc(e.message)}</div></div>`; return; }
+  if (!$("invFollow")) return;
+  if (!r.found) { box.innerHTML = ""; return; }
+  const steps = r.steps || [];
+  box.innerHTML = `<div class="card fu-card fu-done">${head(
+      `The questions DataTrust asks for this kind of problem, answered from the data just now${r.seconds != null ? ` in ${esc(r.seconds)} s` : ""}. The evidence above says what went wrong; these narrow down why.`,
+      steps.length ? `<button class="btn light btn-sm" id="fuAgain" type="button">Ask again</button>` : "")}
+    ${steps.length ? steps.map(followStep).join("") : `<p class="muted">${esc(r.note || "No follow-up questions for this incident.")}</p>`}</div>`;
+  if ($("fuAgain")) $("fuAgain").onclick = () => renderFollowups(id, true);
+}
+async function renderDig(id, mode = "cached") {
+  const box = $("invDig");
+  if (!box) return;
+  if (state.overview && state.overview.llm === "none") { box.innerHTML = ""; return; }
+  const enc = encodeURIComponent(id);
+  const rules = "The AI model suggests up to 3 more read-only queries. DataTrust checks each one before it runs: one SELECT, only this incident's tables, no writes, at most 50 rows, stopped after 15 s. Text values in the results are replaced by tokens such as [v1] before the model reads them.";
+  const card = (body, btn = "") => `<div class="card ai-card dig-card"><div class="ai-head"><span class="ai-badge">AI</span><b>Dig deeper with AI</b><span class="grow"></span>${btn}</div>${body}</div>`;
+  if (mode !== "cached") box.innerHTML = card(`<p class="muted small dig-loading">Writing queries, checking and running them, then reading the results. Usually 10 to 40 seconds.</p>`);
+  let r;
+  try {
+    r = mode === "cached" ? await api(`/api/investigate/${enc}/dig?${sq()}`)
+      : await api(`/api/investigate/${enc}/dig?${sq()}${mode === "again" ? "&refresh=true" : ""}`, { method: "POST" });
+  } catch (e) {
+    if (!$("invDig")) return;
+    box.innerHTML = card(`<div class="error-box">${esc(e.message)}</div>`, `<button class="btn btn-sm" id="digGo" type="button">Try again</button>`);
+    $("digGo").onclick = () => renderDig(id, "go");
+    return;
+  }
+  if (!$("invDig")) return;
+  if (!r.available) { box.innerHTML = r.reason ? card(`<p class="muted small">${esc(r.reason)}</p>`) : ""; return; }
+  if (r.not_generated) {
+    box.innerHTML = card(`<p class="muted small">${esc(rules)} Its findings are suggestions; the evidence and follow-up checks above stay the basis.</p>`,
+      `<button class="btn btn-sm" id="digGo" type="button">Dig deeper</button>`);
+    $("digGo").onclick = () => renderDig(id, "go");
+    return;
+  }
+  const queries = r.queries || [];
+  const qHtml = queries.map((q) => {
+    const result = q.refused ? `<div class="banner warn small">${esc(q.refused)}</div>` : q.error ? `<div class="error-box small">${esc(q.error)}</div>`
+      : q.rows && q.rows.length ? `<div class="fu-table">${objTable(q.rows)}</div>` : `<p class="muted small">The query returned no rows.</p>`;
+    return `<div class="check fu-step dig-q"><span class="ai-badge sm">AI</span> <b>${esc(q.question || "Query")}</b>${q.why ? `<p class="fu-text muted">${esc(q.why)}</p>` : ""}
+      ${result}<details class="fu-more"><summary>The SQL</summary><pre class="code">${esc(q.sql)}</pre></details></div>`;
+  }).join("");
+  const rd = r.reading;
+  const answers = rd && Array.isArray(rd.findings) ? rd.findings : [];
+  box.innerHTML = card(`
+      ${rd ? `<div class="dig-conclusion"><span class="chip ${AI_CONF[rd.confidence] || "grey"}">${esc(rd.confidence || "?")} confidence</span>
+          <p>${esc(rd.conclusion || "")}</p>
+          ${answers.length ? `<ul>${answers.map((a) => `<li><b>${esc(a.question)}</b> ${esc(a.answer)}</li>`).join("")}</ul>` : ""}
+          ${rd.next_steps && rd.next_steps.length ? `<h4>Next</h4><ol>${rd.next_steps.map((x) => `<li>${esc(x)}</li>`).join("")}</ol>` : ""}
+          ${rd.unverified && rd.unverified.length ? `<div class="banner warn small">Check these numbers yourself: ${rd.unverified.map(esc).join(", ")} do not appear in the query results.</div>` : ""}</div>`
+        : r.reading_stale ? `<div class="banner warn small">The data has changed since the model read these results, so its reading is not shown. The queries below ran again just now; press Dig again for a fresh reading.</div>`
+        : r.reading_error ? `<div class="banner warn small">The queries ran, but the model could not read the results: ${esc(r.reading_error)}</div>`
+        : queries.length ? "" : `<p class="muted small">The model had no further questions for the data.</p>`}
+      ${queries.length ? `<h4>The queries it asked (${queries.length})</h4>${qHtml}` : ""}
+      <p class="small muted">Suggested by ${esc(r.model || "the AI model")}${r.generated_at ? ` · ${esc(String(r.generated_at).slice(0, 16))}` : ""}. Tables it could use: ${esc((r.tables || []).join(", "))}.
+        ${r.masked_values ? `${esc(r.masked_values)} text value(s) were hidden from the model.` : ""} Review before acting: the evidence above stays the basis.</p>`,
+    `<button class="btn light btn-sm" id="digAgain" type="button" title="Ask the model for new queries">Dig again</button>`);
+  $("digAgain").onclick = () => renderDig(id, "again");
 }
 
 // ---- AI explanation (Investigate + Impact): written from the evidence pack; numbers not found in the evidence are flagged
