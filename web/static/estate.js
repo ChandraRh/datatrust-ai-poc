@@ -573,7 +573,7 @@ async function pageAccess() {
       <div class="card"><h3>Pending approval (${pending.length})</h3>${pending.map(reqRow).join("") || "<p class='muted'>Nothing waiting.</p>"}</div>
       <div class="card"><div class="draft-head"><h3 style="margin:0">Request history</h3>${admin ? `<a class="small" style="margin-left:auto" href="#estate-history=access">View all history →</a>` : ""}</div>${objTable(history.map((r) => ({ id: r.request_id, type: REQ_LABEL[r.request_type] || r.request_type, grantee: r.grantee, database: r.database, status: r.status, requested_by: r.requested_by, decided_by: r.decided_by, decided_at: r.decided_at, error: r.error })))
         || "<p class='muted'>No requests yet.</p>"}</div>
-      ${admin ? `<p class="small muted">Who can sign in to DataTrust itself is managed under <a href="#estate-users">Administration → Portal users</a>.</p>` : ""}`,
+      ${admin ? `<p class="small muted">Who can sign in to DataTrust itself is managed under <a href="#estate-users">Team &amp; admin → Portal users</a>.</p>` : ""}`,
     bind: bindAccess,
   };
 }

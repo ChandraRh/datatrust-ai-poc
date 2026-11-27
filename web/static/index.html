@@ -35,20 +35,22 @@
 
 <div class="layout">
 <nav class="sidebar" id="tabs" aria-label="Main menu">
-  <div class="nav-group"><div class="nav-title">Monitor</div>
+  <!-- groups: "Find & fix" always open; the others fold (remembered per browser), and the group of the open page always opens.
+       Fold headers are not <button>s: every button in #tabs is a page link. -->
+  <button data-page="ask" class="nav-ask" title="Ask DataTrust AI"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M21 12a8 8 0 0 1-11.6 7.1L4 20l1.1-4.6A8 8 0 1 1 21 12z"/></svg><span class="label">Ask DataTrust AI</span></button>
+  <div class="nav-group" data-tone="fix"><div class="nav-title">Find &amp; fix</div>
     <button data-page="observe" title="1. Observe" class="active"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M3 12h4l3-8 4 16 3-8h4"/></svg><span class="label">1. Observe</span></button>
     <button data-page="detect" title="2. Detect" aria-label="2. Detect"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 3l9 16H3z"/><path d="M12 10v4M12 17h.01"/></svg><span class="label">2. Detect</span><span id="detectNavCount" class="nav-count" aria-hidden="true" hidden></span></button>
-  </div>
-  <div class="nav-group"><div class="nav-title">Analyse</div>
     <button data-page="investigate" title="3. Investigate"><svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="11" cy="11" r="6"/><path d="M20 20l-4.5-4.5"/></svg><span class="label">3. Investigate</span></button>
     <button data-page="lineage" title="4. Explain (lineage)"><svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="5" cy="6" r="2"/><circle cx="5" cy="18" r="2"/><circle cx="19" cy="12" r="2"/><path d="M7 6h4l4 6M7 18h4l4-6"/></svg><span class="label">4. Explain (lineage)</span></button>
     <button data-page="impact" title="5. Impact &amp; decide"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 20V10M10 20V4M16 20v-7M22 20H2"/></svg><span class="label">5. Impact &amp; decide</span></button>
     <button data-page="verify" title="6. Verify"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M20 6L9 17l-5-5"/></svg><span class="label">6. Verify</span></button>
   </div>
-  <div class="nav-group"><div class="nav-title">Assistant</div>
-    <button data-page="ask" title="Ask DataTrust AI"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M21 12a8 8 0 0 1-11.6 7.1L4 20l1.1-4.6A8 8 0 1 1 21 12z"/></svg><span class="label">Ask DataTrust AI</span></button>
-  </div>
-  <div class="nav-group"><div class="nav-title">Operations</div>
+  <div class="nav-group" data-tone="dq" data-fold="dq"><div class="nav-title">Data quality</div>
+    <button data-page="estate-dq-rejected" title="Rejected records"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 4h16v4H4zM4 10h16v10H4z"/><path d="M9.5 13.5l5 5M14.5 13.5l-5 5"/></svg><span class="label">Rejected records</span></button>
+    <button data-page="estate-dq-rules" title="DQ Rule Studio"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M9 3h6M10 3v6l-5 9a2 2 0 0 0 1.7 3h10.6a2 2 0 0 0 1.7-3l-5-9V3"/><path d="M7.5 15h9"/></svg><span class="label">DQ Rule Studio</span></button>
+    <button data-page="estate-dq-coverage" title="Coverage"><svg viewBox="0 0 24 24" aria-hidden="true"><rect x="3" y="3" width="7" height="7" rx="1"/><rect x="14" y="3" width="7" height="7" rx="1"/><rect x="3" y="14" width="7" height="7" rx="1"/><path d="M14 17.5l2.5 2.5 4.5-5"/></svg><span class="label">Coverage</span></button>
+    <button data-page="estate-dq-builtin" title="Built-in checks"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 6h10M18 6h2M4 12h4M12 12h8M4 18h12M20 18h0"/><circle cx="16" cy="6" r="2"/><circle cx="10" cy="12" r="2"/><circle cx="18" cy="18" r="2"/></svg><span class="label">Built-in checks</span></button>
     <button data-page="pipeline" title="Pipeline log"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 6h16M4 12h16M4 18h10"/></svg><span class="label">Pipeline log</span></button>
   </div>
   <!-- the rule pages (checks.js) are opened from DQ Rule Studio; their menu entries stay hidden so links and alerts keep working -->
@@ -56,28 +58,20 @@
     <button data-page="estate-checks" title="Data checks"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M9 11l2.5 2.5L16 9"/><rect x="3.5" y="3.5" width="17" height="17" rx="3"/></svg><span class="label">Data checks</span></button>
     <button data-page="estate-checks-new" title="Add check"><svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="8.5"/><path d="M12 8v8M8 12h8"/></svg><span class="label">Add check</span></button>
   </div>
-  <div class="nav-group"><div class="nav-title">Azure Data Factory</div>
+  <div class="nav-group" data-tone="adf" data-fold="adf"><div class="nav-title">Azure Data Factory</div>
     <button data-page="estate-adf-overview" title="ADF pipelines"><svg viewBox="0 0 24 24" aria-hidden="true"><rect x="3" y="4" width="6" height="5" rx="1"/><rect x="15" y="4" width="6" height="5" rx="1"/><rect x="9" y="15" width="6" height="5" rx="1"/><path d="M6 9v2.5h12V9M12 11.5V15"/></svg><span class="label">ADF pipelines</span></button>
     <button data-page="estate-adf-issues" title="ADF issues"><svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="9"/><path d="M12 7.5v5.5M12 16.5h.01"/></svg><span class="label">ADF issues</span></button>
     <button data-page="estate-adf-runs" title="ADF runs"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 6h3M4 12h3M4 18h3"/><path d="M10 6h10M10 12h7M10 18h9"/></svg><span class="label">ADF runs</span></button>
     <button data-page="estate-adf-setup" title="Connect ADF"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M9 7V4M15 7V4M7 7h10v4a5 5 0 0 1-10 0z"/><path d="M12 16v4"/></svg><span class="label">Connect ADF</span></button>
   </div>
-  <div class="nav-group"><div class="nav-title">Data quality</div>
-    <button data-page="estate-dq-rejected" title="Rejected records"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 4h16v4H4zM4 10h16v10H4z"/><path d="M9.5 13.5l5 5M14.5 13.5l-5 5"/></svg><span class="label">Rejected records</span></button>
-    <button data-page="estate-dq-rules" title="DQ Rule Studio"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M9 3h6M10 3v6l-5 9a2 2 0 0 0 1.7 3h10.6a2 2 0 0 0 1.7-3l-5-9V3"/><path d="M7.5 15h9"/></svg><span class="label">DQ Rule Studio</span></button>
-    <button data-page="estate-dq-coverage" title="Coverage"><svg viewBox="0 0 24 24" aria-hidden="true"><rect x="3" y="3" width="7" height="7" rx="1"/><rect x="14" y="3" width="7" height="7" rx="1"/><rect x="3" y="14" width="7" height="7" rx="1"/><path d="M14 17.5l2.5 2.5 4.5-5"/></svg><span class="label">Coverage</span></button>
-    <button data-page="estate-dq-builtin" title="Built-in checks"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 6h10M18 6h2M4 12h4M12 12h8M4 18h12M20 18h0"/><circle cx="16" cy="6" r="2"/><circle cx="10" cy="12" r="2"/><circle cx="18" cy="18" r="2"/></svg><span class="label">Built-in checks</span></button>
-  </div>
-  <div class="nav-group"><div class="nav-title">Data estate</div>
+  <div class="nav-group" data-tone="estate" data-fold="estate" data-fold-default="closed"><div class="nav-title">Data estate</div>
     <button data-page="estate-connections" title="Connections"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 7c0-1.7 3.6-3 8-3s8 1.3 8 3-3.6 3-8 3-8-1.3-8-3z"/><path d="M4 7v10c0 1.7 3.6 3 8 3s8-1.3 8-3V7"/><path d="M4 12c0 1.7 3.6 3 8 3s8-1.3 8-3"/></svg><span class="label">Connections</span></button>
     <button data-page="estate-catalog" title="Catalog"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M3 4h7v7H3zM14 4h7v7h-7zM3 15h7v5H3zM14 15h7v5h-7z"/></svg><span class="label">Catalog</span></button>
     <button data-page="estate-activity" title="Schema changes"><svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="8"/><path d="M12 8v4l3 2"/></svg><span class="label">Schema changes</span></button>
     <button data-page="estate-access" title="Access"><svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="9" cy="8" r="3"/><path d="M3 20c0-3.3 2.7-6 6-6s6 2.7 6 6"/><path d="M17 11l2 2 3-4"/></svg><span class="label">Access</span></button>
   </div>
-  <div class="nav-group"><div class="nav-title">Collaborate</div>
+  <div class="nav-group" data-tone="admin" data-fold="admin" data-fold-default="closed"><div class="nav-title">Team &amp; admin</div>
     <button data-page="estate-people" title="Connect"><svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="9" cy="8" r="3"/><path d="M3 20c0-3.3 2.7-6 6-6 1.3 0 2.5.4 3.5 1.1"/><path d="M15 13h5a1 1 0 0 1 1 1v3a1 1 0 0 1-1 1h-1l-2 2v-2h-2a1 1 0 0 1-1-1v-3a1 1 0 0 1 1-1z"/></svg><span class="label">Connect</span></button>
-  </div>
-  <div class="nav-group"><div class="nav-title">Administration</div>
     <button data-page="estate-history" title="Audit &amp; approvals"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M7 3h8l4 4v14H7z"/><path d="M15 3v4h4"/><path d="M10 13l2 2 4-4"/></svg><span class="label">Audit &amp; approvals</span></button>
     <button data-page="estate-users" title="Portal users"><svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="9" cy="8" r="3.5"/><path d="M3 20a6 6 0 0 1 12 0"/><path d="M17 8v6M14 11h6"/></svg><span class="label">Portal users</span></button>
   </div>
@@ -343,6 +337,33 @@
         document.body.classList.toggle("nav-open");
       }
     });
+    // folding groups: a group with data-fold opens / closes from its title; the choice is kept per browser,
+    // and the group holding the active page always opens (links, alerts and Back can land on any page)
+    let folds = {};
+    try { folds = JSON.parse(localStorage.getItem("dt.navFold") || "{}") || {}; } catch (e) {}
+    const setFold = (g, open, keep) => {
+      g.classList.toggle("folded", !open);
+      g.querySelector(".nav-title").setAttribute("aria-expanded", open ? "true" : "false");
+      if (keep) { folds[g.dataset.fold] = open; try { localStorage.setItem("dt.navFold", JSON.stringify(folds)); } catch (e) {} }
+    };
+    document.querySelectorAll("#tabs .nav-group[data-fold]").forEach((g) => {
+      const t = g.querySelector(".nav-title");
+      t.setAttribute("role", "button"); t.tabIndex = 0;
+      t.insertAdjacentHTML("beforeend", '<svg class="fold-mark" viewBox="0 0 24 24" aria-hidden="true"><path d="M9 6l6 6-6 6"/></svg>');
+      const saved = folds[g.dataset.fold];
+      setFold(g, saved === undefined ? g.dataset.foldDefault !== "closed" : saved, false);
+      const flip = () => setFold(g, g.classList.contains("folded"), true);
+      t.addEventListener("click", flip);
+      t.addEventListener("keydown", (e) => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); flip(); } });
+    });
+    const openActive = () => {
+      const a = document.querySelector("#tabs button.active");
+      const g = a && a.closest(".nav-group[data-fold]");
+      if (g && g.classList.contains("folded")) setFold(g, true, false);
+    };
+    // only a page change opens a group; folding the group of the open page by hand is allowed
+    new MutationObserver((ms) => { if (ms.some((m) => m.target.tagName === "BUTTON")) openActive(); }).observe(document.getElementById("tabs"), { subtree: true, attributes: true, attributeFilter: ["class"] });
+    openActive();
     const close = () => document.body.classList.remove("nav-open");
     document.getElementById("navBackdrop").addEventListener("click", close);
     document.querySelectorAll("#tabs button").forEach((b) => b.addEventListener("click", () => {

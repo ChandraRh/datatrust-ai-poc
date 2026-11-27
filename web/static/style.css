@@ -91,11 +91,42 @@ a { color: var(--brand); }
 .layout { display: flex; flex: 1; min-height: 0; }
 .sidebar { overflow-y: auto; width: 240px; flex: none;
            background: #fff; border-right: 1px solid var(--line); padding: 16px 12px; transition: width .18s ease; }
-.nav-group { margin-bottom: 16px; }
-.nav-title { font-size: 10.5px; font-weight: 700; letter-spacing: .09em; text-transform: uppercase; color: #94A3B8;
-             padding: 4px 12px 6px; white-space: nowrap; }
+.nav-group { margin-bottom: 10px; }
+.nav-title { display: flex; align-items: center; font-size: 10.5px; font-weight: 700; letter-spacing: .09em; text-transform: uppercase; color: #94A3B8;
+             padding: 4px 12px 5px; white-space: nowrap; border-radius: 6px; }
+/* folding groups (index.html script): the title opens and closes the group */
+.nav-group[data-fold] > .nav-title { cursor: pointer; user-select: none; transition: color .12s, background .12s; }
+.nav-group[data-fold] > .nav-title:hover { color: var(--ink-2); background: #F1F5F9; }
+.nav-group[data-fold] > .nav-title:focus-visible { outline: none; box-shadow: var(--ring); }
+.sidebar .fold-mark { width: 13px; height: 13px; margin-left: auto; stroke-width: 2.4; transform: rotate(90deg); transition: transform .15s; }
+.nav-group.folded > .fold-mark, .nav-group.folded .fold-mark { transform: none; }
+.nav-group.folded > button { display: none; }
+/* colour per menu group (index.html data-tone): title, icons and the open page take the group's colour.
+   --g = text/icon colour (4.5:1 or better on white), --g-bg = soft fill. Brand blue and iSteer orange lead;
+   no group uses the status colours (green / amber / red keep meaning ok / warning / bad). */
+.nav-group[data-tone="fix"]    { --g: var(--brand);  --g-bg: var(--brand-50); }   /* the six steps: brand blue */
+.nav-group[data-tone="dq"]     { --g: #A8500C;       --g-bg: var(--accent-50); }  /* rules and records: iSteer orange */
+.nav-group[data-tone="adf"]    { --g: #3557C8;       --g-bg: #EDF1FC; }           /* Azure Data Factory: azure indigo */
+.nav-group[data-tone="estate"] { --g: #6B47B0;       --g-bg: #F2EEFA; }           /* databases and catalog: violet */
+.nav-group[data-tone="admin"]  { --g: #A3366F;       --g-bg: #FBEFF5; }           /* people and approvals: berry */
+.nav-group[data-tone] > .nav-title { color: var(--g); }
+.nav-group[data-tone] > .nav-title::before { content: ""; width: 7px; height: 7px; border-radius: 2px; background: var(--g);
+                                              margin-right: 8px; flex: none; }
+.nav-group[data-tone] > button svg { color: var(--g); opacity: .8; }
+.nav-group[data-tone] > button:hover { background: var(--g-bg); }
+.nav-group[data-tone] > button:hover svg { color: var(--g); opacity: 1; }
+.nav-group[data-tone] > button.active { background: var(--g-bg); color: var(--g); }
+.nav-group[data-tone] > button.active svg { color: var(--g); opacity: 1; }
+.nav-group[data-tone] > button.active::before { background: var(--g); }
+.nav-group[data-tone][data-fold] > .nav-title:hover { color: var(--g); background: var(--g-bg); }
+body.nav-collapsed .nav-group[data-tone] { border-top-color: var(--g-bg); }
+/* Ask DataTrust AI: the assistant, set apart at the top */
+.sidebar button.nav-ask { margin: 0 0 14px; padding: 9px 12px; border: 1px solid var(--brand-100, #CDE6EF); background: var(--brand-50); color: var(--brand-700); font-weight: 600; }
+.sidebar button.nav-ask svg { color: var(--brand); }
+.sidebar button.nav-ask:hover { background: var(--brand-100, #CDE6EF); }
+.sidebar button.nav-ask.active { border-color: var(--brand); }
 .sidebar button { position: relative; display: flex; align-items: center; gap: 12px; width: 100%; border: 0; background: none; font: inherit;
-                  font-size: 14px; font-weight: 500; color: var(--ink-2); padding: 8px 12px; margin: 1px 0; border-radius: 8px;
+                  font-size: 14px; font-weight: 500; color: var(--ink-2); padding: 7px 12px; margin: 1px 0; border-radius: 8px;
                   cursor: pointer; text-align: left; white-space: nowrap; transition: background .12s, color .12s; }
 .sidebar button svg { color: #8394A8; transition: color .12s; }
 .sidebar button:hover { background: #F1F5F9; color: var(--ink); }
@@ -113,6 +144,8 @@ body.nav-collapsed .sidebar .label, body.nav-collapsed .nav-title { display: non
 body.nav-collapsed .nav-group { border-top: 1px solid var(--line-soft); padding-top: 8px; margin-bottom: 8px; }
 body.nav-collapsed .nav-group:first-child { border-top: 0; padding-top: 0; }
 body.nav-collapsed .sidebar button { justify-content: center; padding: 10px 0; }
+body.nav-collapsed .nav-group.folded > button { display: flex; }          /* icons only: every page stays reachable */
+body.nav-collapsed .sidebar button.nav-ask { margin-bottom: 8px; }
 body.nav-collapsed .sidebar button .nav-count:not([hidden]) { position: absolute; top: 2px; right: 2px; min-width: 16px; padding: 0 4px; font-size: 9px; }
 .layout > main { flex: 1; min-width: 0; overflow-y: auto; max-width: none; margin: 0; }
 .layout > main > * { max-width: 1280px; margin-left: auto; margin-right: auto; }
@@ -321,7 +354,9 @@ input[type=checkbox], input[type=radio] { accent-color: var(--brand); }
   body.nav-open .sidebar { transform: none; }
   body.nav-open .backdrop { display: block; position: fixed; inset: 0; background: rgba(0, 30, 45, .4); z-index: 15; }
   body.nav-collapsed .sidebar { width: 264px; }
-  body.nav-collapsed .sidebar .label, body.nav-collapsed .nav-title { display: revert; }
+  body.nav-collapsed .sidebar .label { display: revert; }
+  body.nav-collapsed .nav-title { display: flex; }
+  body.nav-collapsed .nav-group.folded > button { display: none; }
   body.nav-collapsed .sidebar button { justify-content: flex-start; padding: 8px 12px; }
   .brand > span:last-child, #refreshInfo { display: none; }
   .topbar { padding: 0 10px 0 6px; gap: 8px; }

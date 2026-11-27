@@ -27,7 +27,8 @@ async function initScopes() {
   }
   const group = (kind, label) => {
     const items = state.scopes.filter((s) => s.kind === kind);
-    return items.length ? `<optgroup label="${label}">${items.map((s) => `<option value="${esc(s.key)}">${esc(s.name)}${s.poc ? " (POC pipeline)" : ""} · ${esc(s.type)}</option>`).join("")}</optgroup>` : "";
+    // the POC source shows as "POC pipeline" (its stored name, e.g. "DataTrust POC (local)", stays as it is elsewhere)
+    return items.length ? `<optgroup label="${label}">${items.map((s) => `<option value="${esc(s.key)}">${s.poc ? "POC pipeline" : esc(s.name)} · ${esc(s.type)}</option>`).join("")}</optgroup>` : "";
   };
   pick.innerHTML = group("db", "Databases") + group("adf", "Data factories");
   if (state.scope) pick.value = state.scope;
